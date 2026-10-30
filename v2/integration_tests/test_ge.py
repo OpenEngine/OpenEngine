@@ -93,7 +93,9 @@ def test_ge_serves_graphs_list_once_ready_and_drains_on_stop(oe) -> None:
     assert oe("down").returncode == 0
     bodies = [line["body"] for line in _ge_lines(oe)]
     served = bodies[bodies.index("nats connected"):]
-    assert served[:4] == ["nats connected", "serving oe.v1.ge.query.>", "serving oe.v1.ge.control.>", "ready"]
+    assert served[:4] == [
+        "nats connected", "serving oe.v1.ge.query.> in queue ge", "serving oe.v1.ge.control.> in queue ge", "ready",
+    ]
     # The unknown param passes the envelope check, so it is logged as a request before graphs.list's schema rejects it.
     assert served[4:6] == ["graphs.list request", "graphs.list request"]
     assert served[6].startswith("graphs.list rejected: INVALID_ARGUMENT")

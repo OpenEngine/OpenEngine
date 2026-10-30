@@ -1,13 +1,26 @@
 """Serve a service's query and control subjects over NATS request/reply.
 
-The adapter subscribes to `oe.v1.{service}.query.>` and
-`oe.v1.{service}.control.>`, and for each request:
+The adapter subscribes to the service's query and control subjects in a queue
+group named after the service, so instances of one service share its
+requests instead of each answering every one. Which subjects depends on the
+`tenancy` mode (see `tenancy`): dedicated serves `oe.v1.{service}.query.>`
+and `.control.>` for the one configured tenant; shared serves
+`oe.v1.*.{service}.query.>` and `.control.>` in the service account, where
+the `*` is the account key NATS wrote in as the request crossed from the
+tenant's account. For each request the adapter:
+
+0. works out the tenant: the configured one in dedicated mode; in shared
+   mode the account key's tenant through the `AccountResolver`, replying
+   PERMISSION_DENIED when the key is malformed or no tenant has it. The
+   account token is stripped before routing, so routes and parameters are the
+   same in both modes;
 
 1. decodes it and checks its envelope (and the route's own schema, if it
    names one), replying INVALID_ARGUMENT when either is broken. A command
    route that keeps receipts checks its envelope itself, once the request
    has a well-formed `command_id`, so it can record rejecting it;
-2. asks the Authorizer, replying PERMISSION_DENIED when it refuses;
+2. asks the Authorizer, replying PERMISSION_DENIED when it refuses, and
+   attaches the `Principal` it returns as `Request.principal`;
 3. runs the route's handler, replying with its result or the ServiceError it
    raises. A subject with no route is UNSUPPORTED_CAPABILITY, and any other
    exception INTERNAL.
@@ -16,6 +29,9 @@ A route's key may name subject parameters, as in `operations.{operation_id}.get`
 Each must be one token of the type `common/v1/types.schema.json` defines under
 its name, or the request is INVALID_ARGUMENT naming `subject.{name}`; the
 handler reads them from `Request.parameters`.
+
+Span names follow the subject template, `oe.v1.{account}.{svc}.{kind}.{operation}`
+in shared mode, so an account key never names a span.
 """
 
 from __future__ import annotations
@@ -37,9 +53,19 @@ from nats.errors import Error as NatsError
 
 from openengine.messaging import envelopes
 from openengine.messaging.errors import ErrorCode, ServiceError, invalid_argument
+from openengine.messaging.tenancy import (
+    ACCOUNT_POSITION,
+    LOCAL_PRINCIPAL,
+    TYPES,
+    Dedicated,
+    Mode,
+    Principal,
+    Shared,
+    Tenancy,
+    is_account,
+    subject_template,
+)
 from openengine.telemetry import receiving
-
-TYPES = "common/v1/types.schema.json"
 
 log = logging.getLogger(__name__)
 
@@ -56,11 +82,21 @@ class Request:
     """The address the NATS server the request arrived through listens on."""
     parameters: Mapping[str, str] = field(default_factory=dict)
     """The subject's parameters, by the names its route's key gives them."""
+    principal: Principal | None = None
+    """Whom the request is for, as the server derived it from its tenancy mode and the Authorizer confirmed it.
+
+    The server sets it before asking the Authorizer and again from the Authorizer's answer, so
+    a handler always finds one; it is None only on a Request built by hand.
+    """
 
 
 class Authorizer(Protocol):
-    def authorize(self, request: Request) -> None:
-        """Return if the request may proceed; raise a PERMISSION_DENIED ServiceError if not."""
+    def authorize(self, request: Request) -> Principal:
+        """The Principal the request acts as, if it may proceed; raise a PERMISSION_DENIED ServiceError if not.
+
+        `request.principal` is the tenant the server derived from its tenancy mode, which an
+        authorizer may return as is or refine, but never replace with another tenant's.
+        """
 
     def authorize_project(self, request: Request, project: str) -> None:
         """Return if the request's actor may act on `project`'s resources; raise a PERMISSION_DENIED ServiceError if not.
@@ -83,16 +119,18 @@ class LocalOperator:
     as `listen_address` reports it; a server bound to any other address, such
     as 0.0.0.0, is reachable from off the machine, so its requests are
     PERMISSION_DENIED until a non-loopback authorizer exists. The local
-    operator may act on every project.
+    operator may act on every project, and acts as the tenant the server
+    derived: LOCAL_TENANT in the dedicated mode `oe up` runs.
     """
 
-    def authorize(self, request: Request) -> None:
+    def authorize(self, request: Request) -> Principal:
         if not is_loopback(urlsplit(request.listener).hostname):
             raise ServiceError(
                 ErrorCode.PERMISSION_DENIED,
                 f"local-operator mode serves loopback requests only, not ones through {request.listener}",
                 details={"permission": f"{request.kind}.{request.operation}"},
             )
+        return request.principal or LOCAL_PRINCIPAL
 
     def authorize_project(self, request: Request, project: str) -> None:
         self.authorize(request)
@@ -139,16 +177,23 @@ class Server:
     queries: Mapping[str, Route] = field(default_factory=dict)
     commands: Mapping[str, Route] = field(default_factory=dict)
     authorizer: Authorizer = field(default_factory=LocalOperator)
+    tenancy: Tenancy = field(default_factory=Dedicated)
     _subscriptions: list[Subscription] = field(default_factory=list)
 
     @property
     def subjects(self) -> list[str]:
-        return [f"oe.v1.{self.service}.query.>", f"oe.v1.{self.service}.control.>"]
+        service = f"*.{self.service}" if self.tenancy.mode is Mode.SHARED else self.service
+        return [f"oe.v1.{service}.query.>", f"oe.v1.{service}.control.>"]
+
+    @property
+    def queue(self) -> str:
+        """The queue group every instance of the service joins, so each request reaches one of them."""
+        return self.service
 
     async def start(self) -> None:
         for subject in self.subjects:
-            self._subscriptions.append(await self.nats.subscribe(subject, cb=self._receive))
-            log.info("serving %s", subject)
+            self._subscriptions.append(await self.nats.subscribe(subject, queue=self.queue, cb=self._receive))
+            log.info("serving %s in queue %s", subject, self.queue)
         await self.nats.flush()
 
     async def drain(self) -> None:
@@ -206,10 +251,12 @@ class Server:
 
     async def handle(self, subject: str, data: bytes, headers: Mapping[str, str] | None = None) -> bytes:
         """The encoded reply to one request."""
-        kind, _, operation = subject.removeprefix(f"oe.v1.{self.service}.").partition(".")
+        account, kind, operation = self._split(subject)
         body: Any = None
-        with receiving(subject, headers, name=f"oe.v1.{self.service}.{kind}.{operation}"):
+        name = f"oe.v1.{self.service}.{kind}.{operation}"
+        with receiving(subject, headers, name=subject_template(name) if account is not None else name):
             try:
+                principal = await self._principal(account, kind, operation)
                 body = envelopes.decode(data)
                 if not self._keeps_receipt(kind, operation, body):
                     envelopes.check(envelopes.COMMAND if kind == "control" else envelopes.QUERY, body)
@@ -222,9 +269,9 @@ class Server:
                         listen_address(self.nats)
                         if self.nats.is_connected or self.nats.is_draining else ""
                     )
-                request = Request(subject, kind, operation, body, listener)
+                request = Request(subject, kind, operation, body, listener, principal=principal)
                 log.info("%s request", operation, extra=_identity(body))
-                self.authorizer.authorize(request)
+                request = dataclasses.replace(request, principal=self.authorizer.authorize(request))
                 route, parameters = self._route(subject, kind, operation)
                 request = dataclasses.replace(request, parameters=parameters)
                 if route.schema:
@@ -238,6 +285,30 @@ class Server:
                 log.exception("%s failed", operation, extra=_identity(body))
                 reply = _error_reply(kind, body, ServiceError(ErrorCode.INTERNAL, "unexpected service fault"))
         return envelopes.encode(reply)
+
+    def _split(self, subject: str) -> tuple[str | None, str, str]:
+        """The subject's account token (shared mode only), kind and operation."""
+        tokens = subject.split(".")
+        account = None
+        if self.tenancy.mode is Mode.SHARED:
+            account = tokens[ACCOUNT_POSITION] if len(tokens) > ACCOUNT_POSITION else ""
+            del tokens[ACCOUNT_POSITION]
+        kind, _, operation = ".".join(tokens).removeprefix(f"oe.v1.{self.service}.").partition(".")
+        return account, kind, operation
+
+    async def _principal(self, account: str | None, kind: str, operation: str) -> Principal:
+        """The tenant the request belongs to, from the tenancy mode; PERMISSION_DENIED when shared mode cannot tell."""
+        if isinstance(self.tenancy, Dedicated):
+            return Principal(self.tenancy.tenant_id)
+        assert isinstance(self.tenancy, Shared) and account is not None
+        tenant_id = await self.tenancy.resolver.resolve(account) if is_account(account) else None
+        if tenant_id is None:
+            raise ServiceError(
+                ErrorCode.PERMISSION_DENIED,
+                "the request's account does not belong to any tenant",
+                details={"permission": f"{kind}.{operation}"},
+            )
+        return Principal(tenant_id, account)
 
     def _keeps_receipt(self, kind: str, operation: str, body: Any) -> bool:
         """Whether a receipt-keeping route takes this command, its `command_id` being one to record."""
