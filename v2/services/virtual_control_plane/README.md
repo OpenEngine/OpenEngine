@@ -54,7 +54,7 @@ adapter, never from an assumed isolation level. No real provider or executor
 is added here; tests use deterministic fake compute.
 
 One worker, under the service's exclusive state-directory lock, resumes pending
-operations on startup and polls every 100 ms. Allocation runs outside the
+operations on startup and polls every second. Allocation runs outside the
 transaction. Retryable provider errors leave the operation pending; terminal
 errors atomically mark the workspace and operation failed and append a failure
 event. Ownership is retained for cleanup. Success stores the opaque locator,
@@ -67,8 +67,11 @@ Versioned base64url JSON cursors contain that key and normalized filters;
 no process memory, database cursor table or rotating signing key is required.
 Cursors survive restart and reject malformed tokens or changed filters.
 Limits may change between pages. These are live views, not frozen snapshots.
-The current document store scans managed documents for name lookup, pending
-operations and listing; this single-host implementation adds no new schema.
+Name lookup and filtered keyset pages use database expression indexes; listing
+uses a read-only connection without reserving the writer lock. Pending allocations
+use a partial index and up to eight independently refilled slots. Provider calls
+time out after 60 seconds, retaining pending state for idempotent retries.
+Alembic revisions add these indexes to existing stores.
 Receipts, operations and ownership use the existing durable tables.
 
 `tests/test_lifecycle.py` exercises real NATS with the shared Client/Server,

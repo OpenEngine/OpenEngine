@@ -107,7 +107,15 @@ class DropReply:
         return response
 
 
-def test_nats_retry_concurrency_restart_and_typed_queries(binary, tmp_path):
+def test_nats_retry_concurrency_restart_and_typed_queries(binary, tmp_path, monkeypatch):
+    from virtual_control_plane.persistence.durable import Transaction
+    original_all = Transaction.all
+
+    async def no_workspace_scan(self, collection):
+        assert collection != "workspaces"
+        return await original_all(self, collection)
+
+    monkeypatch.setattr(Transaction, "all", no_workspace_scan)
     async def scenario():
         store, provider = storage(tmp_path), FakeProvider()
         async with broker(binary) as connection:
@@ -147,7 +155,7 @@ def test_nats_retry_concurrency_restart_and_typed_queries(binary, tmp_path):
                 second = deepcopy(DOCUMENT)
                 second["metadata"]["name"] = "second"
                 await client.command(APPLY, {"workspace": second}, command_id="cmd_second")
-                page = (await client.query(QUERY + "workspaces.list", {"limit": 1}))["result"]
+                page = (await client.query(QUERY + "workspaces.list", {"limit": 1.0}))["result"]
                 assert page["next_cursor"]
             await store.close()
             store = storage(tmp_path)
@@ -361,5 +369,77 @@ def test_allocation_pages_are_indexed_bounded_concurrent_and_claimed(tmp_path):
         finally:
             Transaction.all = original
             await store.close()
+
+    asyncio.run(scenario())
+
+
+def test_stalled_allocation_refills_slots_and_times_out_pending(tmp_path, monkeypatch):
+    from openengine.messaging import Request
+    from virtual_control_plane.application import lifecycle as module
+
+    class StalledProvider(FakeProvider):
+        async def provision(self, runtime_id, workspace):
+            if workspace["metadata"]["name"] == "stall":
+                await asyncio.Event().wait()
+            return await super().provision(runtime_id, workspace)
+
+    async def scenario():
+        store, provider = storage(tmp_path), StalledProvider()
+        lifecycle = Lifecycle(store, {"process": provider})
+        monkeypatch.setattr(module, "ALLOCATION_TIMEOUT_SECONDS", 2)
+        ids = []
+        for i in range(10):
+            document = deepcopy(DOCUMENT)
+            document["metadata"]["name"] = "stall" if i == 0 else f"fast-{i}"
+            response = await lifecycle.apply(Request(APPLY, "control", "workspaces.apply",
+                envelopes.command({"workspace": document}), "nats://127.0.0.1:4222"))
+            ids.append(response["operation_id"])
+        # Force the stalled operation into the first page regardless of UUID order.
+        async with store.transaction() as tx:
+            record = await tx.get("operations", ids[0])
+            await tx._connection.exec_driver_sql("DELETE FROM operations WHERE key = ?", (ids[0],))
+            record["snapshot"]["operation_id"] = "op_000"
+            await tx.put("operations", "op_000", record)
+        task = asyncio.create_task(lifecycle.reconcile())
+        async with asyncio.timeout(1):
+            while provider.calls < 9:
+                await asyncio.sleep(0.01)
+        assert not task.done()  # Ninth fast allocation ran while the first was stalled.
+        await asyncio.wait_for(task, 3)
+        async with store.transaction() as tx:
+            assert (await tx.get("operations", "op_000"))["snapshot"]["status"] == "pending"
+        await store.close()
+
+    asyncio.run(scenario())
+
+
+def test_workspace_queries_use_indexes_and_do_not_reserve_writer(tmp_path):
+    async def scenario():
+        store = storage(tmp_path)
+        async with store.transaction() as tx:
+            for i in range(300):
+                await tx.put("workspaces", f"ws_{i:04}", {"snapshot": {
+                    "workspace_id": f"ws_{i:04}", "name": f"name-{i}",
+                    "created_at": "2026-01-01T00:00:00Z", "state": "ready",
+                    "provider": "process", "labels": {"job_id": "job_test"}}})
+            plan = await tx._connection.exec_driver_sql(
+                "EXPLAIN QUERY PLAN SELECT body FROM workspaces "
+                "WHERE json_extract(body, '$.snapshot.name') = 'name-299' LIMIT 1")
+            assert "ix_workspaces_name" in str(plan.all())
+            assert (await tx.workspace_named("name-299"))["snapshot"]["workspace_id"] == "ws_0299"
+            plan = await tx._connection.exec_driver_sql(
+                "EXPLAIN QUERY PLAN SELECT body FROM workspaces "
+                "WHERE json_type(body, '$.snapshot') = 'object' "
+                "AND (json_extract(body, '$.snapshot.created_at'), key) < ('2026-01-01T00:00:00Z', 'ws_0299') "
+                "ORDER BY json_extract(body, '$.snapshot.created_at') DESC, key DESC LIMIT 2")
+            assert "ix_workspaces_page" in str(plan.all())
+        # An independently held writer reservation cannot block this read.
+        async with store.transaction():
+            page = await asyncio.wait_for(store.workspace_page({}, None, 2), 1)
+        assert [w["workspace_id"] for w in page] == ["ws_0299", "ws_0298"]
+        page = await store.workspace_page({"state": ["ready"], "provider": "process", "job_id": "job_test"},
+                                        [page[-1]["created_at"], page[-1]["workspace_id"]], 2)
+        assert [w["workspace_id"] for w in page] == ["ws_0297", "ws_0296"]
+        await store.close()
 
     asyncio.run(scenario())

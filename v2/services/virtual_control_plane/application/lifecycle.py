@@ -23,6 +23,7 @@ from virtual_control_plane.application.ports import AllocationProvider
 from virtual_control_plane.application.transactions import CommandIdConflict, UnitOfWork
 
 SCHEMAS = "virtual_control_plane/v1/schemas"
+ALLOCATION_TIMEOUT_SECONDS = 60
 APPLY = f"{SCHEMAS}/commands.schema.json#/$defs/apply_workspace_command"
 
 
@@ -89,7 +90,7 @@ class Lifecycle:
         self._validate(body)
         document = body["payload"]["workspace"]
         spec, name = document["spec"], document["metadata"]["name"]
-        existing = next((w for w in await tx.all("workspaces") if "snapshot" in w and w["snapshot"]["name"] == name), None)
+        existing = await tx.workspace_named(name)
         expected = body.get("expected_version")
         if expected is not None and existing is None:
             raise ServiceError(ErrorCode.NOT_FOUND, "workspace does not exist",
@@ -190,15 +191,10 @@ class Lifecycle:
             except (binascii.Error, ValueError, KeyError, TypeError) as error:
                 raise ServiceError(ErrorCode.INVALID_CURSOR, "invalid workspace cursor",
                                    details={"reason": "filters_changed" if str(error) == "filters_changed" else "malformed"}) from None
-        async with self.store.transaction() as tx:
-            items = [w["snapshot"] for w in await tx.all("workspaces") if "snapshot" in w]
-        items = [w for w in items if w["state"] in filters.get("state", ["provisioning", "ready", "failed", "suspending", "suspended", "restoring", "destroying"])
-                 and all(w[key] == filters[key] for key in ("name", "provider") if key in filters)
-                 and ("job_id" not in filters or w["labels"].get("job_id") == filters["job_id"])]
+        limit = int(params.get("limit", 50))
+        items = await self.store.workspace_page(filters, after, limit + 1)
         def key(w):
             return [w["created_at"], w["workspace_id"]]
-        items = sorted((w for w in items if after is None or key(w) < after), key=key, reverse=True)
-        limit = params.get("limit", 50)
         page = items[:limit]
         cursor = None
         if len(items) > limit:
@@ -215,19 +211,25 @@ class Lifecycle:
         # lock claim each page in memory. Keep pending durable until completion:
         # cancellation releases claims and restart retries the same runtime IDs.
         after = ""
-        while True:
-            async with self.store.transaction() as tx:
-                pending = await tx.pending_allocations(8, after)
-            if not pending:
-                return
-            tasks = [asyncio.create_task(self._allocate(record)) for record in pending]
-            try:
-                await asyncio.gather(*tasks)
-            finally:
-                for task in tasks:
-                    task.cancel()
-                await asyncio.gather(*tasks, return_exceptions=True)
-            after = pending[-1]["snapshot"]["operation_id"]
+        tasks = set()
+        exhausted = False
+        try:
+            while tasks or not exhausted:
+                if not exhausted and len(tasks) < 8:
+                    async with self.store.transaction() as tx:
+                        pending = await tx.pending_allocations(8 - len(tasks), after)
+                    exhausted = not pending
+                    for record in pending:
+                        tasks.add(asyncio.create_task(self._allocate(record)))
+                        after = record["snapshot"]["operation_id"]
+                if tasks:
+                    done, tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        task.result()
+        finally:
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _allocate(self, record) -> None:
         operation = record["snapshot"]
@@ -239,8 +241,11 @@ class Lifecycle:
         if provider is None:
             return  # Retain ownership and wait for the owning provider to return.
         try:
-            locator = await provider.provision(runtime["runtime_id"], workspace["specification"])
+            async with asyncio.timeout(ALLOCATION_TIMEOUT_SECONDS):
+                locator = await provider.provision(runtime["runtime_id"], workspace["specification"])
             error = None
+        except TimeoutError:
+            return  # Leave durable pending state for an idempotent retry.
         except ServiceError as failure:
             if failure.retryable:
                 return

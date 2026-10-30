@@ -54,3 +54,9 @@ sa.Index(
     "ix_operations_pending", documents["operations"].c.key,
     sqlite_where=sa.text("json_extract(body, '$.snapshot.status') = 'pending'"),
 )
+
+sa.Index("ix_workspaces_name", sa.literal_column("json_extract(body, '$.snapshot.name')"), _table=documents["workspaces"])
+sa.Index("ix_workspaces_page", sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
+sa.Index("ix_workspaces_provider_page", sa.literal_column("json_extract(body, '$.snapshot.provider')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
+sa.Index("ix_workspaces_state_page", sa.literal_column("json_extract(body, '$.snapshot.state')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
+sa.Index("ix_workspaces_job_page", sa.literal_column("json_extract(body, '$.snapshot.labels.job_id')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
