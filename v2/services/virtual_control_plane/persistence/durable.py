@@ -101,6 +101,13 @@ class Transaction:
         table = _collection(collection)
         return list((await self._connection.execute(sa.select(table.c.body).order_by(table.c.key))).scalars())
 
+    async def pending_allocations(self, limit: int, after: str = "") -> list[Document]:
+        table = documents["operations"]
+        query = (sa.select(table.c.body)
+                 .where(sa.text("json_extract(body, '$.snapshot.status') = 'pending'"), table.c.key > after)
+                 .order_by(table.c.key).limit(limit))
+        return list((await self._connection.execute(query)).scalars())
+
     async def replay(self, subject: str, command: Document) -> Document | None:
         table = documents["command_receipts"]
         receipt = (await self._connection.execute(

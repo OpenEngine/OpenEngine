@@ -40,6 +40,10 @@ class Transaction(Protocol):
 
     async def all(self, collection: Collection) -> list[Document]: ...
 
+    async def pending_allocations(self, limit: int, after: str = "") -> list[Document]:
+        """Read a bounded, indexed page; the exclusive allocation worker owns claims."""
+        ...
+
     async def replay(self, subject: str, command: Document) -> Document | None:
         """Return the original reply, or raise CommandIdConflict for changed inputs."""
         ...

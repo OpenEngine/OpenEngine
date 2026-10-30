@@ -295,3 +295,71 @@ def test_durable_rejections_and_atomic_rollback(tmp_path):
         assert (await send(body))["status"] == "accepted"
         await store.close()
     asyncio.run(scenario())
+
+
+def test_allocation_pages_are_indexed_bounded_concurrent_and_claimed(tmp_path):
+    from openengine.messaging import Request
+    from virtual_control_plane.persistence.durable import Transaction
+
+    class GatedProvider(FakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.active = 0
+            self.peak = 0
+            self.full = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def provision(self, runtime_id, workspace):
+            self.active += 1
+            self.peak = max(self.peak, self.active)
+            if self.active == 8:
+                self.full.set()
+            try:
+                await self.release.wait()
+                return await super().provision(runtime_id, workspace)
+            finally:
+                self.active -= 1
+
+    async def scenario():
+        store, provider = storage(tmp_path), GatedProvider()
+        lifecycle = Lifecycle(store, {"process": provider})
+        for i in range(19):
+            document = deepcopy(DOCUMENT)
+            document["metadata"]["name"] = f"workspace-{i}"
+            await lifecycle.apply(Request(
+                APPLY, "control", "workspaces.apply",
+                envelopes.command({"workspace": document}), "nats://127.0.0.1:4222",
+            ))
+        # Terminal history is excluded by the partial index, not decoded by Python.
+        async with store.transaction() as tx:
+            for i in range(200):
+                await tx.put("operations", f"history_{i}", {"snapshot": {"status": "succeeded"}})
+            plan = await tx._connection.exec_driver_sql(
+                "EXPLAIN QUERY PLAN SELECT body FROM operations "
+                "WHERE json_extract(body, '$.snapshot.status') = 'pending' "
+                "AND key > '' ORDER BY key LIMIT 8"
+            )
+            assert "ix_operations_pending" in str(plan.all())
+        original = Transaction.all
+
+        async def no_scan(self, collection):
+            assert collection != "operations"
+            return await original(self, collection)
+
+        Transaction.all = no_scan
+        try:
+            first = asyncio.create_task(lifecycle.reconcile())
+            second = asyncio.create_task(lifecycle.reconcile())
+            await asyncio.wait_for(provider.full.wait(), 5)
+            assert provider.active == provider.peak == 8
+            provider.release.set()
+            await asyncio.wait_for(asyncio.gather(first, second), 10)
+            assert provider.calls == len(provider.allocations) == 19
+            assert provider.peak == 8
+            await lifecycle.reconcile()  # Empty indexed lookup with terminal history.
+            assert provider.calls == 19
+        finally:
+            Transaction.all = original
+            await store.close()
+
+    asyncio.run(scenario())

@@ -211,45 +211,61 @@ class Lifecycle:
 
     async def _reconcile(self) -> None:
         """One pass. Only one worker owns this state directory, enforced by service startup."""
-        async with self.store.transaction() as tx:
-            pending = [o for o in await tx.all("operations") if "snapshot" in o and o["snapshot"]["status"] == "pending"]
-        for record in pending:
-            operation = record["snapshot"]
-            workspace_id = operation["resources"]["workspace_id"]
+        # The service's exclusive state-directory ownership and reconciliation
+        # lock claim each page in memory. Keep pending durable until completion:
+        # cancellation releases claims and restart retries the same runtime IDs.
+        after = ""
+        while True:
             async with self.store.transaction() as tx:
-                workspace = await tx.get("workspaces", workspace_id)
-                runtime = await tx.get("workspace_runtimes", workspace_id)
-            provider = self.providers.get(runtime["provider"])
-            if provider is None:
-                continue  # Retain ownership and wait for the owning provider to return.
+                pending = await tx.pending_allocations(8, after)
+            if not pending:
+                return
+            tasks = [asyncio.create_task(self._allocate(record)) for record in pending]
             try:
-                locator = await provider.provision(runtime["runtime_id"], workspace["specification"])
-                error = None
-            except ServiceError as failure:
-                if failure.retryable:
-                    continue
-                error = failure.to_dict()
-            except Exception:
-                logging.getLogger(__name__).exception("provider allocation failed")
-                error = ServiceError(ErrorCode.PROVIDER_ERROR, "provider allocation failed").to_dict()
-            async with self.store.transaction() as tx:
-                snapshot = workspace["snapshot"]
-                snapshot.update(state="failed" if error else "ready", version=snapshot["version"] + 1, updated_at=now())
-                operation.update(status="failed" if error else "succeeded", updated_at=now())
-                if error:
-                    snapshot["failure"] = operation["error"] = error
-                    payload = {"error": error, "runtime_generation": 1}
-                else:
-                    runtime["locator"] = locator
-                    snapshot["runtime"] = {"runtime_id": runtime["runtime_id"], "generation": 1,
-                                           "state": "running", "started_at": now()}
-                    operation["result"] = {"workspace_id": workspace_id, "created": True,
-                                           "runtime_id": runtime["runtime_id"], "runtime_generation": 1}
-                    payload = {"runtime_generation": 1}
-                await tx.put("workspaces", workspace_id, workspace)
-                await tx.put("operations", operation["operation_id"], record)
-                await tx.put("workspace_runtimes", workspace_id, runtime)
-                await self._event(tx, snapshot, operation, record["causal_path"], snapshot["state"], payload)
+                await asyncio.gather(*tasks)
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+            after = pending[-1]["snapshot"]["operation_id"]
+
+    async def _allocate(self, record) -> None:
+        operation = record["snapshot"]
+        workspace_id = operation["resources"]["workspace_id"]
+        async with self.store.transaction() as tx:
+            workspace = await tx.get("workspaces", workspace_id)
+            runtime = await tx.get("workspace_runtimes", workspace_id)
+        provider = self.providers.get(runtime["provider"])
+        if provider is None:
+            return  # Retain ownership and wait for the owning provider to return.
+        try:
+            locator = await provider.provision(runtime["runtime_id"], workspace["specification"])
+            error = None
+        except ServiceError as failure:
+            if failure.retryable:
+                return
+            error = failure.to_dict()
+        except Exception:
+            logging.getLogger(__name__).exception("provider allocation failed")
+            error = ServiceError(ErrorCode.PROVIDER_ERROR, "provider allocation failed").to_dict()
+        async with self.store.transaction() as tx:
+            snapshot = workspace["snapshot"]
+            snapshot.update(state="failed" if error else "ready", version=snapshot["version"] + 1, updated_at=now())
+            operation.update(status="failed" if error else "succeeded", updated_at=now())
+            if error:
+                snapshot["failure"] = operation["error"] = error
+                payload = {"error": error, "runtime_generation": 1}
+            else:
+                runtime["locator"] = locator
+                snapshot["runtime"] = {"runtime_id": runtime["runtime_id"], "generation": 1,
+                                       "state": "running", "started_at": now()}
+                operation["result"] = {"workspace_id": workspace_id, "created": True,
+                                       "runtime_id": runtime["runtime_id"], "runtime_generation": 1}
+                payload = {"runtime_generation": 1}
+            await tx.put("workspaces", workspace_id, workspace)
+            await tx.put("operations", operation["operation_id"], record)
+            await tx.put("workspace_runtimes", workspace_id, runtime)
+            await self._event(tx, snapshot, operation, record["causal_path"], snapshot["state"], payload)
 
     def start(self) -> None:
         self._worker = asyncio.create_task(self._run())
@@ -260,7 +276,7 @@ class Lifecycle:
                 await self.reconcile()
             except Exception:
                 logging.getLogger(__name__).exception("workspace reconciliation failed; retrying")
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(1)
 
     async def close(self) -> None:
         if self._worker:

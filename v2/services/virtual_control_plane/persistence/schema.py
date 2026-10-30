@@ -49,3 +49,8 @@ outbox = sa.Table(
     comment="Immutable public event envelopes awaiting or recording JetStream publication.",
     sqlite_autoincrement=True,
 )
+
+sa.Index(
+    "ix_operations_pending", documents["operations"].c.key,
+    sqlite_where=sa.text("json_extract(body, '$.snapshot.status') = 'pending'"),
+)
