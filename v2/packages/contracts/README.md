@@ -225,6 +225,10 @@ and the operation's typed `payload`.
   authentication or a verified delegation, never from a payload field.
   Envelopes are closed, so an `actor` or tenant field is rejected. See
   [Tenants](#tenants).
+  Inside a tenant, a workspace's identity is the NATS user credential VCP
+  issues for one task attempt. It carries the workspace and `stepAttemptId`
+  as claims, so tool invocations name neither. See the tool service and VCP
+  contracts.
 
 ### Causal paths
 

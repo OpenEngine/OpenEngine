@@ -95,15 +95,26 @@ info:
 
     A workspace calls with the user credential the Virtual Control Plane
     issues for one task attempt inside the tenant's account. Its claims name
-    the workspace and the `stepAttemptId`; it may publish only to
-    `oe.v1.tools.invoke.>` and the reply inbox prefix, and expires at the
-    attempt's deadline. The runtime places it in the workspace, and the
-    Virtual Control Plane revokes it when the attempt ends, when the Graph
-    Engine deletes the attempt's grants. A credential that names no step
-    attempt is rejected with PERMISSION_DENIED. Grants resolve by the
-    credential's `(workspace, stepAttemptId)`. The resolved tool definition is stored with it, so
-    changing the Tool cannot change accepted work. Deleting and recreating a
-    Tool or a ToolGrant under the same name gives it a new `uid`; nothing
+    the workspace and the `stepAttemptId`. It may publish only to
+    `oe.v1.tools.invoke.>` and its own reply inbox prefix, which is unique to
+    the attempt, and subscribe only to that prefix, so one attempt cannot read
+    or spoof another's replies. It expires at the attempt's deadline. The
+    runtime places it in the workspace, and the Virtual Control Plane revokes
+    it when the attempt ends, when the Graph Engine deletes the attempt's
+    grants.
+
+    Credentials that are not per-attempt, such as an operator's or a user
+    credential for a workspace outside any attempt, carry no `stepAttemptId`.
+    The service rejects their invocations with PERMISSION_DENIED.
+
+    Grants resolve by the credential's `(workspace, stepAttemptId)`. A grant
+    for exactly that pair matches. A grant without `stepAttemptId` matches
+    every attempt in that workspace. A grant for another attempt never
+    matches.
+
+    The service stores the resolved tool definition with the ToolInvocation,
+    so changing the Tool cannot change accepted work. Deleting and recreating
+    a Tool or a ToolGrant under the same name gives it a new `uid`; nothing
     carries over through name reuse.
 
     Events carry references and a status summary. Results are read only
