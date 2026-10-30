@@ -9,6 +9,7 @@ caller's responsibility.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
@@ -25,10 +26,11 @@ class CommandIdConflict(ValueError):
 
 
 class InvalidEvent(ValueError):
-    """An event envelope's causal path does not end with its own ID."""
+    """An event envelope breaks the public contract, so it could never be published."""
 
-    def __init__(self, event_id: str) -> None:
-        super().__init__(f"causal_path must end with event_id {event_id}")
+    def __init__(self, errors: list[str]) -> None:
+        super().__init__("invalid event: " + "; ".join(errors))
+        self.errors = errors
 
 
 class Transaction(Protocol):
@@ -54,7 +56,8 @@ class Transaction(Protocol):
         """Queue an immutable public event envelope for publication after commit.
 
         Its partition is `resources.workspace_id`; insertion order is publication
-        order within it. Reusing an `event_id` fails the transaction. Callers
+        order within it. An envelope that breaks the public event contract
+        raises InvalidEvent, and reusing an `event_id` fails the transaction. Callers
         that replayed a command must return its response without appending.
         """
         ...
@@ -77,8 +80,8 @@ class PendingEvent:
 class Outbox(Protocol):
     """Committed events awaiting publication; read and marked outside lifecycle transactions."""
 
-    async def pending_events(self, limit: int) -> list[PendingEvent]:
-        """Unpublished events in insertion order."""
+    async def pending_events(self, limit: int, exclude: Iterable[str] = ()) -> list[PendingEvent]:
+        """Unpublished events in insertion order, leaving out the workspaces in `exclude`."""
         ...
 
     async def mark_published(self, sequence: int) -> None:

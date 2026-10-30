@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
@@ -16,6 +16,7 @@ from openengine.persistence import Backend, BackendNotImplemented, Database
 from virtual_control_plane.application.transactions import (
     Collection, CommandIdConflict, Document, InvalidEvent, PendingEvent,
 )
+from virtual_control_plane.jetstream import event_errors
 from virtual_control_plane.persistence.schema import documents, outbox
 
 
@@ -86,8 +87,9 @@ class Transaction:
         return response
 
     async def append_event(self, envelope: Document) -> None:
-        if envelope["causal_path"][-1] != envelope["event_id"]:
-            raise InvalidEvent(envelope["event_id"])
+        # Reject what could never be published before it can hold back its workspace.
+        if errors := event_errors(envelope):
+            raise InvalidEvent(errors)
         await self._connection.execute(outbox.insert().values(
             workspace_id=envelope["resources"]["workspace_id"], event_id=envelope["event_id"],
             envelope=envelope, created_at=datetime.now(UTC),
@@ -113,10 +115,11 @@ class DurableStore:
                 await connection.rollback()
                 raise
 
-    async def pending_events(self, limit: int) -> list[PendingEvent]:
+    async def pending_events(self, limit: int, exclude: Iterable[str] = ()) -> list[PendingEvent]:
         query = (
             sa.select(outbox.c.sequence, outbox.c.workspace_id, outbox.c.event_id, outbox.c.envelope)
-            .where(outbox.c.published_at.is_(None)).order_by(outbox.c.sequence).limit(limit)
+            .where(outbox.c.published_at.is_(None), outbox.c.workspace_id.not_in(list(exclude)))
+            .order_by(outbox.c.sequence).limit(limit)
         )
         async with self.database.connect() as connection:
             return [PendingEvent(**row) for row in (await connection.execute(query)).mappings()]

@@ -9,7 +9,8 @@ the same event ID and envelope: delivery is at least once. The broker's
 still deduplicate on `event_id`.
 
 Events of one workspace are published in insertion order: once one fails, its
-workspace's later events wait for the next pass. Nothing here knows event
+workspace's later events wait for the next pass, and the pass reads past them to
+reach other workspaces. Nothing here knows event
 types, so task and conversation producers can append through the same port.
 This assumes the service's single-writer deployment; it does not coordinate
 several publishers.
@@ -50,25 +51,32 @@ class OutboxPublisher:
         self._wake.set()
 
     async def publish_pending(self) -> int:
-        """Publish one batch; return how many were acknowledged, or raise `PublishFailed`."""
+        """Publish the head of every workspace; return how many were acknowledged, or raise `PublishFailed`."""
         blocked: set[str] = set()
         published = 0
-        for event in await self._outbox.pending_events(self._batch_size):
-            if self._stopping.is_set():
+        while not self._stopping.is_set():
+            # Refetch without newly blocked workspaces, so their backlog cannot hide everyone else's.
+            events = await self._outbox.pending_events(self._batch_size, exclude=blocked)
+            newly_blocked = False
+            for event in events:
+                if self._stopping.is_set():
+                    break
+                if event.workspace_id in blocked:
+                    continue
+                try:
+                    await self._publisher.publish(event.envelope)
+                except Exception:
+                    # A later event of this workspace must not overtake this one.
+                    blocked.add(event.workspace_id)
+                    newly_blocked = True
+                    log.warning("event not acknowledged; it stays pending",
+                                extra={"vcp.event_id": event.event_id, "vcp.outbox_sequence": event.sequence},
+                                exc_info=True)
+                    continue
+                await self._outbox.mark_published(event.sequence)
+                published += 1
+            if len(events) < self._batch_size or not newly_blocked:
                 break
-            if event.workspace_id in blocked:
-                continue
-            try:
-                await self._publisher.publish(event.envelope)
-            except Exception:
-                # A later event of this workspace must not overtake this one.
-                blocked.add(event.workspace_id)
-                log.warning("event not acknowledged; it stays pending",
-                            extra={"vcp.event_id": event.event_id, "vcp.outbox_sequence": event.sequence},
-                            exc_info=True)
-                continue
-            await self._outbox.mark_published(event.sequence)
-            published += 1
         if blocked:
             raise PublishFailed(len(blocked))
         return published

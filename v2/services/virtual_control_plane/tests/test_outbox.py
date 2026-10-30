@@ -15,7 +15,7 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -153,9 +153,20 @@ def test_event_identity_is_unique_and_causal(config: DatabaseConfig) -> None:
                 async with store.transaction() as tx:
                     await tx.put("operations", "op_2", {"state": "pending"})
                     await tx.append_event(_event("evt_1", workspace_id="ws_b1"))
-            with pytest.raises(InvalidEvent):
-                async with store.transaction() as tx:
-                    await tx.append_event({**_event("evt_2"), "causal_path": ["cmd_create_a"]})
+            unpublishable = [
+                {**_event("evt_2"), "causal_path": ["cmd_create_a"]},
+                {**_event("evt_2"), "causal_path": []},
+                {key: value for key, value in _event("evt_2").items() if key != "resources"},
+                {**_event("evt_2"), "event_type": "workspace.unknown"},
+                _event("evt_2", workspace_id="ws.a1"),
+                _event("evt_2\r\nNats-Expected-Stream: other"),
+            ]
+            for envelope in unpublishable:
+                # Rejected with the producer's state, before it could hold back its workspace.
+                with pytest.raises(InvalidEvent):
+                    async with store.transaction() as tx:
+                        await tx.put("operations", "op_2", {"state": "pending"})
+                        await tx.append_event(envelope)
             async with store.transaction() as tx:
                 assert await tx.all("operations") == []
             [pending] = await store.pending_events(10)
@@ -192,14 +203,34 @@ def test_failed_event_is_not_overtaken_within_its_workspace(config: DatabaseConf
     asyncio.run(scenario())
 
 
+def test_a_stuck_workspace_backlog_does_not_hide_other_workspaces(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        async with _store(config) as store:
+            for index in range(5):
+                async with store.transaction() as tx:
+                    await tx.append_event(_event(f"evt_a{index}", "ws_a1"))
+            async with store.transaction() as tx:
+                await tx.append_event(_event("evt_b0", "ws_b1"))
+            publisher = Recording(lambda event: event["resources"]["workspace_id"] == "ws_a1")
+            worker = OutboxPublisher(store, publisher, batch_size=2)
+            with pytest.raises(PublishFailed):
+                await worker.publish_pending()
+            # ws_a1's head is tried once; its backlog fills the first batch, not the pass.
+            assert [event["event_id"] for event in publisher.attempts] == ["evt_a0", "evt_b0"]
+            assert [event["event_id"] for event in publisher.acknowledged] == ["evt_b0"]
+            assert [event.event_id for event in await store.pending_events(10)] == [f"evt_a{i}" for i in range(5)]
+
+    asyncio.run(scenario())
+
+
 class CrashBeforeMarking:
     """Wraps the store so recording publication fails once after the broker acknowledged."""
 
     def __init__(self, store: DurableStore) -> None:
         self.store, self.crashed = store, False
 
-    async def pending_events(self, limit: int) -> list[PendingEvent]:
-        return await self.store.pending_events(limit)
+    async def pending_events(self, limit: int, exclude: Iterable[str] = ()) -> list[PendingEvent]:
+        return await self.store.pending_events(limit, exclude)
 
     async def mark_published(self, sequence: int) -> None:
         if not self.crashed:
