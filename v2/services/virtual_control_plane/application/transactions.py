@@ -40,6 +40,12 @@ class Transaction(Protocol):
 
     async def all(self, collection: Collection) -> list[Document]: ...
 
+    async def workspace_named(self, name: str) -> Document | None: ...
+
+    async def pending_allocations(self, limit: int, after: str = "") -> list[Document]:
+        """Read a bounded, indexed page; the exclusive allocation worker owns claims."""
+        ...
+
     async def replay(self, subject: str, command: Document) -> Document | None:
         """Return the original reply, or raise CommandIdConflict for changed inputs."""
         ...
@@ -64,6 +70,10 @@ class Transaction(Protocol):
 
 
 class UnitOfWork(Protocol):
+    async def read(self, collection: Collection, key: str) -> Document | None: ...
+
+    async def workspace_page(self, filters: Document, after: list[str] | None, limit: int) -> list[Document]: ...
+
     def transaction(self) -> AbstractAsyncContextManager[Transaction]:
         """Serialize writers before reading; commit on success, roll back on any failure."""
         ...

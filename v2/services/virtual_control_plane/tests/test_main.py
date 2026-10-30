@@ -1,6 +1,6 @@
 """`virtual_control_plane.__main__`'s wiring: authorization runs before any handler,
-a non-loopback broker is refused even though VCP dialed it over loopback, the one
-query it serves is answered truthfully, and the state directory lock turns a second
+a non-loopback broker is refused even though VCP dialed it over loopback, the
+capabilities query is answered truthfully, and the state directory lock turns a second
 process into a reported startup failure rather than a silent race."""
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import pytest
 from openengine.messaging import LocalOperator, Request, Server, ServiceError, envelopes
 
 from virtual_control_plane import __main__ as vcp
+from virtual_control_plane.application.lifecycle import Lifecycle
 from virtual_control_plane.exclusion import StateDirectory
 
 LOOPBACK = "nats://127.0.0.1:4222"
@@ -21,7 +22,7 @@ LOOPBACK = "nats://127.0.0.1:4222"
 
 def _send(subject: str, body: Any, *, authorizer=None, listener: str = LOOPBACK) -> dict[str, Any]:
     server = Server(
-        None, "vcp", listener, queries=vcp.QUERIES,
+        None, "vcp", listener, queries=Lifecycle(None, {}).queries(),
         **({"authorizer": authorizer} if authorizer is not None else {}),
     )
     data = json.dumps(body).encode()
@@ -48,7 +49,7 @@ def test_a_rejecting_authorizer_prevents_the_handler_from_running(monkeypatch: p
         called = True
         return {"providers": []}
 
-    monkeypatch.setitem(vcp.QUERIES, "capabilities.get", vcp.Route(spy, vcp.QUERIES["capabilities.get"].schema))
+    monkeypatch.setattr(Lifecycle, "capabilities", staticmethod(spy))
 
     reply = _send("oe.v1.vcp.query.capabilities.get", {"params": {}}, authorizer=_Rejecting())
 

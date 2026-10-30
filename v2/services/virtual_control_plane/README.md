@@ -19,9 +19,66 @@ truthful-readiness contract `ge` uses. Authorization runs through the shared
 (loopback only, judged by where the broker listens -- not the URL VCP
 dialed).
 
-Only `capabilities.get` is served, and it always reports no providers: this
-slice registers none. Workspace commands (`workspaces.apply`, `.execute`,
-...) are out of scope here.
+The service serves `workspaces.apply`, `capabilities.get`, `workspaces.list`,
+`workspaces.{workspace_id}.get` and `operations.{operation_id}.get` through the
+shared messaging routes. Production registers no managed provider yet, so
+capabilities remain empty and creation returns `UNSUPPORTED_CAPABILITY` until
+an adapter is registered. Readiness promises request handling, not a VM or
+executor. Later commands return the shared explicit unsupported response.
+
+### Managed workspace creation
+
+`application/lifecycle.py` accepts a Workspace resource under a new name with
+`workspaces.apply`. Acceptance atomically stores the specification, public
+workspace and pending operation, generation-one runtime ownership, immutable
+receipt and `workspace.provisioning` event. No provider call runs in that
+transaction. The shared Server authorizes before any business read, receipt
+replay or acceptance. This remains local-operator mode, with no tenant or
+project identity in the VCP contract; owner labels are references, not grants.
+
+The receipt-aware handler retains schema/deadline/version/capability rejections
+for well-formed command IDs. Invalid IDs cannot reserve receipts. Receipt
+identity includes subject, payload, expected version and causal path; deadlines
+are excluded. Retries replay before deadline or version checks. An unchanged
+apply under another command ID returns the original operation without another
+allocation; immutable specification changes are invalid, and other updates
+remain explicitly unsupported in this creation slice.
+
+`AllocationProvider` in `application/ports.py` is the managed allocation port,
+separate from the prototype's unkeyed `WorkspaceProviderPort.create`.
+`provision(runtime_id, workspace)` must be idempotent across process restarts,
+returning/recovering the same allocation for the persisted runtime ID, even
+when an earlier call was interrupted after allocation. A provider that cannot
+honor this must not be registered. Capabilities come from the configured
+adapter, never from an assumed isolation level. No real provider or executor
+is added here; tests use deterministic fake compute.
+
+One worker, under the service's exclusive state-directory lock, resumes pending
+operations on startup and polls every second. Allocation runs outside the
+transaction. Retryable provider errors leave the operation pending; terminal
+errors atomically mark the workspace and operation failed and append a failure
+event. Ownership is retained for cleanup. Success stores the opaque locator,
+marks the runtime ready and operation succeeded, and appends `workspace.ready`.
+An interrupted call repeats the same runtime ID. Shutdown cancels allocation
+before closing persistence; it never destroys compute.
+
+Workspace list uses descending `(created_at, workspace_id)` keyset pagination.
+Versioned base64url JSON cursors contain that key and normalized filters;
+no process memory, database cursor table or rotating signing key is required.
+Cursors survive restart and reject malformed tokens or changed filters.
+Limits may change between pages. These are live views, not frozen snapshots.
+Name lookup and filtered keyset pages use database expression indexes; listing
+uses a read-only connection without reserving the writer lock. Pending allocations
+use a partial index and up to eight independently refilled slots. Provider calls
+time out after 60 seconds, retaining pending state for idempotent retries.
+Alembic revisions add these indexes to existing stores.
+Receipts, operations and ownership use the existing durable tables.
+
+`tests/test_lifecycle.py` exercises real NATS with the shared Client/Server,
+including authorization, a public broker reached via loopback, lost-reply
+retries and restart, concurrent retries, typed queries and schema errors.
+It also covers interrupted allocation, terminal failure, retryable provider
+errors, cursor restart/filter binding, durable rejections and acceptance rollback.
 
 ### Where the ports go
 
@@ -54,7 +111,7 @@ reprovisioning with a different one or a lower-isolation fallback --
 
 ### Out of scope here
 
-Real worktree/smolvm adapters, VM allocation, agent execution, workspace
+Real worktree/smolvm adapters, VM allocation, agent execution, later workspace
 commands, and authenticated public (non-loopback) callers (#1051, which plugs
 into the same `Authorizer` boundary once it exists).
 
@@ -114,10 +171,9 @@ There is no automatic pruning. Receipts (including original responses),
 workspace documents, runtime ownership and operations survive reopening and are
 retained indefinitely, satisfying the public contract's minimum seven-day
 command-ID retention. Disk usage therefore grows; future bounded retention
-must preserve the retry window and unreconciled ownership. Lifecycle
-command handlers, provider effects, sessions and attempts remain in their
-follow-up tickets. These tests prove persistence with deterministic
-JSON records; they do not execute an agent or allocate compute.
+must preserve the retry window and unreconciled ownership. Creation handlers
+and fake provider effects are covered by the lifecycle tests above; sessions and attempts remain in follow-up tickets. The persistence tests
+use deterministic JSON records and do not execute an agent or allocate compute.
 
 ### Follow-up issue wording
 
@@ -175,7 +231,7 @@ event ID and envelope. JetStream drops repeats only within the stream's
 2-minute duplicate window, so consumers must deduplicate on `event_id`.
 
 The worker knows nothing about event types, so later task and conversation
-producers append through the same port. No lifecycle handler appends events
-yet; the tests use a minimal producer. This keeps the single-host,
+producers append through the same port. The lifecycle handler appends creation and terminal allocation events through
+this same outbox. This keeps the single-host,
 single-writer constraint: there is no distributed publisher coordination, and
 published rows are retained indefinitely (no retention/GC).

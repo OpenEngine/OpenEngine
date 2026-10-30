@@ -72,7 +72,7 @@ def _normalize_numbers(value: object) -> object:
 def _identity(subject: str, command: Document) -> str:
     # Snapshot only immutable public identity. A retry's deadline is irrelevant.
     return json.dumps(
-        _normalize_numbers([subject, command["payload"], command.get("expected_version"), command["causal_path"]]),
+        _normalize_numbers([subject, command.get("payload"), command.get("expected_version"), command.get("causal_path")]),
         sort_keys=True, separators=(",", ":"), allow_nan=False,
     )
 
@@ -100,6 +100,17 @@ class Transaction:
     async def all(self, collection: Collection) -> list[Document]:
         table = _collection(collection)
         return list((await self._connection.execute(sa.select(table.c.body).order_by(table.c.key))).scalars())
+
+    async def workspace_named(self, name: str) -> Document | None:
+        query = sa.text("SELECT body FROM workspaces WHERE json_extract(body, '$.snapshot.name') = :name LIMIT 1").columns(body=sa.JSON)
+        return (await self._connection.execute(query, {"name": name})).scalar_one_or_none()
+
+    async def pending_allocations(self, limit: int, after: str = "") -> list[Document]:
+        table = documents["operations"]
+        query = (sa.select(table.c.body)
+                 .where(sa.text("json_extract(body, '$.snapshot.status') = 'pending'"), table.c.key > after)
+                 .order_by(table.c.key).limit(limit))
+        return list((await self._connection.execute(query)).scalars())
 
     async def replay(self, subject: str, command: Document) -> Document | None:
         table = documents["command_receipts"]
@@ -151,6 +162,35 @@ class DurableStore:
             except BaseException:
                 await connection.rollback()
                 raise
+
+    async def read(self, collection: Collection, key: str) -> Document | None:
+        async with self.database.connect() as connection:
+            return await Transaction(connection).get(collection, key)
+
+    async def workspace_page(self, filters: Document, after: list[str] | None, limit: int) -> list[Document]:
+        # Read-only connection: listing never reserves the SQLite writer lock.
+        fields = {"name": "name", "provider": "provider", "job_id": "labels.job_id"}
+        conditions = ["json_type(body, '$.snapshot') = 'object'"]
+        values = {"limit": limit}
+        for key, path in fields.items():
+            if key in filters:
+                conditions.append(f"json_extract(body, '$.snapshot.{path}') = :{key}")
+                values[key] = filters[key]
+        if "state" in filters:
+            conditions.append("json_extract(body, '$.snapshot.state') IN :states")
+            values["states"] = filters["state"]
+        else:
+            conditions.append("json_extract(body, '$.snapshot.state') != 'destroyed'")
+        if after is not None:
+            conditions.append("(json_extract(body, '$.snapshot.created_at'), key) < (:created, :key)")
+            values.update(created=after[0], key=after[1])
+        query = sa.text("SELECT body FROM workspaces WHERE " + " AND ".join(conditions) +
+                        " ORDER BY json_extract(body, '$.snapshot.created_at') DESC, key DESC LIMIT :limit")
+        if "state" in filters:
+            query = query.bindparams(sa.bindparam("states", expanding=True))
+        query = query.columns(body=sa.JSON)
+        async with self.database.connect() as connection:
+            return [row["snapshot"] for row in (await connection.execute(query, values)).scalars()]
 
     async def pending_events(self, limit: int, exclude: Iterable[str] = ()) -> list[PendingEvent]:
         if excluded := list(exclude):
