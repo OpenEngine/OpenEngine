@@ -76,3 +76,51 @@ def test_recovering_ownership_updates_the_locator(config: DatabaseConfig) -> Non
 def test_postgres_store_is_a_stub() -> None:
     with pytest.raises(BackendNotImplemented, match="virtual control plane's store"):
         PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES))
+
+
+def test_list_filters_in_sql_using_legacy_status_index(config: DatabaseConfig, monkeypatch) -> None:
+    import sqlalchemy as sa
+
+    from virtual_control_plane.persistence import sqlite
+    from virtual_control_plane.persistence.durable import DurableStore
+
+    async def scenario() -> None:
+        workspaces = PERSISTENCE.open(config)
+        durable = DurableStore(workspaces.database)
+        try:
+            ready = await workspaces.create(WorkspaceProvider.PROCESS)
+            ready = await workspaces.set_status(ready.id, WorkspaceStatus.READY)
+            other = await workspaces.create(WorkspaceProvider.SMOLVM)
+            async with durable.transaction() as tx:
+                await tx.put("workspaces", "managed", {"status": "ready"})
+            converted = []
+            original = sqlite._workspace
+
+            def record(body):
+                converted.append(body)
+                return original(body)
+
+            monkeypatch.setattr(sqlite, "_workspace", record)
+            plans = []
+
+            def explain(connection, cursor, statement, parameters, context, executemany):
+                if statement.startswith("SELECT workspaces.body"):
+                    plans.append(connection.exec_driver_sql("EXPLAIN QUERY PLAN " + statement, parameters).all())
+
+            async with workspaces.database.connect() as connection:
+                sa.event.listen(connection.sync_connection.engine, "before_cursor_execute", explain)
+            try:
+                assert await workspaces.list(WorkspaceStatus.READY) == [ready]
+                assert len(converted) == 1
+                assert "SEARCH workspaces USING INDEX ix_workspaces_legacy_status" in str(plans[-1])
+                converted.clear()
+                assert await workspaces.list() == [ready, other]
+                assert len(converted) == 2
+                assert await workspaces.list(WorkspaceStatus.STOPPED) == []
+            finally:
+                sa.event.remove(connection.sync_connection.engine, "before_cursor_execute", explain)
+        finally:
+            await workspaces.close()
+            await durable.close()
+
+    asyncio.run(scenario())
