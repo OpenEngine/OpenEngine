@@ -256,8 +256,9 @@ class Server:
         name = f"oe.v1.{self.service}.{kind}.{operation}"
         with receiving(subject, headers, name=subject_template(name) if account is not None else name):
             try:
-                principal = await self._principal(account, kind, operation)
+                # Decode first so a refused request still echoes its request_id or command_id.
                 body = envelopes.decode(data)
+                principal = await self._principal(account, kind, operation)
                 if not self._keeps_receipt(kind, operation, body):
                     envelopes.check(envelopes.COMMAND if kind == "control" else envelopes.QUERY, body)
                 # A reconnect may reach a differently exposed broker. Never

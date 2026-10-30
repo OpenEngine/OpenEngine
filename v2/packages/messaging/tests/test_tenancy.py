@@ -74,8 +74,8 @@ def _server(tenancy: Any = None, **routes: Route) -> tuple[Server, list[Request]
     return server, seen
 
 
-def _send(server: Server, subject: str) -> dict[str, Any]:
-    return json.loads(asyncio.run(server.handle(subject, json.dumps({"params": {}}).encode())))
+def _send(server: Server, subject: str, **body: Any) -> dict[str, Any]:
+    return json.loads(asyncio.run(server.handle(subject, json.dumps({"params": {}} | body).encode())))
 
 
 def test_dedicated_mode_attaches_local_tenant_by_default() -> None:
@@ -122,12 +122,32 @@ def test_shared_mode_keeps_subject_parameters_after_the_account_token() -> None:
 def test_shared_mode_refuses_an_unknown_or_malformed_account_with_permission_denied(account: str) -> None:
     server, seen = _server(Shared(InMemoryAccounts({ACCOUNT: TENANT})))
 
-    reply = _send(server, f"oe.v1.{account}.ge.query.graphs.list")
+    reply = _send(server, f"oe.v1.{account}.ge.query.graphs.list", request_id="req_1")
 
+    assert reply["request_id"] == "req_1"
     assert reply["status"] == "error"
     assert reply["error"]["code"] == "PERMISSION_DENIED"
     assert reply["error"]["details"] == {"permission": "query.graphs.list"}
     assert not account or account not in reply["error"]["message"]
+    assert seen == []
+
+
+@pytest.mark.parametrize("account", [OTHER_ACCOUNT, "not-an-account"])
+def test_a_refused_shared_mode_command_still_names_its_command_id(account: str) -> None:
+    server, seen = _server(Shared(InMemoryAccounts({ACCOUNT: TENANT})))
+
+    reply = _send(server, f"oe.v1.{account}.ge.control.graphs.register", command_id="cmd_1")
+
+    assert reply == {
+        "command_id": "cmd_1",
+        "status": "rejected",
+        "error": {
+            "code": "PERMISSION_DENIED",
+            "message": "the request's account does not belong to any tenant",
+            "retryable": False,
+            "details": {"permission": "control.graphs.register"},
+        },
+    }
     assert seen == []
 
 
