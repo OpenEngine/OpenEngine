@@ -136,3 +136,22 @@ def test_a_tcp_forwarder_needs_the_token_even_without_public_url(tcp_forwarder: 
     assert response.status_code == 401, (
         f"with no public_url, through a TCP forwarder, Host: 127.0.0.1 with no token got {response.status_code}"
     )
+
+
+@pytest.mark.parametrize("daemon", [False], indirect=True)
+def test_cli_connections_against_token_protected_daemon(daemon, monkeypatch, capsys):
+    from engine.apps.cli import __main__ as cli
+    from engine.apps.cli import connect
+    from engine.cli.backends import Backend
+
+    backend = Backend("local", f"http://127.0.0.1:{daemon}", token_env="CLI_TEST_TOKEN")
+    monkeypatch.setattr(connect, "selected_backend", lambda _arguments: backend)
+    for token in ("", "wrong-" + TOKEN, TOKEN):
+        monkeypatch.setenv("CLI_TEST_TOKEN", token)
+        expected = 0 if token == TOKEN else 1
+        assert cli.main(["connect", "gh"]) == expected
+        assert cli.main(["connections"]) == expected
+        assert cli.main(["connection", "list"]) == expected
+        output = capsys.readouterr()
+        if expected:
+            assert "authentication required" in output.err
