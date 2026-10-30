@@ -5,9 +5,8 @@ Git worktree/host-process-shaped double, once by a smolvm-shaped double -- so
 `tests/test_provider_conformance.py` can run the same lifecycle assertions
 against both without the application layer branching on which one it holds.
 Real adapters land in #1054 (worktree) and #1114 (smolvm); #1055/#1118 add the
-runtime-supervision side. Transactional receipts and an event outbox are
-#1111/#1112 -- `UnitOfWork` and `EventPublisher` exist now only so that later
-slice does not have to widen `WorkspaceService`'s interface to its callers.
+runtime-supervision side. Transactional persistence is defined in `application/transactions.py`;
+event delivery is implemented separately in #1112.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from virtual_control_plane.application.transactions import UnitOfWork as UnitOfWork
 from virtual_control_plane.persistence.store import Locator, WorkspaceProvider
 
 
@@ -90,18 +90,6 @@ class RuntimeSupervisorPort(Protocol):
     async def start(self, context: ExecutionContext) -> None: ...
 
     async def stop(self, context: ExecutionContext) -> None: ...
-
-
-class UnitOfWork(Protocol):
-    """Groups a workspace mutation with the receipts/events it produces.
-
-    This slice has no command-receipt or outbox table yet (#1111, #1112);
-    nothing in the application layer currently requires an implementation.
-    """
-
-    async def __aenter__(self) -> "UnitOfWork": ...
-
-    async def __aexit__(self, *exc_info: object) -> bool | None: ...
 
 
 class EventPublisher(Protocol):
