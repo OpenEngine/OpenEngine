@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import LOCAL_TENANT, DatabaseConfig
 
 from virtual_control_plane.application.workspaces import WorkspaceService
 from virtual_control_plane.persistence import PERSISTENCE
@@ -35,7 +35,7 @@ def config(tmp_path: Path) -> DatabaseConfig:
 def test_create_persists_the_providers_locator_and_becomes_ready(config: DatabaseConfig, double: type) -> None:
     async def scenario() -> None:
         adapter = double()
-        workspaces = PERSISTENCE.open(config)
+        workspaces = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         service = WorkspaceService(workspaces, {adapter.provider: adapter})
         try:
             workspace = await service.create(adapter.provider)
@@ -57,7 +57,7 @@ def test_ownership_survives_a_restart(config: DatabaseConfig, double: type) -> N
 
     async def scenario() -> None:
         first_adapter = double()
-        first_workspaces = PERSISTENCE.open(config)
+        first_workspaces = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             workspace = await first_adapter.create()
             created = await first_workspaces.create(first_adapter.provider, workspace.locator)
@@ -66,7 +66,7 @@ def test_ownership_survives_a_restart(config: DatabaseConfig, double: type) -> N
 
         restarted_adapter = double()
         restarted_adapter.owned = set(first_adapter.owned)
-        restarted_workspaces = PERSISTENCE.open(config)
+        restarted_workspaces = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         restarted_service = WorkspaceService(restarted_workspaces, {restarted_adapter.provider: restarted_adapter})
         try:
             recovered = await restarted_service.recover(created.id)
@@ -84,7 +84,7 @@ def test_ownership_survives_a_restart(config: DatabaseConfig, double: type) -> N
 def test_destroy_releases_the_workspace_through_its_own_provider(config: DatabaseConfig, double: type) -> None:
     async def scenario() -> None:
         adapter = double()
-        workspaces = PERSISTENCE.open(config)
+        workspaces = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         service = WorkspaceService(workspaces, {adapter.provider: adapter})
         try:
             workspace = await service.create(adapter.provider)

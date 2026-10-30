@@ -8,7 +8,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
-from openengine.persistence import Backend, BackendNotImplemented, DatabaseConfig
+from openengine.persistence import LOCAL_TENANT, Backend, BackendNotImplemented, DatabaseConfig
 from openengine.persistence.migrations import downgrade
 
 from graph_engine.persistence import PERSISTENCE
@@ -50,7 +50,7 @@ def _definition(source: str, name: str = "triage") -> Definition:
 
 def test_an_unchanged_apply_keeps_the_revision_and_a_changed_one_adds_the_next(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config)
+        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             first = await graphs.apply(_command("cmd_1"), _definition('{"a":1}'))
             again = await graphs.apply(_command("cmd_2"), _definition('{"a":1}'))
@@ -76,7 +76,7 @@ def test_an_unchanged_apply_keeps_the_revision_and_a_changed_one_adds_the_next(c
 
 def test_a_command_id_returns_its_receipt_or_conflicts(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config)
+        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             first = await graphs.apply(_command("cmd_1"), _definition('{"a":1}'))
             assert await graphs.apply(_command("cmd_1"), _definition('{"a":1}')) == first
@@ -97,7 +97,7 @@ def test_a_command_id_returns_its_receipt_or_conflicts(config: DatabaseConfig) -
 
 def test_expected_version_must_be_the_latest_revision(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config)
+        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             with pytest.raises(VersionConflict) as missing:
                 await graphs.apply(_command("cmd_1"), _definition('{"a":1}'), expected_version=1)
@@ -116,7 +116,7 @@ def test_expected_version_must_be_the_latest_revision(config: DatabaseConfig) ->
 
 def test_the_deadline_is_checked_once_the_apply_holds_the_lock(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config)
+        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             accepted = await graphs.apply(_command("cmd_1"), _definition("{}"))
             # Waiting behind another write carries this apply past its deadline.
@@ -139,7 +139,7 @@ def test_the_deadline_is_checked_once_the_apply_holds_the_lock(config: DatabaseC
 
 def test_concurrent_applies_neither_duplicate_nor_skip_revisions(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config)
+        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             same = await asyncio.gather(*(graphs.apply(_command(f"cmd_same_{n}"), _definition("{}")) for n in range(8)))
             changed = await asyncio.gather(
@@ -161,7 +161,7 @@ def test_concurrent_applies_neither_duplicate_nor_skip_revisions(config: Databas
 
 def test_graphs_are_listed_by_name_and_paged_after_a_key(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config)
+        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             for name in ("review", "triage", "review-fast", "Review", "re_view", "deploy"):
                 await graphs.apply(_command(f"cmd_{name}"), _definition("{}", name))
@@ -187,7 +187,7 @@ def test_graphs_are_listed_by_name_and_paged_after_a_key(config: DatabaseConfig)
 
 def test_names_command_ids_and_listings_are_per_project(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config)
+        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             alpha = await graphs.apply(_command("cmd_1", project="alpha"), _definition('{"a":1}'))
             # The same name and command ID in another project are another graph and another command.
@@ -241,7 +241,7 @@ def test_the_project_migration_keeps_existing_graphs_under_default(tmp_path: Pat
     PERSISTENCE.upgrade(config)
 
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config)
+        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             listed = await graphs.graphs("default", 50)
             assert [(graph.graph_id, graph.project, graph.name, graph.latest_revision) for graph in listed] == [
@@ -262,7 +262,7 @@ def test_the_project_migration_keeps_existing_graphs_under_default(tmp_path: Pat
 
 def test_any_revision_of_a_graph_is_read_back(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config)
+        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             graph_id = (await graphs.apply(_command("cmd_1"), _definition('{"a":1}')))["resource_id"]
             await graphs.apply(_command("cmd_2"), _definition('{"a":2}'))
@@ -284,4 +284,4 @@ def test_any_revision_of_a_graph_is_read_back(config: DatabaseConfig) -> None:
 
 def test_postgres_store_is_a_stub() -> None:
     with pytest.raises(BackendNotImplemented, match="graph engine's store"):
-        PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES))
+        PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES)).scoped(LOCAL_TENANT)

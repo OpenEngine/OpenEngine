@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import inspect
 from sqlalchemy.exc import OperationalError
 
-from openengine.persistence import Backend, BackendNotImplemented, DatabaseConfig
+from openengine.persistence import LOCAL_TENANT, Backend, BackendNotImplemented, DatabaseConfig
 
 from virtual_control_plane.application.transactions import CommandIdConflict
 from virtual_control_plane.persistence import PERSISTENCE
@@ -274,7 +274,7 @@ def test_upgrade_preserves_legacy_rows_without_adopting_them(tmp_path: Path) -> 
         engine.dispose()
 
     async def scenario() -> None:
-        prototype = PERSISTENCE.open(config)
+        prototype = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         durable = DurableStore(PERSISTENCE.database(config))
         try:
             for row in rows:

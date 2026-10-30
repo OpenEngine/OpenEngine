@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from functools import cache
 from math import isfinite
 
@@ -12,6 +13,12 @@ from openengine.contracts.validate import CONTRACTS, _validator
 ROOT = CONTRACTS
 CONTRACT = ROOT / "internal/workspace_runtime/v1"
 MAX_WIRE_BYTES = 1024 * 1024
+# Deeper than any contract message nests. Checked before decoding, because
+# whether the decoder or the validator runs out of stack first varies by
+# Python version and platform.
+MAX_JSON_DEPTH = 256
+_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+_BRACKET = re.compile(r"[\[\]{}]")
 DEFINITIONS = {
     "execute": ("runtime", ("execute",)),
     "cancel": ("runtime", ("cancel",)),
@@ -54,6 +61,17 @@ def _finite_float(value):
     return number
 
 
+def _too_deep(text):
+    if text.count("[") + text.count("{") <= MAX_JSON_DEPTH:
+        return False
+    depth = 0
+    for bracket in _BRACKET.finditer(_STRING.sub("", text)):
+        depth += 1 if bracket.group() in "[{" else -1
+        if depth > MAX_JSON_DEPTH:
+            return True
+    return False
+
+
 def _timestamp_key(value):
     """Order schema-validated UTC timestamps without losing nanoseconds."""
     seconds, _, fraction = value.removesuffix("Z").partition(".")
@@ -65,8 +83,14 @@ def validate_wire_message(definition, data: bytes, subject):
     if len(data) > MAX_WIRE_BYTES:
         return ["Message exceeds 1 MiB"]
     try:
+        text = data.decode("utf-8")
+    except ValueError:
+        return ["Message must be valid UTF-8 JSON"]
+    if _too_deep(text):
+        return ["Message must be valid UTF-8 JSON"]
+    try:
         payload = json.loads(
-            data.decode("utf-8"),
+            text,
             parse_constant=_reject_constant,
             parse_float=_finite_float,
         )
