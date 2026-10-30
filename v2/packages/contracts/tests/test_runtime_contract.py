@@ -348,14 +348,9 @@ def test_wire_rejects_non_json_numbers_in_free_form_inputs(constant):
 def test_wire_rejects_excessive_json_nesting():
     wire = b"[" * 100_000 + b"0" + b"]" * 100_000
     assert len(wire) < runtime.MAX_WIRE_BYTES
-    # Python 3.14's decoder parses this depth, so the schema validator is the
-    # layer that runs out of stack; earlier decoders raise RecursionError first.
     assert runtime.validate_wire_message(
         "progress", wire, example("progress")["subject"]
-    ) in (
-        ["Message must be valid UTF-8 JSON"],
-        ["Message exceeds validation nesting limits"],
-    )
+    ) == ["Message must be valid UTF-8 JSON"]
 
 
 @pytest.mark.parametrize("number", ["1e400", "-1e400", "1.7976931348623159e308"])
@@ -443,3 +438,12 @@ def test_oversized_references_skip_uniqueness_checks(monkeypatch, count):
     assert len(wire) < runtime.MAX_WIRE_BYTES
     assert errors(case)
     assert runtime.validate_wire_message("execute", wire, case["subject"])
+
+
+def test_wire_nesting_limit_ignores_brackets_inside_strings():
+    case = example("progress")
+    case["payload"]["padding"] = "[" * (runtime.MAX_JSON_DEPTH + 1)
+    wire = json.dumps(case["payload"]).encode()
+    assert runtime._too_deep(wire.decode()) is False
+    deep = b"[" * (runtime.MAX_JSON_DEPTH + 1) + b"]" * (runtime.MAX_JSON_DEPTH + 1)
+    assert runtime._too_deep(deep.decode()) is True
