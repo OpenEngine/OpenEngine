@@ -12,6 +12,7 @@ const sidebars = {
     {type: 'category', label: 'Reference', collapsible: false, items: [
       'cli-reference',
       'cli-specs',
+      {type: 'link', label: 'V2 security architecture', href: 'pathname:///v2/security/'},
       // The pages are copied into static/contracts/ by the Pages workflow from v2/packages/contracts.
       {type: 'category', label: 'Service contracts', link: {type: 'doc', id: 'service-contracts'}, items: [
         {type: 'link', label: 'Connection Bus', href: 'pathname:///contracts/connection_bus/v1/'},

@@ -8,6 +8,10 @@ OpenEngine V2 is a grounds-up rewrite of OpenEngine in a service-oriented archit
 | Tool Service | tools | The tools agents may call, who may call them, and a durable record of every call. |
 | Virtual Control Plane | vcp | The controller of which workspaces + agents are active. |
 
+## Security architecture
+
+[Explore the V2 security architecture atlas](https://openengine.cc/v2/security/) for implemented boundaries, contracts, tickets, candidate PRs and design discussion. It identifies its pinned source revision and capture date; it is not a live deployment assessment.
+
 ## Running locally
 Requires [uv](https://docs.astral.sh/uv/). From `v2/`:
 
