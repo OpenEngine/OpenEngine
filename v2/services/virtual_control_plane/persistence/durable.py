@@ -20,6 +20,43 @@ from virtual_control_plane.jetstream import event_errors
 from virtual_control_plane.persistence.schema import documents, outbox
 
 
+# Enumerate workspace IDs by index seeks, rather than DISTINCT/GROUP BY scans.
+# The second recursive CTE is a priority queue: SQLite's recursive ORDER BY
+# expands the smallest sequence first and LIMIT bounds the whole result. Each
+# expansion seeks the next event of just that workspace, so excluded backlogs
+# are never walked. Work is proportional to pending workspaces plus batch size.
+_PENDING_EXCLUDING = sa.text("""
+WITH RECURSIVE workspaces(workspace_id) AS (
+    SELECT min(workspace_id) FROM outbox WHERE published_at IS NULL
+    UNION ALL
+    SELECT (SELECT min(workspace_id) FROM outbox
+            WHERE published_at IS NULL AND workspace_id > workspaces.workspace_id)
+    FROM workspaces WHERE workspace_id IS NOT NULL
+),
+pending(sequence, workspace_id) AS (
+    SELECT event.sequence, event.workspace_id
+    FROM workspaces JOIN outbox AS event ON event.sequence = (
+        SELECT min(sequence) FROM outbox
+        WHERE published_at IS NULL AND workspace_id = workspaces.workspace_id
+    )
+    WHERE workspaces.workspace_id NOT IN :exclude
+    UNION ALL
+    SELECT event.sequence, event.workspace_id
+    FROM pending JOIN outbox AS event ON event.sequence = (
+        SELECT min(sequence) FROM outbox
+        WHERE published_at IS NULL AND workspace_id = pending.workspace_id
+          AND sequence > pending.sequence
+    )
+    ORDER BY 1 LIMIT :limit
+)
+SELECT event.sequence, event.workspace_id, event.event_id, event.envelope
+FROM pending JOIN outbox AS event ON event.sequence = pending.sequence
+ORDER BY event.sequence
+""").bindparams(sa.bindparam("exclude", expanding=True)).columns(
+    sequence=sa.Integer, workspace_id=sa.String, event_id=sa.String, envelope=sa.JSON,
+)
+
+
 def _normalize_numbers(value: object) -> object:
     # JSON Schema integers include 1.0. Canonicalize equivalent JSON numbers,
     # including those nested in payloads, without conflating booleans or strings.
@@ -116,11 +153,15 @@ class DurableStore:
                 raise
 
     async def pending_events(self, limit: int, exclude: Iterable[str] = ()) -> list[PendingEvent]:
-        query = (
-            sa.select(outbox.c.sequence, outbox.c.workspace_id, outbox.c.event_id, outbox.c.envelope)
-            .where(outbox.c.published_at.is_(None), outbox.c.workspace_id.not_in(list(exclude)))
-            .order_by(outbox.c.sequence).limit(limit)
-        )
+        if excluded := list(exclude):
+            query = _PENDING_EXCLUDING.bindparams(exclude=excluded, limit=limit)
+        else:
+            # With no blocked workspace the sequence-only index already gives a bounded scan.
+            query = (
+                sa.select(outbox.c.sequence, outbox.c.workspace_id, outbox.c.event_id, outbox.c.envelope)
+                .where(outbox.c.published_at.is_(None))
+                .order_by(outbox.c.sequence).limit(limit)
+            )
         async with self.database.connect() as connection:
             return [PendingEvent(**row) for row in (await connection.execute(query)).mappings()]
 

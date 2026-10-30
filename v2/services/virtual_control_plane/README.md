@@ -137,7 +137,13 @@ schema, leaving existing records untouched. Each row has an `AUTOINCREMENT`
 `sequence` (publication order), `workspace_id` (the partition), a unique
 `event_id`, the immutable `envelope`, `created_at` and a nullable
 `published_at`; `ix_outbox_pending` indexes unpublished rows by sequence.
-Event IDs never determine order.
+Event IDs never determine order. Revision `c36db826eebb` adds the partial
+`ix_outbox_workspace_pending` index on `(workspace_id, sequence)`. When some
+workspaces are in backoff, the publisher seeks their neighbours in that index
+and merges eligible workspace heads in sequence order, stopping at the batch
+limit. Query work grows with the number of pending workspaces and the batch
+size, rather than the number of events in blocked backlogs. Without exclusions,
+the publisher uses the original sequence index directly.
 
 Producers call `tx.append_event(envelope)` inside the same
 `store.transaction()` as the workspace, operation, runtime and receipt

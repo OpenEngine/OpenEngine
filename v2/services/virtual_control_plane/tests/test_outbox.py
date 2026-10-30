@@ -223,6 +223,101 @@ def test_a_stuck_workspace_backlog_does_not_hide_other_workspaces(config: Databa
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("backlog", [1_000, 20_000])
+def test_pending_query_seeks_past_blocked_backlogs(config: DatabaseConfig, backlog: int) -> None:
+    async def scenario() -> None:
+        async with _store(config) as store:
+            # Bulk fixture setup avoids spending the test on producer validation.
+            async with store.database.transaction() as connection:
+                await connection.execute(sa.text("""
+                    WITH RECURSIVE numbers(n) AS (
+                        SELECT 1 UNION ALL SELECT n + 1 FROM numbers WHERE n < :backlog
+                    )
+                    INSERT INTO outbox(workspace_id, event_id, envelope, created_at)
+                    SELECT 'ws_m', 'evt_blocked_' || n, :envelope, CURRENT_TIMESTAMP FROM numbers
+                """), {"backlog": backlog, "envelope": json.dumps(_event("evt_blocked", "ws_m"))})
+            healthy = [("evt_z", "ws_z"), ("evt_a", "ws_a"), ("evt_y", "ws_z"), ("evt_b", "ws_a")]
+            async with store.transaction() as tx:
+                for event_id, workspace in healthy:
+                    await tx.append_event(_event(event_id, workspace))
+            steps = 0
+
+            def progress() -> int:
+                nonlocal steps
+                steps += 100
+                # Count database work, not elapsed time: a scan of the large backlog exceeds this.
+                return int(steps >= 10_000)
+
+            def instrument(connection, cursor, statement, parameters, context, executemany):
+                connection.connection.dbapi_connection.run_async(
+                    lambda driver: driver.set_progress_handler(progress, 100)
+                )
+
+            engine = store.database.engine.sync_engine
+            sa.event.listen(engine, "before_cursor_execute", instrument)
+            try:
+                pending = await store.pending_events(3, exclude=["ws_m", "ws_missing"])
+                assert [event.event_id for event in pending] == ["evt_z", "evt_a", "evt_y"]
+                assert steps < 10_000
+            finally:
+                sa.event.remove(engine, "before_cursor_execute", instrument)
+                async with store.database.connect() as connection:
+                    raw = await connection.get_raw_connection()
+                    await raw.driver_connection.set_progress_handler(None, 0)
+            await store.mark_published(pending[0].sequence)
+            assert [event.event_id for event in await store.pending_events(10, exclude=["ws_m", "ws_a"])] == ["evt_y"]
+            assert await store.pending_events(10, exclude=["ws_m", "ws_a", "ws_z"]) == []
+            assert await store.pending_events(0, exclude=["ws_m"]) == []
+
+    asyncio.run(scenario())
+
+
+def test_pending_query_preserves_batch_order_and_limit_with_exclusions(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        async with _store(config) as store:
+            async with store.transaction() as tx:
+                for index in range(40):
+                    await tx.append_event(_event(f"evt_{40 - index}", f"ws_{index % 7}"))
+            original = await store.pending_events(100)
+            for event in original[::5]:
+                await store.mark_published(event.sequence)
+            for excluded in ([], ["ws_1"], ["ws_1", "ws_4", "ws_missing"]):
+                expected = [event for index, event in enumerate(original)
+                            if index % 5 and event.workspace_id not in excluded]
+                for limit in (0, 1, 3, 10, 100):
+                    assert await store.pending_events(limit, exclude=iter(excluded)) == expected[:limit]
+
+    asyncio.run(scenario())
+
+
+def test_workspace_index_upgrade_and_downgrade_preserve_outbox_events(tmp_path: Path) -> None:
+    config = DatabaseConfig(sqlite_directory=tmp_path)
+    PERSISTENCE.upgrade(config, "09a0811b905f")
+
+    async def seed() -> None:
+        async with _store(config) as store:
+            await accept(store, _command(), "evt_1")
+
+    async def check() -> None:
+        async with _store(config) as store:
+            [pending] = await store.pending_events(10)
+            assert pending.envelope == _event("evt_1")
+            async with store.transaction() as tx:
+                assert await tx.replay(SUBJECT, _command()) is not None
+
+    asyncio.run(seed())
+    PERSISTENCE.upgrade(config)
+    assert PERSISTENCE.drift(metadata, config) == []
+    asyncio.run(check())
+    downgrade(PERSISTENCE.migrations, PERSISTENCE.database(config), "09a0811b905f")
+    asyncio.run(check())
+    engine = PERSISTENCE.database(config).migration_engine()
+    try:
+        assert "ix_outbox_workspace_pending" not in {index["name"] for index in inspect(engine).get_indexes("outbox")}
+    finally:
+        engine.dispose()
+
+
 class CrashBeforeMarking:
     """Wraps the store so recording publication fails once after the broker acknowledged."""
 

@@ -1,5 +1,5 @@
 ---
-title: vcp at 09a0811b905f (green added, red removed, amber changed)
+title: vcp at c36db826eebb (green added, red removed, amber changed)
 config:
   theme: neutral
 ---
@@ -19,15 +19,15 @@ erDiagram
         VARCHAR(128) key PK "not null"
         JSON body "not null"
     }
-    outbox["outbox<br/>Immutable public event envelopes awaiting or recording JetStream publication. (ADDED)"] {
-        INTEGER sequence PK "ADDED; not null"
-        VARCHAR(128) workspace_id "ADDED; not null"
-        VARCHAR(128) event_id "ADDED; not null"
-        JSON envelope "ADDED; not null"
-        DATETIME created_at "ADDED; not null"
-        DATETIME published_at "ADDED; nullable"
+    outbox["outbox<br/>Immutable public event envelopes awaiting or recording JetStream publication. (CHANGED)"] {
+        INTEGER sequence PK "not null"
+        VARCHAR(128) workspace_id "not null"
+        VARCHAR(128) event_id "not null"
+        JSON envelope "not null"
+        DATETIME created_at "not null"
+        DATETIME published_at "nullable"
     }
-    class outbox added
+    class outbox changed
     workspace_runtimes["workspace_runtimes<br/>Provider ownership, opaque locator, runtime identity and generation."] {
         VARCHAR(128) key PK "not null"
         JSON body "not null"

@@ -45,6 +45,7 @@ outbox = sa.Table(
     sa.Column("published_at", sa.DateTime(timezone=True), nullable=True),
     sa.Index("ix_outbox_event_id", "event_id", unique=True),
     sa.Index("ix_outbox_pending", "sequence", sqlite_where=sa.text("published_at IS NULL")),
+    sa.Index("ix_outbox_workspace_pending", "workspace_id", "sequence", sqlite_where=sa.text("published_at IS NULL")),
     comment="Immutable public event envelopes awaiting or recording JetStream publication.",
     sqlite_autoincrement=True,
 )
