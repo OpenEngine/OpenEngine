@@ -318,7 +318,7 @@ def build():
     # 2. Register
     s.clear()
     s.prompt()
-    s.sub("Register it. Every edit becomes a new version.")
+    s.sub("Register it, and every edit becomes a new version.")
     s.type("oe graph add graphs/dependabot-ci-fix.yaml")
     s.enter()
     s.out([[seg("registered ", GREEN, True), seg("dependabot-ci-fix v2 "), seg("(g-f577c59e40ad, version gv-3e8b0d71a2c4) in project default", DIM)]])
@@ -456,7 +456,7 @@ def build():
     s.sub(None)
     end = s.t
     s.t += 0.4
-    s.say("Write a graph, put it on a loop, and get started at openengine dot c c.")
+    s.say("Graphs define the work. Loops keep it going. More at openengine dot c c.")
     s.t = end + 5.0
     s.await_voice()
     s.t += 0.6
@@ -599,43 +599,19 @@ RULE = (58, 58, 56)
 WIRE = (96, 96, 93)
 BRAND = (232, 69, 43)
 
-HEAD_FONT = sf(64, 760)
-LEAD_FONT = sf(26, 430)
+HEAD_FONT = sf(52, 700)
 WORD_FONT = sf(36, 700)
 NODE_FONT = sf(22, 560)
 NODE_BOLD = sf(22, 700)
-CAPTION_FONT = sf(17, 430)
 LABEL_FONT = sf(15, 560)
 FOOT_FONT = sf(20, 430)
-FOOT_BOLD = sf(20, 700)
 PILL_FONT = ImageFont.truetype(MENLO, 19)
 
 CARDS = {
-    "title": {
-        "headline": [("Your software lifecycle, ", INK), ("defined as a graph.", BRAND)],
-        "lead": "Graphs define the work. Loops keep it going, on your own machines, "
-                "on the coding-agent subscriptions you already have.",
-        "pills": ["npm i -g @openengine.cc/engine"],
-    },
-    "end": {
-        "headline": [("Write a graph. ", INK), ("Put it on a loop.", BRAND)],
-        "lead": "Register a graph, schedule it with limits on spend and pull requests, "
-                "and come back to reviewed pull requests.",
-        "pills": ["oe graph add my-graph.yaml", "oe loop add my-graph --every 1d --max-spend 20"],
-    },
+    "title": {"headline": "Your software lifecycle, defined as a graph.", "commands": []},
+    "end": {"headline": "Graphs define the work. Loops keep it going.",
+            "commands": ["oe graph add my-graph.yaml", "oe loop add my-graph --every 1d --max-spend 20"]},
 }
-
-
-def wrap(font, text, max_width):
-    lines, line = [], ""
-    for word in text.split():
-        candidate = f"{line} {word}".strip()
-        if font.getlength(candidate) > max_width and line:
-            lines.append(line)
-            line = word
-        else:
-            line = candidate
-    return lines + [line]
 
 
 def dashed(d, points, color, width=2, dash=10, gap=8):
@@ -677,12 +653,7 @@ def node(d, cx, cy, w, h, text, a, fill=FILL, outline=RULE, color=INK, font=NODE
     d.text((cx, cy), text, font=font, fill=(*color, a), anchor="mm")
 
 
-def caption(d, cx, y, text, a):
-    for i, line in enumerate(text.split("\n")):
-        d.text((cx, y + i * 24), line, font=CAPTION_FONT, fill=(*FAINT, a), anchor="ma")
-
-
-def lifecycle_graph(d, a, cy=600):
+def lifecycle_graph(d, a, cy=570):
     """The implement → CI → parallel review → rerank → pull request diagram from the landing page."""
     wire = (*WIRE, a)
     # Main row: (center x, width, label, style)
@@ -701,8 +672,8 @@ def lifecycle_graph(d, a, cy=600):
         d.line(bezier((1050, ry), (1100, ry), (1100, cy), (1148, cy)), fill=wire, width=2)
     arrow_head(d, (1150, cy), (1, 0), wire)
     # Feedback loop
-    dashed(d, [(1225, cy + 32), (1225, cy + 240), (440, cy + 240), (440, cy + 110)], (*BRAND, a))
-    arrow_head(d, (440, cy + 100), (0, -1), (*BRAND, a))
+    dashed(d, [(1225, cy + 32), (1225, cy + 240), (440, cy + 240), (440, cy + 46)], (*BRAND, a))
+    arrow_head(d, (440, cy + 34), (0, -1), (*BRAND, a))
     d.text((832, cy + 256), "findings go back for one fix-and-review round", font=LABEL_FONT, fill=(*BRAND, a), anchor="ma")
     # Parallel review box
     box = (790, ys[0] - 68, 1080, ys[-1] + 48)
@@ -722,9 +693,6 @@ def lifecycle_graph(d, a, cy=600):
             node(d, cx, cy, w, 60, label, a, dash=True, outline=(120, 120, 117), font=NODE_BOLD)
         else:
             node(d, cx, cy, w, 60, label, a)
-    caption(d, 185, cy + 44, "from your terminal,\nSlack, or a PR comment", a)
-    caption(d, 440, cy + 44, "Claude Code, Codex,\nOpenCode or a local model", a)
-    caption(d, 1440, cy + 44, "opened for you", a)
 
 
 def draw_card(img, kind, alpha):
@@ -738,24 +706,11 @@ def draw_card(img, kind, alpha):
     mark.putalpha(ImageChops.multiply(mark.getchannel("A"), Image.new("L", layer.size, a)))
     layer.alpha_composite(mark)
     d.text((162, 80), "OpenEngine", font=WORD_FONT, fill=(*INK, a), anchor="lm")
-    x = 80
-    for text, color in card["headline"]:
-        d.text((x, 150), text, font=HEAD_FONT, fill=(*color, a), anchor="la")
-        x += HEAD_FONT.getlength(text)
-    for i, line in enumerate(wrap(LEAD_FONT, card["lead"], 1240)):
-        d.text((80, 250 + i * 38), line, font=LEAD_FONT, fill=(*MUTED, a), anchor="la")
+    d.text((80, 160), card["headline"], font=HEAD_FONT, fill=(*INK, a), anchor="la")
     lifecycle_graph(d, a)
-    # Footer
-    x = 80
-    for text, font, color in [("Open source", FOOT_BOLD, INK), (" · Apache-2.0 · ", FOOT_FONT, MUTED), ("openengine.cc", FOOT_FONT, ORANGE)]:
-        d.text((x, 1010), text, font=font, fill=(*color, a), anchor="lm")
-        x += font.getlength(text)
-    right = W - 80
-    for text in reversed(card["pills"]):
-        w = PILL_FONT.getlength(text) + 28
-        d.rounded_rectangle((right - w, 990, right, 1030), 6, fill=(*FILL, a), outline=(*RULE, a))
-        d.text((right - w / 2, 1010), text, font=PILL_FONT, fill=(*INK, a), anchor="mm")
-        right -= w + 16
+    d.text((80, 1010), "openengine.cc", font=FOOT_FONT, fill=(*ORANGE, a), anchor="lm")
+    if card["commands"]:
+        d.text((W - 80, 1010), "    ".join(card["commands"]), font=PILL_FONT, fill=(*MUTED, a), anchor="rm")
     img.paste(layer, (0, 0), layer)
 
 
