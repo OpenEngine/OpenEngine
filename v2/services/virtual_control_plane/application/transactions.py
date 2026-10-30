@@ -43,7 +43,11 @@ class Transaction(Protocol):
     async def workspace_named(self, name: str) -> Document | None: ...
 
     async def pending_allocations(self, limit: int, after: str = "") -> list[Document]:
-        """Read a bounded, indexed page; the exclusive allocation worker owns claims."""
+        """Read a bounded, indexed page of unfinished (`pending` or `running`) operations.
+
+        The exclusive worker owns claims; a `running` record is one it claimed
+        before this process last stopped and must resume with the same ownership.
+        """
         ...
 
     async def replay(self, subject: str, command: Document) -> Document | None:
