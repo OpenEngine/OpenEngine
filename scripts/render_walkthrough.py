@@ -208,6 +208,7 @@ class Script:
         self.snap(False)
 
     def clear(self):
+        self.await_voice()
         self.lines = []
         self.snap()
 
@@ -363,7 +364,34 @@ def build():
     ], [23, 9, 7, 19, 7, 14], [FG, GREEN, FG, CYAN, FG, PEACH])
     s.wait(3.6)
 
-    # 4. Watch a loop's run
+    # 4. Backends
+    s.clear()
+    s.prompt()
+    s.sub("Every machine running oe daemon is a backend: a laptop, a Mac mini, a box in the rack.")
+    s.type("oe backends")
+    s.enter()
+    rows = [
+        ("", "NAME", "URL", "PROJECT", "TOKEN"),
+        ("*", "local", "http://127.0.0.1:4364", "default", "-"),
+        ("", "mini", "http://mac-mini.local:4364", "default", "MINI_ENGINE_TOKEN"),
+        ("", "rack", "http://rack-01.lan:4364", "default", "RACK_ENGINE_TOKEN"),
+    ]
+    for i, (cur, name, url, project, token) in enumerate(rows):
+        h = i == 0
+        s.out([[seg(f"{cur:<3}", GREEN, True), seg(f"{name:<7}", DIM if h else FG, h), seg(f"{url:<29}", DIM if h else BLUE, h),
+                seg(f"{project:<9}", DIM, h), seg(token, DIM, h)]], delay=0.08)
+    s.wait(2.4)
+    s.out([[]])
+    s.prompt()
+    s.sub("Switch between them with one CLI.")
+    s.type("oe backend use mini")
+    s.enter()
+    s.out([[seg("* ", GREEN, True), seg("mini  ", FG, True), seg("http://mac-mini.local:4364  ", BLUE), seg("project default", DIM)]])
+    s.wait(0.8)
+    s.sub("Loops run on that machine, so work continues while your laptop is closed.")
+    s.wait(3.0)
+
+    # 5. Watch a loop's run
     s.clear()
     s.prompt()
     s.sub("Watch any run live, including one a loop started.")
@@ -381,7 +409,7 @@ def build():
             elapsed += 1
     s.wait(1.4)
 
-    # 5. What a loop decided, and control
+    # 6. What a loop decided, and control
     s.clear()
     s.prompt()
     s.sub("Each run reports what it did.")
@@ -401,7 +429,7 @@ def build():
     s.sub("Labels come with the evidence behind them.")
     s.wait(2.6)
 
-    # 6. On GitHub
+    # 7. On GitHub
     s.clear()
     s.browser("issue1046", "github.com/OpenEngine/OpenEngine/issues/1046", [
         (0, 2.6, "On GitHub, assign an issue to OpenEngine to start work.", [(1270, 450, 1490, 500), (1275, 545, 1495, 592)]),
@@ -508,10 +536,20 @@ def draw_sub(img, text, alpha):
         return
     layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
-    tw = SUB_FONT.getlength(text)
+    lines = [text]
+    if SUB_FONT.getlength(text) > W - 160:
+        # Break into the two most even lines.
+        words = text.split()
+        splits = [[" ".join(words[:i]), " ".join(words[i:])] for i in range(1, len(words))]
+        lines = min(splits, key=lambda pair: max(SUB_FONT.getlength(part) for part in pair))
+    tw = max(SUB_FONT.getlength(line) for line in lines)
+    lh = 50
     cx, cy = W / 2, WY + WH + (H - WY - WH) / 2 + 2
-    d.rounded_rectangle((cx - tw / 2 - 30, cy - 38, cx + tw / 2 + 30, cy + 38), 16, fill=(10, 10, 20, int(190 * alpha)))
-    d.text((cx, cy), text, font=SUB_FONT, fill=(255, 255, 255, int(255 * alpha)), anchor="mm")
+    half = lh * len(lines) / 2 + 13
+    d.rounded_rectangle((cx - tw / 2 - 30, cy - half, cx + tw / 2 + 30, cy + half), 16, fill=(10, 10, 20, int(190 * alpha)))
+    for i, line in enumerate(lines):
+        y = cy - (len(lines) - 1) * lh / 2 + i * lh
+        d.text((cx, y), line, font=SUB_FONT, fill=(255, 255, 255, int(255 * alpha)), anchor="mm")
     img.paste(layer, (0, 0), layer)
 
 
