@@ -9,9 +9,11 @@
 [![Docs](https://img.shields.io/badge/docs-openengine.cc-blue)](https://openengine.cc/docs/)
 [![Slack: join the community](https://img.shields.io/badge/Slack-join%20the%20community-4A154B?logo=slack)](https://join.slack.com/t/openenginegroup/shared_invite/zt-49mkaebkz-m86SbPAwn_QNMPqsSgioYQ)
 
-Coding agents are fast. The hard part is making their output trustworthy every time, not just when you are watching. OpenEngine is an open-source software factory: you write your lifecycle once as a graph (implement, wait for CI, fan out adversarial reviewers, rerank the findings, fix, open the PR), and `oe go` runs every change through it. Add a security reviewer to the graph once and it checks every change from then on.
+Coding agents are fast. The hard part is making their output trustworthy every time, not just when you are watching. OpenEngine is an open-source software factory: you write your lifecycle once as a graph (implement, wait for CI, fan out adversarial reviewers, rerank the findings, fix, open the PR), and OpenEngine runs every change through it, on demand or on a schedule. Add a security reviewer to the graph once and it checks every change from then on.
 
 ![OpenEngine lifecycle graph: implement, run CI, review in parallel, rerank, and open a pull request](docs/images/oe_land.png)
+
+▶ [Watch the walkthrough](docs/images/oe-graphs-and-loops.mp4): graphs, loops, and what OpenEngine does on GitHub, in 90 seconds.
 
 ## Try it in two minutes
 
@@ -20,22 +22,21 @@ You need macOS or Linux, Git, Node.js 20.19+, and [Claude Code](https://docs.ant
 ```bash
 npm i -g @openengine.cc/engine
 cd your-repo
-oe go "add a dark mode toggle to the settings page"
+oe graph run implementation-review-rerank "add a dark mode toggle to the settings page"
 ```
 
-That runs the default graph: implement, check CI, review the change from several angles, fix what the review finds, and open a pull request. You follow the run live in your terminal and can steer it mid-flight. The first time you run it in a repository, it asks whether to trust it; trusted repositories run without stopping for approvals.
+That runs the built-in implementation-review-rerank graph: implement, check CI, review the change from several angles, fix what the review finds, and open a pull request. You follow the run live in your terminal and can steer it mid-flight. The first time you run it in a repository, it asks whether to trust it; trusted repositories run without stopping for approvals.
 
-Prefer not to install? `npx @openengine.cc/engine@latest go "..."` works too. The [getting started guide](https://openengine.cc/docs/getting-started/) walks through your first local run, connecting GitHub, and reviewing and fixing existing pull requests.
+Prefer not to install? `npx @openengine.cc/engine@latest graph run implementation-review-rerank "..."` works too. The [getting started guide](https://openengine.cc/docs/getting-started/) walks through your first local run, connecting GitHub, and reviewing and fixing existing pull requests.
 
 ## What you can do with it
 
-**Review and fix pull requests you already have.**
+**Review pull requests you already have.**
 ```bash
-oe go review https://github.com/OWNER/REPO/pull/123   # post findings on a PR
-oe go fix https://github.com/OWNER/REPO/pull/123      # address its unresolved review threads
+oe graph run review --input pr_url=https://github.com/OWNER/REPO/pull/123   # post findings on a PR
 ```
 
-**Write your own graph** in YAML or Python and bind it to a verb. Graphs are versioned, so a change to the process is as reviewable as a change to the code.
+**Write your own graph** in YAML or Python. Graphs are versioned, so a change to the process is as reviewable as a change to the code.
 ```bash
 oe graphs                                   # list available graphs
 oe graph add my-graph.yaml                  # register your own
