@@ -1,5 +1,5 @@
 ---
-title: vcp at c36db826eebb (green added, red removed, amber changed)
+title: vcp at 65700680b119 (green added, red removed, amber changed)
 config:
   theme: neutral
 ---
@@ -15,10 +15,11 @@ erDiagram
         VARCHAR(128) key PK "not null"
         JSON body "not null"
     }
-    operations["operations<br/>Accepted commands' progress and terminal state."] {
+    operations["operations<br/>Accepted commands' progress and terminal state. (CHANGED)"] {
         VARCHAR(128) key PK "not null"
         JSON body "not null"
     }
+    class operations changed
     outbox["outbox<br/>Immutable public event envelopes awaiting or recording JetStream publication. (CHANGED)"] {
         INTEGER sequence PK "not null"
         VARCHAR(128) workspace_id "not null"
