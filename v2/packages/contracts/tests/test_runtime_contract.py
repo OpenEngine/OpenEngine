@@ -348,9 +348,14 @@ def test_wire_rejects_non_json_numbers_in_free_form_inputs(constant):
 def test_wire_rejects_excessive_json_nesting():
     wire = b"[" * 100_000 + b"0" + b"]" * 100_000
     assert len(wire) < runtime.MAX_WIRE_BYTES
+    # Python 3.14's decoder parses this depth, so the schema validator is the
+    # layer that runs out of stack; earlier decoders raise RecursionError first.
     assert runtime.validate_wire_message(
         "progress", wire, example("progress")["subject"]
-    ) == ["Message must be valid UTF-8 JSON"]
+    ) in (
+        ["Message must be valid UTF-8 JSON"],
+        ["Message exceeds validation nesting limits"],
+    )
 
 
 @pytest.mark.parametrize("number", ["1e400", "-1e400", "1.7976931348623159e308"])
