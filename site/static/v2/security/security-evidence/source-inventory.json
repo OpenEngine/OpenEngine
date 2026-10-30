@@ -10,9 +10,9 @@
   {
     "path": "v2/ARCHITECTURE.md",
     "kind": "documentation",
-    "bytes": 5599,
-    "sha256": "50fb9a3510ae0de51a0f7867a36d1325c6d501a78139abaf770b4af402e98ae5",
-    "lines": 57,
+    "bytes": 6446,
+    "sha256": "bffa38066e09341417f3ce332a750420b5118229f000ef89b7ecc1e566c1480d",
+    "lines": 62,
     "tests": []
   },
   {
@@ -26,9 +26,9 @@
   {
     "path": "v2/README.md",
     "kind": "documentation",
-    "bytes": 4472,
-    "sha256": "69a0c9e14688b48cc62e898ae908f9cb1d777b2edfbb7c4a67d25bebffffe7a8",
-    "lines": 92,
+    "bytes": 4764,
+    "sha256": "f5d73603ca318899201364cb8146e41ab3bc77e4f4e1a3d01c4ff629c3134bb2",
+    "lines": 96,
     "tests": []
   },
   {
@@ -200,19 +200,19 @@
     "tests": [
       {
         "name": "test_creates_each_services_database_then_leaves_it_at_head",
-        "line": 18
+        "line": 20
       },
       {
         "name": "test_names_an_upgrade_from_an_earlier_revision",
-        "line": 36
+        "line": 38
       },
       {
         "name": "test_reports_the_postgres_stub_instead_of_a_traceback",
-        "line": 40
+        "line": 42
       },
       {
         "name": "test_reports_an_unknown_backend",
-        "line": 45
+        "line": 47
       }
     ]
   },
@@ -225,19 +225,19 @@
     "tests": [
       {
         "name": "test_without_a_supervisor",
-        "line": 51
+        "line": 53
       },
       {
         "name": "test_apply_without_a_supervisor",
-        "line": 59
+        "line": 61
       },
       {
         "name": "test_apply_checks_the_file_before_sending_it",
-        "line": 66
+        "line": 68
       },
       {
         "name": "test_when_nats_cannot_be_reached",
-        "line": 77
+        "line": 79
       },
       {
         "name": "test_when_nats_runs_but_ge_does_not",
@@ -245,23 +245,23 @@
       },
       {
         "name": "test_get_without_a_supervisor",
-        "line": 108
+        "line": 110
       },
       {
         "name": "test_a_reference_is_a_name_and_an_optional_revision",
-        "line": 115
+        "line": 117
       },
       {
         "name": "test_list_and_revision_render_for_people",
-        "line": 127
+        "line": 129
       },
       {
         "name": "test_a_graph_without_a_project_renders_in_the_default_project",
-        "line": 152
+        "line": 154
       },
       {
         "name": "test_the_project_is_the_flag_then_oe_project_then_default",
-        "line": 162
+        "line": 164
       },
       {
         "name": "test_list_shows_each_graph_and_its_latest_revision",
@@ -290,7 +290,7 @@
     "tests": [
       {
         "name": "test_a_valid_graph_is_named",
-        "line": 22
+        "line": 24
       },
       {
         "name": "test_the_examples_are_valid_offline",
@@ -298,15 +298,15 @@
       },
       {
         "name": "test_every_independent_problem_is_reported_with_its_path",
-        "line": 32
+        "line": 34
       },
       {
         "name": "test_standard_input_is_read_for_a_dash",
-        "line": 42
+        "line": 44
       },
       {
         "name": "test_every_graph_in_a_file_is_named",
-        "line": 50
+        "line": 52
       },
       {
         "name": "test_anything_but_a_graph_is_refused",
@@ -314,11 +314,11 @@
       },
       {
         "name": "test_a_missing_file_is_a_problem",
-        "line": 80
+        "line": 82
       },
       {
         "name": "test_spec_prints_the_graph_reference_as_markdown",
-        "line": 85
+        "line": 87
       },
       {
         "name": "test_bad_version_keeps_independent_schema_errors",
@@ -326,15 +326,15 @@
       },
       {
         "name": "test_spec_prints_the_expression_syntax",
-        "line": 123
+        "line": 125
       },
       {
         "name": "test_independent_graph_errors_are_all_reported",
-        "line": 148
+        "line": 150
       },
       {
         "name": "test_schema_and_graph_errors_are_reported_together",
-        "line": 159
+        "line": 161
       },
       {
         "name": "test_structure_problems",
@@ -353,33 +353,33 @@
   {
     "path": "v2/apps/cli/tests/test_lifecycle.py",
     "kind": "test",
-    "bytes": 7526,
-    "sha256": "09fcb7bc4ce9e9817614d5476238dfc45df4e5fec1284881d7ae3c56e3b6545b",
-    "lines": 191,
+    "bytes": 7729,
+    "sha256": "af4be79b78becdf9ab8517349384fc7fcb4b06fbd0a6fd8b6922a834f9ea6261",
+    "lines": 194,
     "tests": [
       {
         "name": "test_up_runs_nats_in_the_background_until_down",
-        "line": 52
+        "line": 54
       },
       {
         "name": "test_up_starts_the_virtual_control_plane_by_default",
-        "line": 105
+        "line": 107
       },
       {
         "name": "test_up_reports_why_nats_could_not_start",
-        "line": 134
+        "line": 138
       },
       {
         "name": "test_migrate_creates_the_databases_and_streams_once_and_updates_drifted_ones",
-        "line": 147
+        "line": 151
       },
       {
         "name": "test_migrate_reports_a_backend_it_cannot_use",
-        "line": 175
+        "line": 180
       },
       {
         "name": "test_migrate_needs_a_running_openengine",
-        "line": 185
+        "line": 190
       }
     ]
   },
@@ -392,7 +392,7 @@
     "tests": [
       {
         "name": "test_aligns_columns_to_the_widest_cell",
-        "line": 4
+        "line": 6
       }
     ]
   },
@@ -405,19 +405,19 @@
     "tests": [
       {
         "name": "test_packages_the_infra_stream_configs",
-        "line": 18
+        "line": 20
       },
       {
         "name": "test_refuses_a_config_named_differently_from_its_file",
-        "line": 24
+        "line": 26
       },
       {
         "name": "test_ignores_fields_the_config_leaves_to_the_server_defaults",
-        "line": 31
+        "line": 33
       },
       {
         "name": "test_reports_an_unreachable_server_instead_of_retrying_forever",
-        "line": 38
+        "line": 40
       }
     ]
   },
@@ -542,27 +542,27 @@
     "tests": [
       {
         "name": "test_installs_the_verified_binary_as_an_executable",
-        "line": 26
+        "line": 28
       },
       {
         "name": "test_refuses_an_archive_whose_checksum_does_not_match",
-        "line": 39
+        "line": 41
       },
       {
         "name": "test_uses_the_cached_binary_without_downloading",
-        "line": 51
+        "line": 53
       },
       {
         "name": "test_refuses_a_platform_without_a_pinned_build",
-        "line": 63
+        "line": 65
       },
       {
         "name": "test_pins_every_supported_platform",
-        "line": 68
+        "line": 70
       },
       {
         "name": "test_packages_the_infra_nats_configuration",
-        "line": 72
+        "line": 74
       }
     ]
   },
@@ -575,11 +575,11 @@
     "tests": [
       {
         "name": "test_default_startup_always_runs_vcp_and_stops_it_first",
-        "line": 9
+        "line": 11
       },
       {
         "name": "test_vcp_has_a_ready_file_and_a_state_directory_variable",
-        "line": 54
+        "line": 56
       }
     ]
   },
@@ -592,35 +592,35 @@
     "tests": [
       {
         "name": "test_round_trips_the_state_file",
-        "line": 16
+        "line": 18
       },
       {
         "name": "test_reads_a_missing_or_unreadable_file_as_no_state",
-        "line": 25
+        "line": 27
       },
       {
         "name": "test_reads_a_file_written_by_another_version",
-        "line": 32
+        "line": 34
       },
       {
         "name": "test_knows_whether_a_pid_is_alive",
-        "line": 45
+        "line": 47
       }
     ]
   },
   {
     "path": "v2/docs/architecture.mermaid",
     "kind": "documentation",
-    "bytes": 9380,
-    "sha256": "f7bb6e0d69644f1bc9d06e85f45828bc6b9bea5d87b14d091ba8cc1f56d658ad",
-    "lines": 129,
+    "bytes": 10341,
+    "sha256": "290aed17b9120586ee860e0e8ba6e3a19a646a9bc1d51195a53f05a43e07fe0b",
+    "lines": 139,
     "tests": []
   },
   {
     "path": "v2/docs/architecture.svg",
     "kind": "documentation",
-    "bytes": 84759,
-    "sha256": "63ae4df9707d8585d966d5eba905f7d69e4c72e98a699da154ae685514a42b94",
+    "bytes": 89476,
+    "sha256": "1460bb2fb7a11d44ca6522c2f50d5e30feb8a5f229aee4eb981a4892be832373",
     "lines": 1,
     "tests": []
   },
@@ -755,32 +755,32 @@
   {
     "path": "v2/docs/schema/latest_tools.mermaid",
     "kind": "documentation",
-    "bytes": 3703,
-    "sha256": "edb31672d7671a44bf8d5c616ae65cf95ca26006c545441a81d18aa99c154400",
-    "lines": 75,
+    "bytes": 4138,
+    "sha256": "cd653a590d0cbf1e170166d8c06c1059c3e1613230d125c6544fb227de7e13f2",
+    "lines": 87,
     "tests": []
   },
   {
     "path": "v2/docs/schema/latest_tools.svg",
     "kind": "documentation",
-    "bytes": 166700,
-    "sha256": "78ef007475c4453da0e0db4bd658acb726a05eeb475ed364f2bc64370e6811c9",
+    "bytes": 196819,
+    "sha256": "e5544956f18a32e769256038331dcef304fb4b5d463d92f3536f91216594a4c4",
     "lines": 1,
     "tests": []
   },
   {
     "path": "v2/docs/schema/latest_vcp.mermaid",
     "kind": "documentation",
-    "bytes": 913,
-    "sha256": "54df46dce19cc0e080c8b043ee53dd382bdb7edb4f3341a0bf075c81a0af2603",
-    "lines": 22,
+    "bytes": 1682,
+    "sha256": "6ab3716be2d78b587ddf438fcad019afe48d59974f1405043866b55524c7824d",
+    "lines": 39,
     "tests": []
   },
   {
     "path": "v2/docs/schema/latest_vcp.svg",
     "kind": "documentation",
-    "bytes": 31716,
-    "sha256": "6d34dbce2d6577a0d772379f54f482a97af4d0babe22bf375fa7e8e9210d397c",
+    "bytes": 79104,
+    "sha256": "aee44f10cb974f66d981d1387aaf11577786ab206d65b1256b435a7ec911e9f3",
     "lines": 1,
     "tests": []
   },
@@ -833,6 +833,102 @@
     "tests": []
   },
   {
+    "path": "v2/docs/schema/tools/48be4be506f8.md",
+    "kind": "documentation",
+    "bytes": 4121,
+    "sha256": "7ff4d309031e240f4bdb624307b447167d932d5ad3ed12f83ccfe3acddc36057",
+    "lines": 144,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/tools/48be4be506f8.mermaid",
+    "kind": "documentation",
+    "bytes": 4138,
+    "sha256": "cd653a590d0cbf1e170166d8c06c1059c3e1613230d125c6544fb227de7e13f2",
+    "lines": 87,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/tools/48be4be506f8.svg",
+    "kind": "documentation",
+    "bytes": 196731,
+    "sha256": "51fe0a9958ad13cce146fe6c3a2bb59232bd4e984b63d23144ef1e57fdf84161",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/09a0811b905f.md",
+    "kind": "documentation",
+    "bytes": 1908,
+    "sha256": "613eb2616dde6e0a8438cf04abd00baedb5e6bf45b37e778553eb15d1f9237a0",
+    "lines": 79,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/09a0811b905f.mermaid",
+    "kind": "documentation",
+    "bytes": 1681,
+    "sha256": "5843d43c01b61395d58ac152c67705b3455eb52b3507e8403af806b870401656",
+    "lines": 38,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/09a0811b905f.svg",
+    "kind": "documentation",
+    "bytes": 77816,
+    "sha256": "cc416751a6182826d3ebff70e63df4f23c91b548a9b9b41074536ca5f633c89f",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/591de3f10346.md",
+    "kind": "documentation",
+    "bytes": 2574,
+    "sha256": "b2a4691249b8f200aa0c65735d66fcab103eaa4cba965174c28fbb5c3fa49eee",
+    "lines": 75,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/591de3f10346.mermaid",
+    "kind": "documentation",
+    "bytes": 1682,
+    "sha256": "6ab3716be2d78b587ddf438fcad019afe48d59974f1405043866b55524c7824d",
+    "lines": 39,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/591de3f10346.svg",
+    "kind": "documentation",
+    "bytes": 79098,
+    "sha256": "3cb384b962368bb124684bb56ea7956a7681daf46380e326c3dd3e8e39862876",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/65700680b119.md",
+    "kind": "documentation",
+    "bytes": 1689,
+    "sha256": "f4fd8260971ad2b0cea187d7d2bdbe7d516ccd2c9abb0e33330853e2ff02ca0e",
+    "lines": 65,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/65700680b119.mermaid",
+    "kind": "documentation",
+    "bytes": 1682,
+    "sha256": "b0d5f5c71b84e15dc0144b1079a07e35fc06365ea1cfa9094c83684a9b5b2c59",
+    "lines": 39,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/65700680b119.svg",
+    "kind": "documentation",
+    "bytes": 79097,
+    "sha256": "31507776bfc79ede951f3eb2cc28f0d1dc0d872257ce867fbb2267663ca1def7",
+    "lines": 1,
+    "tests": []
+  },
+  {
     "path": "v2/docs/schema/vcp/720d08e24193.md",
     "kind": "documentation",
     "bytes": 734,
@@ -843,16 +939,64 @@
   {
     "path": "v2/docs/schema/vcp/720d08e24193.mermaid",
     "kind": "documentation",
-    "bytes": 905,
-    "sha256": "7dc142a23acfbb05cdbd0483fd1d6e15b4584c7dd08d1ce5cc0936035faa37ed",
+    "bytes": 910,
+    "sha256": "51c189c599b772605830a093531d0df5a353b3f6195c18bc407b2ce30d703964",
     "lines": 21,
     "tests": []
   },
   {
     "path": "v2/docs/schema/vcp/720d08e24193.svg",
     "kind": "documentation",
-    "bytes": 28397,
-    "sha256": "51ee15c206a718cb6bccfe9f345ce40dfbfdf1b552446b60f656d863ab414197",
+    "bytes": 27633,
+    "sha256": "2fd7aa3098ecf20bd7ca44835e1ccc87f2d4159dd6d836b2781f3078e44b50e7",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/86fd2767ba46.md",
+    "kind": "documentation",
+    "bytes": 3394,
+    "sha256": "258e00b9a3d5bea7cd9dee5f17733df3788c356a22ee61ca3fab9b5ea31939cd",
+    "lines": 87,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/86fd2767ba46.mermaid",
+    "kind": "documentation",
+    "bytes": 1682,
+    "sha256": "298aabb257819a27158cf10cd5eee817d9c6992f41e5170ce872220149214b1e",
+    "lines": 39,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/86fd2767ba46.svg",
+    "kind": "documentation",
+    "bytes": 79100,
+    "sha256": "42a93bd6e74f0292e5421ca749409d8edd6f4775cb1f55a24f06f381a85de359",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/c36db826eebb.md",
+    "kind": "documentation",
+    "bytes": 1709,
+    "sha256": "47ca221615387b51581c3fb34d7fe79baab3f5d439fdc65f890ee45effb6ca6b",
+    "lines": 66,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/c36db826eebb.mermaid",
+    "kind": "documentation",
+    "bytes": 1643,
+    "sha256": "1d8d73353f99ab30bfbd8ca242147be7d927d406574bff0997403aa9874d7b8e",
+    "lines": 38,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/c36db826eebb.svg",
+    "kind": "documentation",
+    "bytes": 77718,
+    "sha256": "02e53fa838aa0cc8563c738e76f4285ef0f6784b4d1eae552e08f9516d3a8bfc",
     "lines": 1,
     "tests": []
   },
@@ -867,16 +1011,40 @@
   {
     "path": "v2/docs/schema/vcp/d8f92154b5f7.mermaid",
     "kind": "documentation",
-    "bytes": 913,
-    "sha256": "54df46dce19cc0e080c8b043ee53dd382bdb7edb4f3341a0bf075c81a0af2603",
+    "bytes": 918,
+    "sha256": "bddaf75372dabe0cbf1bdbcf990125f1eddfcf59489265190a33e5edbedc9f5d",
     "lines": 22,
     "tests": []
   },
   {
     "path": "v2/docs/schema/vcp/d8f92154b5f7.svg",
     "kind": "documentation",
-    "bytes": 31696,
-    "sha256": "d771715cb4479ff7bb1d731ee4a268a2c43a656d592c31ce2bed56ca27a530fb",
+    "bytes": 31279,
+    "sha256": "c6bec9a0a36fd3013e684e7672bca3abfac202c42e37740d0a25ba77b8c87d73",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/ebfe415656b6.md",
+    "kind": "documentation",
+    "bytes": 1688,
+    "sha256": "45e7fa3305eded1dea93df2ae0832611b74462d7bc9bb5b5d11f145be727bae2",
+    "lines": 75,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/ebfe415656b6.mermaid",
+    "kind": "documentation",
+    "bytes": 1752,
+    "sha256": "04431954afe0798919654dbfd071c3a45165d6073d7a8d7833190798ff2615f8",
+    "lines": 39,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/ebfe415656b6.svg",
+    "kind": "documentation",
+    "bytes": 77003,
+    "sha256": "b4e5eca59481c0376ac5a3dabdb9cbaebc1c21715f12a2061d00ca2f73c82e32",
     "lines": 1,
     "tests": []
   },
@@ -971,61 +1139,61 @@
   {
     "path": "v2/integration_tests/test_ge.py",
     "kind": "test",
-    "bytes": 19926,
-    "sha256": "2abb69ce06ffb0a5d3761c7aa676a2b13cfedd1fe214ed0f27254a11d822ce7b",
-    "lines": 401,
+    "bytes": 19965,
+    "sha256": "76045c7761a8241c89c1fc371317924a9b9cf0bfca7e9ffcb2321e9615633c69",
+    "lines": 403,
     "tests": [
       {
         "name": "test_ge_serves_graphs_list_once_ready_and_drains_on_stop",
-        "line": 71
+        "line": 73
       },
       {
         "name": "test_supervisor_fails_when_ge_cannot_become_ready",
-        "line": 101
+        "line": 105
       },
       {
         "name": "test_ge_stops_on_sigterm_while_nats_is_unreachable",
-        "line": 118
+        "line": 122
       },
       {
         "name": "test_apply_retries_a_lost_reply_without_adding_a_revision",
-        "line": 185
+        "line": 189
       },
       {
         "name": "test_concurrent_apply_neither_duplicates_nor_overwrites_revisions",
-        "line": 200
+        "line": 204
       },
       {
         "name": "test_apply_rejects_conflicting_command_reuse",
-        "line": 221
+        "line": 225
       },
       {
         "name": "test_apply_rejects_an_expected_version_mismatch",
-        "line": 240
+        "line": 244
       },
       {
         "name": "test_list_pages_through_every_graph_until_next_cursor_is_null",
-        "line": 256
+        "line": 260
       },
       {
         "name": "test_project_scopes_names_so_the_same_name_is_two_graphs",
-        "line": 285
+        "line": 289
       },
       {
         "name": "test_project_scopes_command_id_dedup",
-        "line": 306
+        "line": 310
       },
       {
         "name": "test_project_binds_the_list_cursor",
-        "line": 323
+        "line": 327
       },
       {
         "name": "test_project_omitted_is_the_default_project",
-        "line": 338
+        "line": 342
       },
       {
         "name": "test_apply_from_the_cli_survives_a_ge_restart",
-        "line": 367
+        "line": 371
       }
     ]
   },
@@ -1038,11 +1206,11 @@
     "tests": [
       {
         "name": "test_reconnect_rechecks_current_broker_permissions",
-        "line": 130
+        "line": 132
       },
       {
         "name": "test_sigterm_during_broker_outage_cleans_up",
-        "line": 147
+        "line": 149
       },
       {
         "name": "test_shared_shutdown_drains_or_times_out",
@@ -1089,9 +1257,9 @@
   {
     "path": "v2/packages/contracts/README.md",
     "kind": "contract",
-    "bytes": 24563,
-    "sha256": "3c116fb71feb55347bfd95696df7e719649354100c524a5f27e0904408e1da27",
-    "lines": 417,
+    "bytes": 26861,
+    "sha256": "754fa316986d82f50b49e0db880528571a0ef2b006402d363374e2d55511125d",
+    "lines": 449,
     "tests": []
   },
   {
@@ -1169,17 +1337,17 @@
   {
     "path": "v2/packages/contracts/common/v1/types.schema.json",
     "kind": "contract",
-    "bytes": 7107,
-    "sha256": "70e7408208df2401edc5b1fd3f4cf7328530e7ca6c26bce197e810bcd85b5daa",
-    "lines": 148,
+    "bytes": 8245,
+    "sha256": "c0d2955b3743a3ab54432ae6b375db2f76e0ae55a7746400071edbf047f5ea02",
+    "lines": 167,
     "tests": []
   },
   {
     "path": "v2/packages/contracts/connection_bus/v1/asyncapi.yaml",
     "kind": "contract",
-    "bytes": 19200,
-    "sha256": "e0bf13a4b7a9fbafa399457fe97b9620744e05fb54a10dfeb8543acfce966316",
-    "lines": 433,
+    "bytes": 20223,
+    "sha256": "535545d81ae52d0bbb97ff12852cc2c78b29497ab5e8ed2ac0bbd353bd1932a1",
+    "lines": 451,
     "tests": []
   },
   {
@@ -1353,8 +1521,8 @@
   {
     "path": "v2/packages/contracts/connection_bus/v1/reference.html",
     "kind": "contract",
-    "bytes": 69923,
-    "sha256": "696ff8e67dfe7da4d1b156c6e59f4212963a01480cc0a3dff5e5ca011a0dc60a",
+    "bytes": 71924,
+    "sha256": "fe078a8228757f9d59fb855bd1959c92f02b849cf1a8281552edf3d453f60cd2",
     "lines": 33,
     "tests": []
   },
@@ -1417,9 +1585,9 @@
   {
     "path": "v2/packages/contracts/graph_engine/v1/asyncapi.yaml",
     "kind": "contract",
-    "bytes": 67737,
-    "sha256": "e408a7d5ccdb4d12de05fd18b0692703a230dcfe3185afa97bff0d5bbb88962d",
-    "lines": 1479,
+    "bytes": 68790,
+    "sha256": "401ef74b68e6fd5d7d06be6fa0ee735776daaaf0031ac61817b81866f96cd11d",
+    "lines": 1497,
     "tests": []
   },
   {
@@ -2001,8 +2169,8 @@
   {
     "path": "v2/packages/contracts/graph_engine/v1/reference.html",
     "kind": "contract",
-    "bytes": 194241,
-    "sha256": "b62a8d0bd1cdb2b55be9a5e5c9c88c4197d171c90fb910e1b68d82a867982468",
+    "bytes": 197152,
+    "sha256": "80340082f393b039b35bfeb29828c79ecde483c732d20fc672dc5176f0652a12",
     "lines": 33,
     "tests": []
   },
@@ -2025,9 +2193,9 @@
   {
     "path": "v2/packages/contracts/graph_engine/v1/resources/graph.schema.yaml",
     "kind": "contract",
-    "bytes": 13187,
-    "sha256": "9b65d9685b009ef8e4b5734a9591dd67907b4cab4e52783dcf30ba61278ca8e2",
-    "lines": 369,
+    "bytes": 14236,
+    "sha256": "595d848a6b78f5334cae7b0afee4604d7494781d144640822f55879d2d79e679",
+    "lines": 395,
     "tests": []
   },
   {
@@ -2041,8 +2209,8 @@
   {
     "path": "v2/packages/contracts/graph_engine/v1/resources/reference.html",
     "kind": "contract",
-    "bytes": 35533,
-    "sha256": "faf87e9d92edc2a4c79f8c1e534f42ad18dac54b4044ea51618ef27aeccdc934",
+    "bytes": 35549,
+    "sha256": "2cb86e66ebb724d0c0fd8b570e1e55c5a1c6d463d046d2c5726117946d2b0685",
     "lines": 167,
     "tests": []
   },
@@ -2321,8 +2489,8 @@
   {
     "path": "v2/packages/contracts/internal/workspace_runtime/v1/reference.html",
     "kind": "contract",
-    "bytes": 45270,
-    "sha256": "797532c9d3a5f636f5d32764c8c31911a8a1480b16ffbfabde038d13afb376c3",
+    "bytes": 46294,
+    "sha256": "5044fc4de439ac1b20ec3c6b0bb987affd30a06d15926150e8f37a5c20c9c52d",
     "lines": 33,
     "tests": []
   },
@@ -2369,14 +2537,14 @@
   {
     "path": "v2/packages/contracts/src/openengine/contracts/resources.py",
     "kind": "source/config",
-    "bytes": 24298,
-    "sha256": "46cabadb69df077e6f3ee403f1f348d1e27416c9a21f8cd3aebb6ba04f6ae2d5",
+    "bytes": 24308,
+    "sha256": "0bd529aa8ca3810ca97a6d4327ee530dfc2df1761a7aa2cfd631bfeeac1de9bd",
     "lines": 542,
     "tests": []
   },
   {
     "path": "v2/packages/contracts/src/openengine/contracts/runtime.py",
-    "kind": "contract",
+    "kind": "source/config",
     "bytes": 8424,
     "sha256": "4b74c342c5cd95959a5902630d96ab1cb9976dee8eb317551ff25cbc623e9fcb",
     "lines": 231,
@@ -2385,9 +2553,9 @@
   {
     "path": "v2/packages/contracts/src/openengine/contracts/validate.py",
     "kind": "source/config",
-    "bytes": 13010,
-    "sha256": "d03ed28bc39ba251580faac63f56506452497172c97a2223d09c040d6992b669",
-    "lines": 316,
+    "bytes": 13704,
+    "sha256": "29ca26dba00c708565f2750b4d56bd319090ec15b73994c4e327373e3095658c",
+    "lines": 329,
     "tests": []
   },
   {
@@ -2407,108 +2575,136 @@
       },
       {
         "name": "test_every_stream_is_drawn",
-        "line": 45
+        "line": 47
       },
       {
         "name": "test_apps_and_integrations_connect_where_they_should",
-        "line": 50
+        "line": 52
       },
       {
         "name": "test_virtualization_uses_the_contract_isolation_levels",
-        "line": 63
+        "line": 65
       },
       {
         "name": "test_write_adds_changed_paths_to_the_manifest",
-        "line": 69
+        "line": 71
       }
     ]
   },
   {
     "path": "v2/packages/contracts/tests/test_contracts.py",
     "kind": "test",
-    "bytes": 15888,
-    "sha256": "11c294ef0af4ccd8f5438a0ac98d0fb81ef791f9e7d1391610dc374934775fab",
-    "lines": 364,
+    "bytes": 18675,
+    "sha256": "689288b72a82c5c71ff0f3c8a016a5dd8bfb006a3da6d116580ef2d89cc94d8b",
+    "lines": 436,
     "tests": [
       {
         "name": "test_every_message_has_valid_examples",
-        "line": 126
+        "line": 130
       },
       {
         "name": "test_finds_every_service_contract",
-        "line": 128
+        "line": 134
       },
       {
         "name": "test_defines_exactly_the_listed_request_subjects",
-        "line": 136
+        "line": 140
       },
       {
         "name": "test_every_request_operation_replies_with_its_own_response",
-        "line": 141
+        "line": 145
       },
       {
         "name": "test_every_subject_is_in_its_service_namespace",
-        "line": 149
+        "line": 153
       },
       {
         "name": "test_every_event_stream_captures_only_its_service_namespace",
-        "line": 155
+        "line": 159
       },
       {
         "name": "test_events_land_in_their_stream_and_requests_in_none",
-        "line": 161
+        "line": 165
       },
       {
         "name": "test_no_streams_or_consumers_are_added",
-        "line": 170
+        "line": 176
       },
       {
         "name": "test_checked_in_reference_is_current",
-        "line": 181
+        "line": 185
       },
       {
         "name": "test_pages_builds_on_contract_changes",
-        "line": 186
+        "line": 192
       },
       {
         "name": "test_published_contract_links",
-        "line": 198
+        "line": 202
       },
       {
         "name": "test_rejects_malformed_variants",
-        "line": 318
+        "line": 322
       },
       {
         "name": "test_the_unmutated_bases_are_valid",
-        "line": 321
+        "line": 327
       },
       {
         "name": "test_a_causal_path_of_exactly_32_elements_is_allowed",
-        "line": 326
+        "line": 332
       },
       {
         "name": "test_resolves_schemas_under_a_path_with_spaces",
-        "line": 331
+        "line": 337
       },
       {
         "name": "test_asyncapi_parser_accepts_every_document",
-        "line": 342
+        "line": 346
       },
       {
         "name": "test_bundled_documents_resolve_every_file_reference",
-        "line": 348
+        "line": 354
       },
       {
         "name": "test_a_graph_snapshot_without_a_project_is_valid",
-        "line": 363
+        "line": 367
+      },
+      {
+        "name": "test_rejects_an_account_token_in_a_tenant_facing_address",
+        "line": 374
+      },
+      {
+        "name": "test_no_tenant_facing_address_names_an_account",
+        "line": 386
+      },
+      {
+        "name": "test_tenant_id_accepts_a_v7_uuid",
+        "line": 394
+      },
+      {
+        "name": "test_tenant_id_rejects",
+        "line": 412
+      },
+      {
+        "name": "test_local_tenant_is_a_fixed_non_nil_tenant_id",
+        "line": 416
+      },
+      {
+        "name": "test_account_accepts_an_account_public_key",
+        "line": 426
+      },
+      {
+        "name": "test_account_rejects",
+        "line": 435
       }
     ]
   },
   {
     "path": "v2/packages/contracts/tests/test_resources.py",
     "kind": "test",
-    "bytes": 11550,
-    "sha256": "a5c25a0ec40ce6b2d9da101d79a7cd62f5af56f75a07b704538b64e33ac54f83",
+    "bytes": 11558,
+    "sha256": "3ff060f147804372dae3895772a1ca6276775715caa9ec347cf5b3ca8568072a",
     "lines": 259,
     "tests": [
       {
@@ -2529,23 +2725,23 @@
       },
       {
         "name": "test_every_service_contract_has_its_resources",
-        "line": 50
+        "line": 52
       },
       {
         "name": "test_every_resource_uses_the_one_api_version",
-        "line": 56
+        "line": 58
       },
       {
         "name": "test_no_contract_file_names_another_api_version",
-        "line": 71
+        "line": 73
       },
       {
         "name": "test_unknown_kind_and_version_are_refused",
-        "line": 90
+        "line": 92
       },
       {
         "name": "test_a_resource_of_another_kind_is_refused_when_one_kind_is_expected",
-        "line": 101
+        "line": 103
       },
       {
         "name": "test_markdown_reference_has_a_table_for_every_type_on_the_page",
@@ -2553,19 +2749,19 @@
       },
       {
         "name": "test_resources_are_closed",
-        "line": 122
+        "line": 124
       },
       {
         "name": "test_a_step_sets_exactly_one_kind",
-        "line": 128
+        "line": 130
       },
       {
         "name": "test_runner_choices_only_with_different_from",
-        "line": 138
+        "line": 140
       },
       {
         "name": "test_step_names_must_work_in_expressions",
-        "line": 144
+        "line": 146
       },
       {
         "name": "test_loop_interval_bounds",
@@ -2573,43 +2769,43 @@
       },
       {
         "name": "test_time_zone_needs_cron",
-        "line": 163
+        "line": 165
       },
       {
         "name": "test_unquoted_timestamps_stay_text",
-        "line": 169
+        "line": 171
       },
       {
         "name": "test_tool_schemas_are_objects_and_recovery_is_known",
-        "line": 174
+        "line": 176
       },
       {
         "name": "test_tool_names_are_subject_tokens",
-        "line": 184
+        "line": 186
       },
       {
         "name": "test_a_grant_names_a_workspace",
-        "line": 194
+        "line": 196
       },
       {
         "name": "test_an_invocation_pins_its_tool",
-        "line": 200
+        "line": 202
       },
       {
         "name": "test_connection_scope_lists_resources_only_when_selected",
-        "line": 210
+        "line": 212
       },
       {
         "name": "test_problems_in_a_multi_document_file_name_the_document",
-        "line": 220
+        "line": 222
       },
       {
         "name": "test_pages_regenerates_and_publishes_the_resource_reference",
-        "line": 229
+        "line": 231
       },
       {
         "name": "test_site_reference_links_every_contract_and_kind",
-        "line": 236
+        "line": 238
       },
       {
         "name": "test_docs_name_only_the_one_api_version",
@@ -2617,7 +2813,7 @@
       },
       {
         "name": "test_the_wheel_carries_every_contract_directory",
-        "line": 254
+        "line": 256
       }
     ]
   },
@@ -2630,11 +2826,11 @@
     "tests": [
       {
         "name": "test_examples_and_all_message_schemas",
-        "line": 19
+        "line": 21
       },
       {
         "name": "test_execute_retry_preserves_complete_identity",
-        "line": 47
+        "line": 49
       },
       {
         "name": "test_rejects_invalid_wire_variants",
@@ -2646,31 +2842,31 @@
       },
       {
         "name": "test_subject_and_provisioned_binding_checks",
-        "line": 103
+        "line": 105
       },
       {
         "name": "test_inspect_response_must_bind_snapshot_to_runtime",
-        "line": 123
+        "line": 125
       },
       {
         "name": "test_progress_usage_and_artifact_bindings",
-        "line": 129
+        "line": 131
       },
       {
         "name": "test_internal_subjects_are_outside_public_streams",
-        "line": 154
+        "line": 156
       },
       {
         "name": "test_wire_limit_accepts_unicode_without_ascii_reserialization",
-        "line": 166
+        "line": 168
       },
       {
         "name": "test_wire_limit_counts_whitespace_and_accepts_exact_boundary",
-        "line": 175
+        "line": 177
       },
       {
         "name": "test_oversized_wire_is_rejected_before_decode_or_parse",
-        "line": 186
+        "line": 188
       },
       {
         "name": "test_wire_requires_utf8_json",
@@ -2698,23 +2894,23 @@
       },
       {
         "name": "test_inspect_cannot_omit_requested_attempt",
-        "line": 262
+        "line": 264
       },
       {
         "name": "test_reserved_steering_is_not_an_accepted_update",
-        "line": 270
+        "line": 272
       },
       {
         "name": "test_internal_reference_stays_current",
-        "line": 276
+        "line": 278
       },
       {
         "name": "test_restart_preserves_journal_and_advances_runtime_sequence",
-        "line": 283
+        "line": 285
       },
       {
         "name": "test_cancel_before_execute_confirms_no_launch",
-        "line": 296
+        "line": 298
       },
       {
         "name": "test_context_cannot_select_host_paths",
@@ -2722,7 +2918,7 @@
       },
       {
         "name": "test_gap_must_request_an_earlier_sequence",
-        "line": 316
+        "line": 318
       },
       {
         "name": "test_ack_echoes_identity_and_sequence",
@@ -2734,7 +2930,7 @@
       },
       {
         "name": "test_wire_rejects_excessive_json_nesting",
-        "line": 346
+        "line": 348
       },
       {
         "name": "test_wire_rejects_numeric_overflow",
@@ -2742,7 +2938,7 @@
       },
       {
         "name": "test_wire_accepts_large_finite_number",
-        "line": 368
+        "line": 370
       },
       {
         "name": "test_usage_period_preserves_nanosecond_precision",
@@ -2750,11 +2946,11 @@
       },
       {
         "name": "test_nested_invalid_instruction_files_return_errors",
-        "line": 396
+        "line": 398
       },
       {
         "name": "test_schema_recursion_returns_validation_error",
-        "line": 408
+        "line": 410
       },
       {
         "name": "test_oversized_references_skip_uniqueness_checks",
@@ -2765,17 +2961,65 @@
   {
     "path": "v2/packages/contracts/tool_service/v1/asyncapi.yaml",
     "kind": "contract",
-    "bytes": 32731,
-    "sha256": "be04dcb224400b8849da234b0fd8c3d37bdd175456bf2764e0d60ec2932a4fd6",
-    "lines": 727,
+    "bytes": 40762,
+    "sha256": "37eeb9fc4ea169af311c86fc7201b979412f13fe58235897368b66de109de62e",
+    "lines": 887,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/policies.apply.command.json",
+    "kind": "contract",
+    "bytes": 611,
+    "sha256": "411e3e171ca3a9b9da50d029a41c7dade90014ec3b8f3beb4ece56a5165bd7d4",
+    "lines": 23,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/policies.apply.response.json",
+    "kind": "contract",
+    "bytes": 253,
+    "sha256": "101e4bdc4afcd723ee7db1865d3e35ec2d0338086338d6b99dc6fed6411279b2",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/policies.delete.command.json",
+    "kind": "contract",
+    "bytes": 294,
+    "sha256": "9683296641854fd67f17838b51d06842cd727738d5a5ff643d568c6ffebd2bb3",
+    "lines": 14,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/policies.delete.response.json",
+    "kind": "contract",
+    "bytes": 257,
+    "sha256": "67bf8199480f436f06b0bcb52b994d3735cecc3acb038424e04318c7042b729b",
+    "lines": 10,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/policies.list.query.json",
+    "kind": "contract",
+    "bytes": 150,
+    "sha256": "01c9616c8e135fd5b44c5533e9b3dc181804560bf3d1539fd6a6ab9f5314e4d2",
+    "lines": 9,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/examples/policies.list.response.json",
+    "kind": "contract",
+    "bytes": 788,
+    "sha256": "3236498a222e2fe302016394f0cba5a8913186f15b60c56927d1cb0e590973b8",
+    "lines": 29,
     "tests": []
   },
   {
     "path": "v2/packages/contracts/tool_service/v1/examples/toolgrants.apply.command.json",
     "kind": "contract",
-    "bytes": 863,
-    "sha256": "cba9d32329ad6125e1222983de0f28c0a285c960ffc57612fd98903942528e3c",
-    "lines": 37,
+    "bytes": 819,
+    "sha256": "bb8256cf2754b03f23995203d69b0936eb79de16004445775e155757a4d2d457",
+    "lines": 33,
     "tests": []
   },
   {
@@ -2813,9 +3057,9 @@
   {
     "path": "v2/packages/contracts/tool_service/v1/examples/toolgrants.get.response.json",
     "kind": "contract",
-    "bytes": 992,
-    "sha256": "e16c981580929b4e1c92f9d19c8ffc6d351a65370e69ca4ad5ae46e3cf76b2e1",
-    "lines": 41,
+    "bytes": 952,
+    "sha256": "37c3bcb131c687f4cd161e196d7acea3af864c82d820e2837ffcefde75264a5b",
+    "lines": 37,
     "tests": []
   },
   {
@@ -2829,9 +3073,9 @@
   {
     "path": "v2/packages/contracts/tool_service/v1/examples/toolgrants.list.response.json",
     "kind": "contract",
-    "bytes": 1102,
-    "sha256": "5f422a749d712c7187b72b329e19bc83696e04bf4437c23c639db32cae357d7e",
-    "lines": 44,
+    "bytes": 1050,
+    "sha256": "0f27f17be17c5553a23510f82d0ccdb972807131dead927cc3ee3ce4232bf0d2",
+    "lines": 40,
     "tests": []
   },
   {
@@ -2997,9 +3241,9 @@
   {
     "path": "v2/packages/contracts/tool_service/v1/examples/tools.invoke.command.json",
     "kind": "contract",
-    "bytes": 406,
-    "sha256": "5ad40157072af404d8cd36ed27cd8c7229b7fd60aa1e15ad0036e589f8682725",
-    "lines": 18,
+    "bytes": 362,
+    "sha256": "8e97ef032f3cabd93517fd07cf30ecd3b80c58ecd481d49dbe1f35d879021be4",
+    "lines": 17,
     "tests": []
   },
   {
@@ -3037,25 +3281,33 @@
   {
     "path": "v2/packages/contracts/tool_service/v1/reference.html",
     "kind": "contract",
-    "bytes": 96459,
-    "sha256": "665ace38a1f1763bf29ed126f178f43506ef85688c0dfa13e43dd672ac707f5b",
+    "bytes": 110155,
+    "sha256": "51c028032b96833a2f3e83169c0e4019a46fc08fbb8b945abd93e66a8314791e",
     "lines": 33,
     "tests": []
   },
   {
     "path": "v2/packages/contracts/tool_service/v1/resources/examples/github-issue-comment.yaml",
     "kind": "contract",
-    "bytes": 1802,
-    "sha256": "16043f548a297854577ced2edf8ec6e02b8657f3eaa2826f508fe8392a1baa3a",
-    "lines": 88,
+    "bytes": 2088,
+    "sha256": "cc3174e99e3055f3414f15f4d890e920e06d1352a52c08a3d32164df3fb2d016",
+    "lines": 97,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/tool_service/v1/resources/policy.schema.yaml",
+    "kind": "contract",
+    "bytes": 1918,
+    "sha256": "cf80baf7d94202a57fb80142027f45d4b860120d32993a0473e31abe29047085",
+    "lines": 53,
     "tests": []
   },
   {
     "path": "v2/packages/contracts/tool_service/v1/resources/reference.html",
     "kind": "contract",
-    "bytes": 33171,
-    "sha256": "d970285be1eb2e3cdbdcba9853aa553c0cd8325b4c2d8bf212117e4c3d0e6c47",
-    "lines": 151,
+    "bytes": 37236,
+    "sha256": "90c58d1861a52b985f4f08649e613aef0649a75a51ca60410ce45f2a06780296",
+    "lines": 163,
     "tests": []
   },
   {
@@ -3069,9 +3321,9 @@
   {
     "path": "v2/packages/contracts/tool_service/v1/resources/toolgrant.schema.yaml",
     "kind": "contract",
-    "bytes": 3564,
-    "sha256": "2c17c3f44bc25049dc545cd0b4fb050d24716704d4e9636f40d84d57c99e0abb",
-    "lines": 92,
+    "bytes": 3824,
+    "sha256": "dd8309e0de75860febdbd3183cf7417444d3d5c7ad914002c6961689ac956f81",
+    "lines": 96,
     "tests": []
   },
   {
@@ -3085,9 +3337,9 @@
   {
     "path": "v2/packages/contracts/tool_service/v1/schemas/commands.schema.json",
     "kind": "contract",
-    "bytes": 6022,
-    "sha256": "25b48bb176840d2c36ea31fd1c4291a59cb5686f318ef83ef45091ac572ae1ab",
-    "lines": 104,
+    "bytes": 7260,
+    "sha256": "b5803b8e9c2bead65122a645b68a70b1dc6959d394d685827019b95c8ce52ea2",
+    "lines": 126,
     "tests": []
   },
   {
@@ -3101,9 +3353,9 @@
   {
     "path": "v2/packages/contracts/tool_service/v1/schemas/queries.schema.json",
     "kind": "contract",
-    "bytes": 8100,
-    "sha256": "2b42ae2856dc0b575d0d144b274ff102217fc5b77e1f7909fa8c5c2e6ff78223",
-    "lines": 210,
+    "bytes": 9575,
+    "sha256": "01478d3dd4237a3ec13a4d3bc405a2f09cdc8e2e6e745e0d198a8edaaf44e95c",
+    "lines": 250,
     "tests": []
   },
   {
@@ -3149,17 +3401,17 @@
   {
     "path": "v2/packages/contracts/tooling/validate.mjs",
     "kind": "contract",
-    "bytes": 1552,
-    "sha256": "7178b970e585900a55040430ec447e210d8e1ba0210a2af35f204fc9539df26e",
-    "lines": 32,
+    "bytes": 2065,
+    "sha256": "14fea3569ced638c50bbe5b62cf1c21cf7ec0f81a449e3a2b0cf9be4b9b9c260",
+    "lines": 42,
     "tests": []
   },
   {
     "path": "v2/packages/contracts/virtual_control_plane/v1/asyncapi.yaml",
     "kind": "contract",
-    "bytes": 59277,
-    "sha256": "8d03e73f2fa449a19d5a433bc076316fe7b2ac5ce2b2be34b3b3e16e717cfa02",
-    "lines": 1406,
+    "bytes": 60793,
+    "sha256": "bcd742afcab014d0afc412603e5a95f66d1dd762b7f6644a28343bdacd5aec0e",
+    "lines": 1430,
     "tests": []
   },
   {
@@ -3685,8 +3937,8 @@
   {
     "path": "v2/packages/contracts/virtual_control_plane/v1/reference.html",
     "kind": "contract",
-    "bytes": 160936,
-    "sha256": "f8a452fe9f91c7ef96ee35c490dc7577d04d9876fd8c8aa2c9ad910bf5f0c4e8",
+    "bytes": 163412,
+    "sha256": "0a0f5ea576aa284f8b1fde66e108508fe1ad951e904b96b2fc71bd423e64b5c4",
     "lines": 33,
     "tests": []
   },
@@ -3789,9 +4041,9 @@
   {
     "path": "v2/packages/messaging/README.md",
     "kind": "documentation",
-    "bytes": 3893,
-    "sha256": "52eaea27c5b584a189a16ea9c6d076b56b57b49ec14698059891239450b70d96",
-    "lines": 72,
+    "bytes": 6166,
+    "sha256": "3d1e046ca32fb1d50a63ba4ed803682ab7a2a6eaa53f9a31e81c829a58916d4b",
+    "lines": 110,
     "tests": []
   },
   {
@@ -3805,17 +4057,17 @@
   {
     "path": "v2/packages/messaging/src/openengine/messaging/__init__.py",
     "kind": "source/config",
-    "bytes": 443,
-    "sha256": "39d1d42f9d685d4a036b5a9e16ef81dfd82ba4231ce819dcdf253a06f6362f84",
-    "lines": 7,
+    "bytes": 1295,
+    "sha256": "91e75983b8989a369a864075c95eb3ba806a9e8e2aa50090f90781a20a9691b1",
+    "lines": 48,
     "tests": []
   },
   {
     "path": "v2/packages/messaging/src/openengine/messaging/client.py",
     "kind": "source/config",
-    "bytes": 3970,
-    "sha256": "ed5760124703d55dce35c13c86812d65870497fba7a331cbfff6a7322a4feef4",
-    "lines": 90,
+    "bytes": 5386,
+    "sha256": "7db52b7ce8919933dc75a9a6fe8ca168bdf664f3200b90a8ecfc6c7ce03614f1",
+    "lines": 115,
     "tests": []
   },
   {
@@ -3837,9 +4089,17 @@
   {
     "path": "v2/packages/messaging/src/openengine/messaging/server.py",
     "kind": "source/config",
-    "bytes": 13451,
-    "sha256": "e6e7aa2c43907b784d2f721730b9820fd4a719c9b0625a20b6daffc34e4c8740",
-    "lines": 301,
+    "bytes": 17229,
+    "sha256": "0b84f58a58b53b9cf512922c835b03c72b80ef2b81eace184fffd446098f1040",
+    "lines": 373,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/messaging/src/openengine/messaging/tenancy.py",
+    "kind": "source/config",
+    "bytes": 6899,
+    "sha256": "81e9bd850fc85292453937538361fb5b81c58bfd9cc0f16b2a5851846edb8eb3",
+    "lines": 198,
     "tests": []
   },
   {
@@ -3851,31 +4111,31 @@
     "tests": [
       {
         "name": "test_a_command_whose_reply_was_lost_is_resent_with_the_same_command_id",
-        "line": 38
+        "line": 40
       },
       {
         "name": "test_each_attempt_waits_the_bounded_timeout_then_reports_unavailable",
-        "line": 52
+        "line": 54
       },
       {
         "name": "test_no_responders_is_reported_at_once",
-        "line": 64
+        "line": 66
       },
       {
         "name": "test_an_error_reply_raises_its_code_and_keeps_its_retryable_flag",
-        "line": 74
+        "line": 76
       },
       {
         "name": "test_an_unknown_error_code_is_kept_as_sent",
-        "line": 86
+        "line": 88
       },
       {
         "name": "test_a_query_is_sent_as_a_valid_envelope",
-        "line": 97
+        "line": 99
       },
       {
         "name": "test_a_connection_lost_while_waiting_reports_unavailable",
-        "line": 105
+        "line": 107
       }
     ]
   },
@@ -3888,7 +4148,7 @@
     "tests": [
       {
         "name": "test_a_valid_query_gets_its_result_with_its_request_id",
-        "line": 36
+        "line": 38
       },
       {
         "name": "test_a_malformed_query_is_invalid_argument",
@@ -3896,15 +4156,15 @@
       },
       {
         "name": "test_a_command_whose_causal_path_does_not_end_with_its_id_is_invalid_argument",
-        "line": 62
+        "line": 64
       },
       {
         "name": "test_a_valid_command_gets_its_handlers_response",
-        "line": 71
+        "line": 73
       },
       {
         "name": "test_a_request_through_a_non_loopback_listener_is_permission_denied",
-        "line": 77
+        "line": 79
       },
       {
         "name": "test_local_operator_mode_allows_loopback_listeners",
@@ -3912,19 +4172,19 @@
       },
       {
         "name": "test_local_operator_mode_allows_every_project_on_loopback_only",
-        "line": 89
+        "line": 91
       },
       {
         "name": "test_an_unserved_subject_is_unsupported_capability",
-        "line": 100
+        "line": 102
       },
       {
         "name": "test_a_handler_fault_is_internal_without_its_detail",
-        "line": 106
+        "line": 108
       },
       {
         "name": "test_a_causal_path_past_its_limit_is_refused_before_sending",
-        "line": 119
+        "line": 121
       },
       {
         "name": "test_local_operator_mode_judges_the_address_nats_listens_on",
@@ -3932,11 +4192,92 @@
       },
       {
         "name": "test_a_route_key_names_subject_parameters_and_checks_their_type",
-        "line": 142
+        "line": 144
       },
       {
         "name": "test_live_connection_cannot_reuse_a_trusted_startup_listener",
         "line": 166
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/messaging/tests/test_tenancy.py",
+    "kind": "test",
+    "bytes": 10846,
+    "sha256": "e955db521bfa7dc2064b248ef8171014a4304c54ee8d2946e861058205c76041",
+    "lines": 293,
+    "tests": [
+      {
+        "name": "test_dedicated_mode_attaches_local_tenant_by_default",
+        "line": 81
+      },
+      {
+        "name": "test_dedicated_mode_attaches_the_configured_tenant",
+        "line": 92
+      },
+      {
+        "name": "test_shared_mode_resolves_the_third_token_account_and_strips_it_for_routing",
+        "line": 99
+      },
+      {
+        "name": "test_shared_mode_keeps_subject_parameters_after_the_account_token",
+        "line": 110
+      },
+      {
+        "name": "test_shared_mode_refuses_an_unknown_or_malformed_account_with_permission_denied",
+        "line": 122
+      },
+      {
+        "name": "test_a_refused_shared_mode_command_still_names_its_command_id",
+        "line": 136
+      },
+      {
+        "name": "test_shared_mode_caches_a_resolved_account_but_not_a_refusal",
+        "line": 154
+      },
+      {
+        "name": "test_a_resolver_answering_the_nil_uuid_is_rejected_before_any_handler_runs",
+        "line": 168
+      },
+      {
+        "name": "test_a_nil_or_malformed_tenant_id_is_rejected_at_config_time",
+        "line": 178
+      },
+      {
+        "name": "test_both_modes_subscribe_in_a_queue_group_named_after_the_service",
+        "line": 185
+      },
+      {
+        "name": "test_the_authorizer_sees_the_derived_principal_and_its_answer_is_attached",
+        "line": 196
+      },
+      {
+        "name": "test_local_operator_returns_local_tenant_for_a_request_built_by_hand",
+        "line": 214
+      },
+      {
+        "name": "test_a_shared_mode_client_addresses_the_principals_account",
+        "line": 233
+      },
+      {
+        "name": "test_a_dedicated_mode_client_keeps_the_plain_subject",
+        "line": 242
+      },
+      {
+        "name": "test_a_shared_mode_client_needs_a_principal_with_an_account",
+        "line": 250
+      },
+      {
+        "name": "test_subject_helpers_put_the_account_in_the_third_token",
+        "line": 257
+      },
+      {
+        "name": "test_span_names_use_the_subject_template_and_never_the_account_key",
+        "line": 273
+      },
+      {
+        "name": "test_dedicated_span_names_are_the_plain_subject",
+        "line": 288
       }
     ]
   },
@@ -4015,9 +4356,9 @@
   {
     "path": "v2/packages/persistence/src/openengine/persistence/sqlite.py",
     "kind": "source/config",
-    "bytes": 1435,
-    "sha256": "06d64889f1b968febd67f0479381d5f0498fa94c34f433b29232f8861698ee37",
-    "lines": 49,
+    "bytes": 2701,
+    "sha256": "9530d839bb3ba801cc6ff454b54ee2573b57e3d7645fb4149b8bcc1e53e8b3ee",
+    "lines": 73,
     "tests": []
   },
   {
@@ -4061,72 +4402,76 @@
     "tests": [
       {
         "name": "test_each_revisions_erd_highlights_what_it_changed",
-        "line": 34
+        "line": 36
       },
       {
         "name": "test_an_unchanged_schema_has_no_highlights",
-        "line": 53
+        "line": 55
       },
       {
         "name": "test_rewrites_only_what_changed_or_was_never_rendered",
-        "line": 63
+        "line": 65
       },
       {
         "name": "test_manifest_lists_changed_paths_and_the_svgs_to_render",
-        "line": 72
+        "line": 74
       },
       {
         "name": "test_every_service_table_has_a_comment",
-        "line": 83
+        "line": 85
       },
       {
         "name": "test_a_tables_comment_is_drawn_into_its_entity",
-        "line": 89
+        "line": 91
       },
       {
         "name": "test_a_quote_in_a_tables_comment_does_not_corrupt_its_label",
-        "line": 98
+        "line": 100
       }
     ]
   },
   {
     "path": "v2/packages/persistence/tests/test_persistence.py",
     "kind": "test",
-    "bytes": 4979,
-    "sha256": "0b4389c168877a366663865435089e3586887d00af8574e1e94348a8e4defe1b",
-    "lines": 136,
+    "bytes": 6205,
+    "sha256": "e0016f2971d1ceaced6ff0b426b1fbb7f6f53342d0f47b0e563c0eed0b7a7b16",
+    "lines": 168,
     "tests": [
       {
         "name": "test_defaults_to_sqlite_under_the_state_directory",
-        "line": 57
+        "line": 59
       },
       {
         "name": "test_one_variable_switches_every_service_to_postgres",
-        "line": 66
+        "line": 68
       },
       {
         "name": "test_refuses_an_unknown_backend",
-        "line": 73
+        "line": 75
       },
       {
         "name": "test_postgres_is_a_stub_that_fails_on_use",
-        "line": 78
+        "line": 80
       },
       {
         "name": "test_reports_a_service_without_a_store_for_the_backend",
-        "line": 85
+        "line": 87
       },
       {
         "name": "test_scaffold_keeps_a_service_edited_env",
-        "line": 92
+        "line": 94
       },
       {
         "name": "test_migrates_and_serves_a_service_on_sqlite",
-        "line": 102
+        "line": 104
       },
       {
         "name": "test_sqlite_connections_enforce_foreign_keys_and_use_wal",
-        "line": 123
+        "line": 125
+      },
+      {
+        "name": "test_cold_connection_waits_for_journal_mode_lock_without_blocking_the_loop",
+        "line": 139
       }
     ]
   },
@@ -4195,47 +4540,47 @@
     "tests": [
       {
         "name": "test_reads_otlp_export_from_the_standard_variables",
-        "line": 51
+        "line": 53
       },
       {
         "name": "test_reads_local_format_and_level",
-        "line": 67
+        "line": 69
       },
       {
         "name": "test_json_lines_carry_the_open_telemetry_fields_and_the_current_trace",
-        "line": 77
+        "line": 79
       },
       {
         "name": "test_exceptions_are_semantic_convention_attributes",
-        "line": 109
+        "line": 111
       },
       {
         "name": "test_render_turns_json_lines_into_console_lines_and_passes_other_text_through",
-        "line": 124
+        "line": 126
       },
       {
         "name": "test_reconfiguring_replaces_its_own_handlers_only",
-        "line": 139
+        "line": 141
       },
       {
         "name": "test_extra_exporters_receive_logs_and_spans_with_the_service_resource",
-        "line": 154
+        "line": 156
       },
       {
         "name": "test_trace_context_survives_a_nats_round_trip",
-        "line": 179
+        "line": 181
       },
       {
         "name": "test_receiving_without_headers_starts_a_new_trace",
-        "line": 202
+        "line": 204
       },
       {
         "name": "test_inject_and_extract_speak_w3c_trace_context",
-        "line": 209
+        "line": 211
       },
       {
         "name": "test_one_endpoint_receives_logs_and_traces_over_otlp",
-        "line": 240
+        "line": 242
       }
     ]
   },
@@ -4344,19 +4689,19 @@
     "tests": [
       {
         "name": "test_migrations_match_the_schema",
-        "line": 22
+        "line": 24
       },
       {
         "name": "test_migrations_roll_back",
-        "line": 26
+        "line": 28
       },
       {
         "name": "test_finds_the_connection_a_webhook_belongs_to",
-        "line": 33
+        "line": 35
       },
       {
         "name": "test_postgres_store_is_a_stub",
-        "line": 52
+        "line": 54
       }
     ]
   },
@@ -4481,157 +4826,157 @@
     "tests": [
       {
         "name": "test_migrations_match_the_schema",
-        "line": 30
+        "line": 32
       },
       {
         "name": "test_migrations_roll_back",
-        "line": 34
+        "line": 36
       },
       {
         "name": "test_an_unchanged_apply_keeps_the_revision_and_a_changed_one_adds_the_next",
-        "line": 49
+        "line": 51
       },
       {
         "name": "test_a_command_id_returns_its_receipt_or_conflicts",
-        "line": 75
+        "line": 77
       },
       {
         "name": "test_expected_version_must_be_the_latest_revision",
-        "line": 96
+        "line": 98
       },
       {
         "name": "test_the_deadline_is_checked_once_the_apply_holds_the_lock",
-        "line": 115
+        "line": 117
       },
       {
         "name": "test_concurrent_applies_neither_duplicate_nor_skip_revisions",
-        "line": 138
+        "line": 140
       },
       {
         "name": "test_graphs_are_listed_by_name_and_paged_after_a_key",
-        "line": 160
+        "line": 162
       },
       {
         "name": "test_names_command_ids_and_listings_are_per_project",
-        "line": 186
+        "line": 188
       },
       {
         "name": "test_the_project_migration_keeps_existing_graphs_under_default",
-        "line": 218
+        "line": 220
       },
       {
         "name": "test_any_revision_of_a_graph_is_read_back",
-        "line": 261
+        "line": 263
       },
       {
         "name": "test_postgres_store_is_a_stub",
-        "line": 283
+        "line": 285
       }
     ]
   },
   {
     "path": "v2/services/graph_engine/tests/test_registry.py",
     "kind": "test",
-    "bytes": 21700,
-    "sha256": "02487e7d2fbc5bc765f121a5d9cce91a582ac43afad202bb9da0432a8cdbc1fa",
-    "lines": 438,
+    "bytes": 22108,
+    "sha256": "277942dca197b8d784fdca2e8943ba3b9b2643d46fd8bbef435006f2354ec414",
+    "lines": 445,
     "tests": [
       {
         "name": "test_apply_creates_then_keeps_or_adds_revisions_under_one_graph_id",
-        "line": 80
+        "line": 87
       },
       {
         "name": "test_a_retried_command_gets_its_original_reply_and_a_reused_id_conflicts",
-        "line": 102
+        "line": 109
       },
       {
         "name": "test_expected_version_mismatch_is_rejected_and_replayed",
-        "line": 117
+        "line": 124
       },
       {
         "name": "test_python_graphs_are_unsupported",
-        "line": 132
+        "line": 139
       },
       {
         "name": "test_a_graph_breaking_its_rules_is_invalid_argument",
-        "line": 142
+        "line": 149
       },
       {
         "name": "test_operation_queries_name_a_known_well_formed_id",
-        "line": 152
+        "line": 159
       },
       {
         "name": "test_a_command_breaking_its_schema_is_rejected_durably",
-        "line": 162
+        "line": 169
       },
       {
         "name": "test_a_command_breaking_its_envelope_is_rejected_durably",
-        "line": 177
+        "line": 184
       },
       {
         "name": "test_a_passed_deadline_refuses_acceptance_but_not_a_replay",
-        "line": 187
+        "line": 194
       },
       {
         "name": "test_an_accepted_command_is_replayed_after_its_deadline",
-        "line": 200
+        "line": 207
       },
       {
         "name": "test_graphs_list_pages_by_name_with_a_cursor_bound_to_its_prefix",
-        "line": 227
+        "line": 234
       },
       {
         "name": "test_graphs_get_returns_the_latest_or_a_named_revision",
-        "line": 262
+        "line": 269
       },
       {
         "name": "test_graphs_get_of_an_unknown_graph_or_revision_is_not_found",
-        "line": 282
+        "line": 289
       },
       {
         "name": "test_a_graph_too_large_to_read_back_is_invalid_argument",
-        "line": 299
+        "line": 304
       },
       {
         "name": "test_the_largest_graph_apply_accepts_is_read_back_within_1_mib",
-        "line": 309
+        "line": 316
       },
       {
         "name": "test_graphs_list_ends_a_page_early_to_keep_its_reply_within_1_mib",
-        "line": 320
+        "line": 327
       },
       {
         "name": "test_a_whole_number_limit_given_as_a_float_pages_like_an_integer",
-        "line": 337
+        "line": 344
       },
       {
         "name": "test_the_same_name_in_two_projects_is_two_graphs_listed_and_read_apart",
-        "line": 347
+        "line": 354
       },
       {
         "name": "test_a_list_cursor_is_bound_to_its_project",
-        "line": 369
+        "line": 376
       },
       {
         "name": "test_every_project_scoped_request_is_authorized_for_its_project",
-        "line": 386
+        "line": 391
       },
       {
         "name": "test_a_refused_command_neither_reads_nor_keeps_a_receipt",
-        "line": 399
+        "line": 406
       },
       {
         "name": "test_a_receipt_kept_before_projects_still_replays",
-        "line": 412
+        "line": 421
       }
     ]
   },
   {
     "path": "v2/services/tool_service/README.md",
     "kind": "documentation",
-    "bytes": 713,
-    "sha256": "707b0216c3b3c34721af8523dc0a50790d242bb88c8a879f8a5470f17ed1cc82",
-    "lines": 11,
+    "bytes": 1417,
+    "sha256": "a6c6dfb1b58d21f783e36f12f7f6adbae5408a1ddae6e055d09cca0314148155",
+    "lines": 21,
     "tests": []
   },
   {
@@ -4640,6 +4985,14 @@
     "bytes": 1346,
     "sha256": "a622075ec26bc9ebcc78a2a13be19aa490dfe33bc94cff15b33da6afd49600f2",
     "lines": 46,
+    "tests": []
+  },
+  {
+    "path": "v2/services/tool_service/authorization.py",
+    "kind": "source/config",
+    "bytes": 11006,
+    "sha256": "dfffad9e3a1e707b64852246bf4dc28a15d88c97dd1ce87a210d319a2889ef6c",
+    "lines": 319,
     "tests": []
   },
   {
@@ -4683,64 +5036,177 @@
     "tests": []
   },
   {
+    "path": "v2/services/tool_service/persistence/migrations/versions/48be4be506f8_grant_when_and_ceiling_policies.py",
+    "kind": "source/config",
+    "bytes": 1784,
+    "sha256": "277226ae5257091d6537207f9b7ad13decdb090631bfc737b278db59933a269c",
+    "lines": 49,
+    "tests": []
+  },
+  {
     "path": "v2/services/tool_service/persistence/schema.py",
     "kind": "source/config",
-    "bytes": 5310,
-    "sha256": "b0cfc029a45440cc52e3be0cf703db3e25d5adbb71c8e418d4bafc6819be6bca",
-    "lines": 110,
+    "bytes": 6209,
+    "sha256": "785502be8cc0f84a14a9f1960b17af65a1c6f56e1c7adc999bbf7c262a9739b2",
+    "lines": 128,
     "tests": []
   },
   {
     "path": "v2/services/tool_service/pyproject.toml",
     "kind": "source/config",
-    "bytes": 696,
-    "sha256": "c46e7f0c101421f109c45a51fd35228e8269f91f46b81d452626ec355a5ee03f",
+    "bytes": 739,
+    "sha256": "e5d5d4702fbdcd522a6d67c3fc5b943fc9745c5dcb09c286e048689e847abd8e",
     "lines": 22,
     "tests": []
   },
   {
+    "path": "v2/services/tool_service/tests/test_authorization.py",
+    "kind": "test",
+    "bytes": 6540,
+    "sha256": "68c557bc2cf1dccdbdd39560a30b965e4758329971397ca9921fe610b7783f0e",
+    "lines": 180,
+    "tests": [
+      {
+        "name": "test_a_valid_condition_passes",
+        "line": 52
+      },
+      {
+        "name": "test_a_condition_may_reference_context_now",
+        "line": 56
+      },
+      {
+        "name": "test_a_condition_may_reference_resource",
+        "line": 60
+      },
+      {
+        "name": "test_a_condition_cannot_reference_principal",
+        "line": 64
+      },
+      {
+        "name": "test_a_condition_cannot_reference_action",
+        "line": 69
+      },
+      {
+        "name": "test_a_condition_with_a_type_error_is_rejected",
+        "line": 74
+      },
+      {
+        "name": "test_a_condition_that_names_a_missing_argument_is_rejected",
+        "line": 79
+      },
+      {
+        "name": "test_a_condition_that_does_not_parse_is_rejected",
+        "line": 84
+      },
+      {
+        "name": "test_an_omitted_condition_is_allowed",
+        "line": 89
+      },
+      {
+        "name": "test_a_forbid_ceiling_passes",
+        "line": 96
+      },
+      {
+        "name": "test_a_ceiling_may_name_any_tools_argument_pattern",
+        "line": 100
+      },
+      {
+        "name": "test_a_ceiling_must_be_a_forbid",
+        "line": 105
+      },
+      {
+        "name": "test_a_ceiling_that_does_not_parse_is_rejected",
+        "line": 110
+      },
+      {
+        "name": "test_an_omitted_ceiling_is_allowed",
+        "line": 115
+      },
+      {
+        "name": "test_a_matching_grant_allows_and_names_itself",
+        "line": 122
+      },
+      {
+        "name": "test_a_grant_whose_condition_fails_denies",
+        "line": 128
+      },
+      {
+        "name": "test_an_expired_grant_denies",
+        "line": 134
+      },
+      {
+        "name": "test_no_grant_denies",
+        "line": 140
+      },
+      {
+        "name": "test_a_step_grant_denies_a_call_from_another_step",
+        "line": 146
+      },
+      {
+        "name": "test_a_workspace_wide_grant_allows_the_whole_workspace",
+        "line": 151
+      },
+      {
+        "name": "test_a_forbid_ceiling_overrides_a_matching_grant",
+        "line": 157
+      },
+      {
+        "name": "test_a_ceiling_that_does_not_match_leaves_the_grant_in_force",
+        "line": 164
+      },
+      {
+        "name": "test_a_blanket_forbid_denies_every_call_to_the_tool",
+        "line": 171
+      },
+      {
+        "name": "test_a_ceiling_named_by_a_denial_is_not_a_grant_ref",
+        "line": 177
+      }
+    ]
+  },
+  {
     "path": "v2/services/tool_service/tests/test_persistence.py",
     "kind": "test",
-    "bytes": 2051,
-    "sha256": "bce2daa77c5729662e7f4a2da38d6a2d50c15daf6c54d9960d4fde7ca0f56a92",
-    "lines": 53,
+    "bytes": 2298,
+    "sha256": "a0fb0f363fffb2f173ef1f1674b4df89ae2f15c16c5c404ea935259b5c69c554",
+    "lines": 57,
     "tests": [
       {
         "name": "test_migrations_match_the_schema",
-        "line": 20
+        "line": 22
       },
       {
-        "name": "test_migrations_create_the_tables_in_two_revisions",
-        "line": 24
+        "name": "test_migrations_create_the_tables_in_three_revisions",
+        "line": 26
       },
       {
         "name": "test_migrations_roll_back",
-        "line": 34
+        "line": 40
       },
       {
         "name": "test_resources_are_unique_by_namespace_and_name",
-        "line": 41
+        "line": 47
       },
       {
         "name": "test_there_is_no_store_yet",
-        "line": 48
+        "line": 54
       }
     ]
   },
   {
     "path": "v2/services/virtual_control_plane/README.md",
     "kind": "documentation",
-    "bytes": 2918,
-    "sha256": "57b4b093dee89c83857bbfa1a3583c22a2f476ef4f9f1fb82cbf021b2a896e45",
-    "lines": 57,
+    "bytes": 20578,
+    "sha256": "464ef0359801ef7ea9ed5ef2a112b61d0630a04fbcfff6edfc8780ecbd207424",
+    "lines": 331,
     "tests": []
   },
   {
     "path": "v2/services/virtual_control_plane/__main__.py",
     "kind": "source/config",
-    "bytes": 7677,
-    "sha256": "965ff3b1889d4007395cfbb3aba2e04c04d29162fe28cfbad4bef620554776b7",
-    "lines": 188,
+    "bytes": 9636,
+    "sha256": "0287a55d873978a3f8705d036dffdfbceac724fdc26beba6b2e509a9d5362120",
+    "lines": 221,
     "tests": []
   },
   {
@@ -4752,11 +5218,35 @@
     "tests": []
   },
   {
+    "path": "v2/services/virtual_control_plane/application/lifecycle.py",
+    "kind": "source/config",
+    "bytes": 24606,
+    "sha256": "d38d8b9a995c490d90c1737d5af828b217a05ac791f08c8e0d76c06a70a70164",
+    "lines": 417,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/application/outbox.py",
+    "kind": "source/config",
+    "bytes": 6773,
+    "sha256": "4345ef36e0c2a1c101231af090b4f0ba0dafb44283d9b12243a55f938ed57816",
+    "lines": 145,
+    "tests": []
+  },
+  {
     "path": "v2/services/virtual_control_plane/application/ports.py",
     "kind": "source/config",
-    "bytes": 4038,
-    "sha256": "6398e68d420e743cfeb6fc3f33d05190d7a05ae6fc2a280673b7a0e551e88503",
-    "lines": 115,
+    "bytes": 7086,
+    "sha256": "7b19d80873c4d4df1a178fce556d3e1cf851637ad0ad6b95bfff828cb64230b8",
+    "lines": 186,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/application/transactions.py",
+    "kind": "source/config",
+    "bytes": 3962,
+    "sha256": "74fda47cbbaf478b84d49ad36a7192afc330b1984acb18eb75472ec9b264f75c",
+    "lines": 103,
     "tests": []
   },
   {
@@ -4776,11 +5266,27 @@
     "tests": []
   },
   {
+    "path": "v2/services/virtual_control_plane/jetstream.py",
+    "kind": "source/config",
+    "bytes": 3170,
+    "sha256": "4f7c62cc019ad07b37594a3d74e7c35f518141ea99a3b046d797ef93c27ebcc1",
+    "lines": 82,
+    "tests": []
+  },
+  {
     "path": "v2/services/virtual_control_plane/persistence/__init__.py",
     "kind": "source/config",
     "bytes": 565,
     "sha256": "3a05f0aba834919f2afea2a356d1049961ab16ada93a9e49923ff15e03dca87c",
     "lines": 17,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/durable.py",
+    "kind": "source/config",
+    "bytes": 10382,
+    "sha256": "57f8a609a808e22174f31fe5e83eed167e4148ecb97cd2dc1611982d428b7dd5",
+    "lines": 217,
     "tests": []
   },
   {
@@ -4800,6 +5306,30 @@
     "tests": []
   },
   {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/09a0811b905f_add_workspace_event_outbox.py",
+    "kind": "source/config",
+    "bytes": 1428,
+    "sha256": "c228bdc8b9ea686b05c1ff13e6f0ab186c5e83c9dcb814493b1b37af9446e324",
+    "lines": 40,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/591de3f10346_index_unfinished_workspace_operations.py",
+    "kind": "source/config",
+    "bytes": 1117,
+    "sha256": "062f164dd508a75e73cef3473311c6c96966bc36e775dcebb91897392f05d26b",
+    "lines": 31,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/65700680b119_index_pending_workspace_allocations.py",
+    "kind": "source/config",
+    "bytes": 703,
+    "sha256": "350789043477f4d605d7c233213befc9644653d4e68a1affebf5cc1a5c055273",
+    "lines": 26,
+    "tests": []
+  },
+  {
     "path": "v2/services/virtual_control_plane/persistence/migrations/versions/720d08e24193_create_workspaces.py",
     "kind": "source/config",
     "bytes": 1345,
@@ -4808,11 +5338,35 @@
     "tests": []
   },
   {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/86fd2767ba46_index_workspace_lookup_and_pages.py",
+    "kind": "source/config",
+    "bytes": 1886,
+    "sha256": "c74fb0aad8954468d9125617d5600cef5d3b894af8b27e131d57a76d4ad7b30e",
+    "lines": 33,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/c36db826eebb_index_pending_outbox_events_by_workspace.py",
+    "kind": "source/config",
+    "bytes": 705,
+    "sha256": "3765d234dfb871296122a574c20ebc3140cacfb909840d04989f3100856ebe4c",
+    "lines": 28,
+    "tests": []
+  },
+  {
     "path": "v2/services/virtual_control_plane/persistence/migrations/versions/d8f92154b5f7_add_workspace_locator.py",
     "kind": "source/config",
     "bytes": 916,
     "sha256": "2229ed6da82153d501b5c9f4b39bf233cfb4ea1a44e68de7ca7e8e2cf341d52a",
     "lines": 33,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/ebfe415656b6_consolidate_durable_lifecycle_records.py",
+    "kind": "source/config",
+    "bytes": 3104,
+    "sha256": "ca2da1bc1a4bb0f4f56c7e241607f3b0969cacc18fc11205373a8b0668c2b748",
+    "lines": 79,
     "tests": []
   },
   {
@@ -4826,17 +5380,17 @@
   {
     "path": "v2/services/virtual_control_plane/persistence/schema.py",
     "kind": "source/config",
-    "bytes": 1082,
-    "sha256": "0ac9793536045068ba7cfb5c3120e2aa850f9cb4dee8a08e1924104f23ea08d4",
-    "lines": 26,
+    "bytes": 3758,
+    "sha256": "76fcdf9434606c928c89950a494cb2732b9ea5d67c50fbb272cc0edf696cce03",
+    "lines": 64,
     "tests": []
   },
   {
     "path": "v2/services/virtual_control_plane/persistence/sqlite/__init__.py",
     "kind": "source/config",
-    "bytes": 2813,
-    "sha256": "bee1806b324222b5ad10ca5e8eb3da49f0aa644692bdd92fb803b7e29ae0a1a2",
-    "lines": 68,
+    "bytes": 3466,
+    "sha256": "ab3198ee38608161daf780edc52b2808894351b2d0da06463499dcf11e3dd747",
+    "lines": 78,
     "tests": []
   },
   {
@@ -4848,31 +5402,112 @@
     "tests": []
   },
   {
+    "path": "v2/services/virtual_control_plane/providers/__init__.py",
+    "kind": "source/config",
+    "bytes": 373,
+    "sha256": "9fdab4fac27ab10efdc78ebe01306ae9da1538eed26070f6283988375501a735",
+    "lines": 7,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/providers/smolvm/__init__.py",
+    "kind": "source/config",
+    "bytes": 298,
+    "sha256": "0a4b28eea6847e9d3551117595f923f705667b20317dddf5d67a184a74e7c9dd",
+    "lines": 7,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/providers/smolvm/provider.py",
+    "kind": "source/config",
+    "bytes": 15286,
+    "sha256": "f7d9dfdb3eb7eaa2bdb222acb3440494eafddb1b895b6238766d193cb313c4f6",
+    "lines": 296,
+    "tests": []
+  },
+  {
     "path": "v2/services/virtual_control_plane/pyproject.toml",
     "kind": "source/config",
-    "bytes": 974,
-    "sha256": "3ed8c6b9b0fe8e23345d534cfe37b9e74c6a2396ba3fc6bbef8dc1ee79355e09",
+    "bytes": 1003,
+    "sha256": "26f2072c2791ab8ca8f21cd077f9826956e15c209c7662d183db704722bef7ae",
     "lines": 25,
     "tests": []
   },
   {
     "path": "v2/services/virtual_control_plane/tests/fakes.py",
     "kind": "test",
-    "bytes": 2159,
-    "sha256": "2dbba69793d133bb8081e746665c5656d51927a6f429ce94c85f86a13c07cf95",
-    "lines": 60,
+    "bytes": 5137,
+    "sha256": "8670f6c960bf40b373e8dbc6194e1928de8f114eef0457244ad90a36cbf4c869",
+    "lines": 124,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/smolvm_fake.py",
+    "kind": "test",
+    "bytes": 6198,
+    "sha256": "1113bc52115feeaef210b92a48551359382a93e5227b9eebce8868726d04b9ef",
+    "lines": 158,
     "tests": []
   },
   {
     "path": "v2/services/virtual_control_plane/tests/test_boundaries.py",
     "kind": "test",
-    "bytes": 1194,
-    "sha256": "55fd437d5c63dd9aa264c7825bb07c3d9d1ba7bf07a56e9248d12e39c3621a60",
-    "lines": 36,
+    "bytes": 1969,
+    "sha256": "de98ef162cbeffc6089e7b955eb7483d538597da3a31cc9ad35d4ac5ba7fb442",
+    "lines": 53,
     "tests": [
       {
-        "name": "test_the_application_layer_imports_no_transport_or_storage_library",
-        "line": 27
+        "name": "test_the_application_layer_imports_no_transport_storage_library_or_provider",
+        "line": 37
+      },
+      {
+        "name": "test_the_smolvm_adapter_keeps_its_guest_layout_and_cli_to_itself",
+        "line": 47
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_durable.py",
+    "kind": "test",
+    "bytes": 14774,
+    "sha256": "0800cab29a0e175bc8672775117fb574e509b8c6e1f2f5d4e7ef0bfe98be9c3b",
+    "lines": 322,
+    "tests": [
+      {
+        "name": "test_failure_rolls_back_every_record",
+        "line": 43
+      },
+      {
+        "name": "test_restart_preserves_snapshots_response_and_failed_ownership",
+        "line": 65
+      },
+      {
+        "name": "test_command_identity_conflicts_do_not_overwrite_receipts",
+        "line": 100
+      },
+      {
+        "name": "test_rejection_retention_and_json_object_order",
+        "line": 129
+      },
+      {
+        "name": "test_concurrent_connections_accept_only_once",
+        "line": 152
+      },
+      {
+        "name": "test_store_does_not_create_tables_at_runtime",
+        "line": 180
+      },
+      {
+        "name": "test_postgres_is_explicitly_unsupported",
+        "line": 201
+      },
+      {
+        "name": "test_equivalent_numeric_command_identity_survives_restart",
+        "line": 207
+      },
+      {
+        "name": "test_upgrade_preserves_legacy_rows_without_adopting_them",
+        "line": 241
       }
     ]
   },
@@ -4885,82 +5520,236 @@
     "tests": [
       {
         "name": "test_a_second_process_cannot_take_an_already_held_lock",
-        "line": 8
+        "line": 10
       },
       {
         "name": "test_releasing_lets_another_process_take_it",
-        "line": 18
+        "line": 20
       },
       {
         "name": "test_the_context_manager_releases_on_exit",
-        "line": 28
+        "line": 30
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_lifecycle.py",
+    "kind": "test",
+    "bytes": 38157,
+    "sha256": "4f67895647acad714dfbead7996ac61f0e4c130e91c908e375b498c88c9b5a13",
+    "lines": 710,
+    "tests": [
+      {
+        "name": "test_nats_retry_concurrency_restart_and_typed_queries",
+        "line": 90
+      },
+      {
+        "name": "test_denied_requests_cannot_replay_reserve_or_read",
+        "line": 156
+      },
+      {
+        "name": "test_loopback_dial_to_public_broker_is_denied",
+        "line": 187
+      },
+      {
+        "name": "test_crash_after_allocation_recovers_same_runtime_and_failed_allocation_retains_ownership",
+        "line": 204
+      },
+      {
+        "name": "test_durable_rejections_and_atomic_rollback",
+        "line": 253
+      },
+      {
+        "name": "test_allocation_pages_are_indexed_bounded_concurrent_and_claimed",
+        "line": 304
+      },
+      {
+        "name": "test_stalled_allocation_refills_slots_and_times_out_pending",
+        "line": 372
+      },
+      {
+        "name": "test_workspace_queries_use_indexes_and_do_not_reserve_writer",
+        "line": 414
+      },
+      {
+        "name": "test_provider_cancellation_keeps_background_worker_alive",
+        "line": 446
+      },
+      {
+        "name": "test_status_queries_do_not_reserve_writer",
+        "line": 479
+      },
+      {
+        "name": "test_ensure_is_idempotent_and_recovers_pending_and_running_operations",
+        "line": 515
+      },
+      {
+        "name": "test_missing_provider_fails_operations_explicitly_without_stalling_other_work",
+        "line": 622
+      },
+      {
+        "name": "test_transient_failures_back_off_with_a_cap_and_eventually_fail",
+        "line": 679
       }
     ]
   },
   {
     "path": "v2/services/virtual_control_plane/tests/test_main.py",
     "kind": "test",
-    "bytes": 2823,
-    "sha256": "c3d0ba25558a2110ba11137bf615b9ab58a73f98e3cc85bae23c374b9d0c4bf6",
-    "lines": 79,
+    "bytes": 3815,
+    "sha256": "cc39c8a1b167db8c376e7ab69716ca3e64c8a21336f1cc98f8f4aacb8ad5adab",
+    "lines": 98,
     "tests": [
       {
         "name": "test_capabilities_get_truthfully_reports_no_providers",
-        "line": 34
+        "line": 37
       },
       {
         "name": "test_a_rejecting_authorizer_prevents_the_handler_from_running",
-        "line": 41
+        "line": 44
       },
       {
         "name": "test_local_operator_refuses_a_broker_listening_beyond_loopback",
-        "line": 58
+        "line": 61
       },
       {
-        "name": "test_local_operator_allows_a_loopback_broker",
-        "line": 64
+        "name": "test_local_operator_allows_a_loopback_broker_as_the_local_tenant",
+        "line": 67
       },
       {
         "name": "test_main_fails_startup_rather_than_racing_a_running_vcp_for_the_state_directory",
-        "line": 68
+        "line": 73
+      },
+      {
+        "name": "test_providers_are_configured_from_the_environment_and_default_to_none",
+        "line": 85
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_outbox.py",
+    "kind": "test",
+    "bytes": 32958,
+    "sha256": "4cedb0cdadf8c19c68866f86ed2c1df09c37bc1b33a7089e7c81807327634eee",
+    "lines": 717,
+    "tests": [
+      {
+        "name": "test_failure_rolls_back_events_with_lifecycle_records",
+        "line": 114
+      },
+      {
+        "name": "test_command_replay_appends_no_duplicate_event_even_after_restart",
+        "line": 135
+      },
+      {
+        "name": "test_event_identity_is_unique_and_causal",
+        "line": 147
+      },
+      {
+        "name": "test_failed_event_is_not_overtaken_within_its_workspace",
+        "line": 178
+      },
+      {
+        "name": "test_a_stuck_workspace_backlog_does_not_hide_other_workspaces",
+        "line": 206
+      },
+      {
+        "name": "test_pending_query_seeks_past_blocked_backlogs",
+        "line": 227
+      },
+      {
+        "name": "test_pending_query_preserves_batch_order_and_limit_with_exclusions",
+        "line": 275
+      },
+      {
+        "name": "test_workspace_index_upgrade_and_downgrade_preserve_outbox_events",
+        "line": 293
+      },
+      {
+        "name": "test_acknowledgement_before_marker_crash_retries_the_same_event",
+        "line": 337
+      },
+      {
+        "name": "test_worker_backs_off_then_publishes_when_the_broker_recovers",
+        "line": 353
+      },
+      {
+        "name": "test_failed_workspace_backoff_does_not_delay_healthy_workspaces",
+        "line": 376
+      },
+      {
+        "name": "test_retry_deadline_wakes_worker_before_its_idle_poll",
+        "line": 408
+      },
+      {
+        "name": "test_shutdown_cancels_in_flight_publish_and_leaves_it_recoverable",
+        "line": 426
+      },
+      {
+        "name": "test_notify_wakes_an_idle_worker",
+        "line": 459
+      },
+      {
+        "name": "test_upgrade_from_lifecycle_schema_preserves_records",
+        "line": 477
+      },
+      {
+        "name": "test_event_subject_rejects_tokens_that_would_change_the_subject",
+        "line": 510
+      },
+      {
+        "name": "test_lost_acknowledgement_and_marker_crash_republish_the_same_identity",
+        "line": 618
+      },
+      {
+        "name": "test_broker_outage_preserves_pending_events_and_their_order",
+        "line": 647
+      },
+      {
+        "name": "test_service_restart_publishes_events_committed_before_a_crash",
+        "line": 684
       }
     ]
   },
   {
     "path": "v2/services/virtual_control_plane/tests/test_persistence.py",
     "kind": "test",
-    "bytes": 3088,
-    "sha256": "c2d811f63dae9240c647246c562d226991bcee2a5d8747b188214e9bc9f7fbb1",
-    "lines": 78,
+    "bytes": 5244,
+    "sha256": "40145774bd06c88b53bd266341ccce8ab313ea13838508c8a290c3a160120d4a",
+    "lines": 126,
     "tests": [
       {
         "name": "test_migrations_match_the_schema",
-        "line": 23
+        "line": 25
       },
       {
         "name": "test_migrations_roll_back",
-        "line": 27
+        "line": 29
       },
       {
         "name": "test_tracks_a_workspace_through_its_lifecycle",
-        "line": 34
+        "line": 36
       },
       {
         "name": "test_recovering_ownership_updates_the_locator",
-        "line": 57
+        "line": 59
       },
       {
         "name": "test_postgres_store_is_a_stub",
-        "line": 74
+        "line": 76
+      },
+      {
+        "name": "test_list_filters_in_sql_using_legacy_status_index",
+        "line": 81
       }
     ]
   },
   {
     "path": "v2/services/virtual_control_plane/tests/test_provider_conformance.py",
     "kind": "test",
-    "bytes": 3854,
-    "sha256": "3364fbcb85f87e8a5eae44e03fa525dff6fac03c050fd8b0e71941f730958e2e",
-    "lines": 100,
+    "bytes": 16265,
+    "sha256": "cc190c421400aef3db6b237d89ebba7fee4c29ebeb914fbd3e7f7ee6da19d3c1",
+    "lines": 355,
     "tests": [
       {
         "name": "test_create_persists_the_providers_locator_and_becomes_ready",
@@ -4973,6 +5762,76 @@
       {
         "name": "test_destroy_releases_the_workspace_through_its_own_provider",
         "line": 84
+      },
+      {
+        "name": "test_create_then_idempotent_ensure_and_honest_capabilities",
+        "line": 222
+      },
+      {
+        "name": "test_ownership_mismatch_fails_without_touching_the_foreign_compute",
+        "line": 271
+      },
+      {
+        "name": "test_failed_preparation_fails_the_workspace_and_retains_ownership",
+        "line": 298
+      },
+      {
+        "name": "test_allocation_before_a_crash_is_reconciled_after_restart",
+        "line": 327
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_smolvm_provider.py",
+    "kind": "test",
+    "bytes": 10483,
+    "sha256": "a64dd1b02168ad76183a51d1a09138102765d8b37b389c763eb81a128c621c8e",
+    "lines": 215,
+    "tests": [
+      {
+        "name": "test_capabilities_report_microvm_isolation_and_the_configured_tools_only",
+        "line": 59
+      },
+      {
+        "name": "test_validate_rejects_fractional_vcpus_and_context_paths_outside_the_workspace",
+        "line": 71
+      },
+      {
+        "name": "test_provision_creates_an_owned_labelled_machine_prepares_it_and_is_idempotent",
+        "line": 86
+      },
+      {
+        "name": "test_interrupted_preparation_resumes_without_recloning_or_recreating",
+        "line": 120
+      },
+      {
+        "name": "test_a_foreign_machine_under_our_name_is_refused_and_left_untouched",
+        "line": 142
+      },
+      {
+        "name": "test_ensure_restarts_a_stopped_machine_and_refuses_to_reprovision_a_vanished_one",
+        "line": 157
+      },
+      {
+        "name": "test_a_tool_missing_from_the_image_fails_preparation_terminally",
+        "line": 182
+      },
+      {
+        "name": "test_cli_failures_are_transient_while_a_missing_or_hung_cli_is_handled",
+        "line": 193
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_smolvm_smoke.py",
+    "kind": "test",
+    "bytes": 5961,
+    "sha256": "56d3d64eb8cfab661ca22b0c3b1fc15ff9ce02e5b551052d0e0b60c11f41f244",
+    "lines": 118,
+    "tests": [
+      {
+        "name": "test_real_smolvm_create_restart_and_ensure",
+        "line": 64
       }
     ]
   },
@@ -4985,19 +5844,19 @@
     "tests": [
       {
         "name": "test_creating_an_unregistered_provider_fails_explicitly",
-        "line": 25
+        "line": 27
       },
       {
         "name": "test_recovering_with_only_a_different_provider_registered_fails_rather_than_switching",
-        "line": 40
+        "line": 42
       },
       {
         "name": "test_recovering_an_unavailable_provider_fails_rather_than_reducing_isolation",
-        "line": 65
+        "line": 67
       },
       {
         "name": "test_destroying_an_unregistered_provider_fails_explicitly",
-        "line": 88
+        "line": 90
       }
     ]
   },
@@ -5012,9 +5871,9 @@
   {
     "path": "v2/uv.lock",
     "kind": "source/config",
-    "bytes": 221970,
-    "sha256": "183359774560eac2ecde81a6d567cb9b4b37cd01ba5712bb25ec8ca88862a9eb",
-    "lines": 1191,
+    "bytes": 235232,
+    "sha256": "86a6d493ce456cbe7def68f8d43999d76e08d8e7ebcd8c7f20237aefce834e8c",
+    "lines": 1309,
     "tests": []
   }
 ]
