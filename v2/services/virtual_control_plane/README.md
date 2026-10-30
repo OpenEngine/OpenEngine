@@ -153,9 +153,13 @@ publishes each envelope unchanged to
 `vcp-events` stream with `Nats-Msg-Id` set to the event ID, and sets
 `published_at` only after JetStream acknowledges it. If an event is not
 acknowledged, later events of that workspace wait; other workspaces continue.
-Failures (broker outage, missing stream, database errors) back off
-exponentially from 0.1 s to 10 s and never discard a record. It polls every
-second when idle; `notify()` wakes it sooner. On shutdown it stops between
+Publication failures (broker outage or missing stream) back off per workspace
+exponentially from 0.1 s to 10 s and never discard a record. A successful
+publication resets that workspace's backoff. Healthy workspaces keep draining;
+`notify()` and idle polling can publish their new events without retrying a
+blocked workspace early. The next retry deadline also wakes the worker, even
+if the idle poll is longer. Database errors retain a shared bounded backoff.
+It polls every second when idle; `notify()` wakes it sooner. On shutdown it stops between
 events, cancels an in-flight publish after 5 s and closes before the NATS
 connection; anything unacknowledged is published after the next start.
 

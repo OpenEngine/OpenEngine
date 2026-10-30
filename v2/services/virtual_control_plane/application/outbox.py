@@ -9,8 +9,8 @@ the same event ID and envelope: delivery is at least once. The broker's
 still deduplicate on `event_id`.
 
 Events of one workspace are published in insertion order: once one fails, its
-workspace's later events wait for the next pass, and the pass reads past them to
-reach other workspaces. Nothing here knows event
+workspace's later events wait for its retry deadline, while other workspaces
+continue publishing. Nothing here knows event
 types, so task and conversation producers can append through the same port.
 This assumes the service's single-writer deployment; it does not coordinate
 several publishers.
@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable
+from time import monotonic
 
 from virtual_control_plane.application.ports import EventPublisher
 from virtual_control_plane.application.transactions import Outbox, PendingEvent as PendingEvent
@@ -30,8 +32,9 @@ log = logging.getLogger(__name__)
 class PublishFailed(RuntimeError):
     """At least one pending event was not acknowledged; it stays pending."""
 
-    def __init__(self, workspaces: int) -> None:
+    def __init__(self, workspaces: int, *, published: int = 0) -> None:
         super().__init__(f"{workspaces} workspace(s) have unacknowledged events")
+        self.published = published
 
 
 class OutboxPublisher:
@@ -42,6 +45,8 @@ class OutboxPublisher:
         self._outbox, self._publisher = outbox, publisher
         self._batch_size, self._idle_interval = batch_size, idle_interval
         self._min_backoff, self._max_backoff = min_backoff, max_backoff
+        # Workspace -> (retry deadline, delay to use if its next attempt fails).
+        self._retries: dict[str, tuple[float, float]] = {}
         self._wake = asyncio.Event()
         self._stopping = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -50,9 +55,14 @@ class OutboxPublisher:
         """Publish promptly after a commit appended events, rather than at the next poll."""
         self._wake.set()
 
-    async def publish_pending(self) -> int:
-        """Publish the head of every workspace; return how many were acknowledged, or raise `PublishFailed`."""
-        blocked: set[str] = set()
+    async def publish_pending(self, *, exclude: Iterable[str] = ()) -> int:
+        """Publish a pass now; the background worker excludes workspaces still in backoff.
+
+        Return how many were acknowledged, or raise `PublishFailed` with the
+        acknowledged count. Explicit calls can retry immediately.
+        """
+        blocked = set(exclude)
+        failed: set[str] = set()
         published = 0
         while not self._stopping.is_set():
             # Refetch without newly blocked workspaces, so their backlog cannot hide everyone else's.
@@ -68,17 +78,22 @@ class OutboxPublisher:
                 except Exception:
                     # A later event of this workspace must not overtake this one.
                     blocked.add(event.workspace_id)
+                    failed.add(event.workspace_id)
                     newly_blocked = True
-                    log.warning("event not acknowledged; it stays pending",
+                    _, delay = self._retries.get(event.workspace_id, (0.0, self._min_backoff))
+                    delay = min(delay, self._max_backoff)
+                    self._retries[event.workspace_id] = (monotonic() + delay, min(delay * 2, self._max_backoff))
+                    log.warning("event not acknowledged; workspace retry in %.1fs", delay,
                                 extra={"vcp.event_id": event.event_id, "vcp.outbox_sequence": event.sequence},
                                 exc_info=True)
                     continue
                 await self._outbox.mark_published(event.sequence)
+                self._retries.pop(event.workspace_id, None)
                 published += 1
             if len(events) < self._batch_size or not newly_blocked:
                 break
-        if blocked:
-            raise PublishFailed(len(blocked))
+        if failed:
+            raise PublishFailed(len(failed), published=published)
         return published
 
     def start(self) -> None:
@@ -99,16 +114,25 @@ class OutboxPublisher:
         while not self._stopping.is_set():
             self._wake.clear()
             try:
-                published = await self.publish_pending()
+                now = monotonic()
+                published = await self.publish_pending(exclude={
+                    workspace for workspace, (deadline, _) in self._retries.items() if deadline > now
+                })
+            except PublishFailed as failure:
+                # Publication retries are per workspace; keep draining healthy backlogs.
+                published = failure.published
             except Exception:
-                # Covers broker outages and database failures alike: nothing is lost.
+                # Database failures affect the whole pass; notifications must not defeat this backoff.
                 log.warning("outbox publication failed; retrying in %.1fs", backoff, exc_info=True)
                 await self._pause(backoff, wakeable=False)
                 backoff = min(backoff * 2, self._max_backoff)
                 continue
             backoff = self._min_backoff
             if published < self._batch_size:
-                await self._pause(self._idle_interval, wakeable=True)
+                delay = self._idle_interval
+                if self._retries:
+                    delay = min(delay, max(0.0, min(deadline for deadline, _ in self._retries.values()) - monotonic()))
+                await self._pause(delay, wakeable=True)
 
     async def _pause(self, seconds: float, *, wakeable: bool) -> None:
         waits = [asyncio.ensure_future(self._stopping.wait())]

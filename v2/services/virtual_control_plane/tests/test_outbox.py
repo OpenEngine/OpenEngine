@@ -277,6 +277,57 @@ def test_worker_backs_off_then_publishes_when_the_broker_recovers(config: Databa
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("notify", [False, True])
+def test_failed_workspace_backoff_does_not_delay_healthy_workspaces(config: DatabaseConfig, notify: bool) -> None:
+    async def scenario() -> None:
+        async with _store(config) as store:
+            async with store.transaction() as tx:
+                await tx.append_event(_event("evt_a0", "ws_a1"))
+                await tx.append_event(_event("evt_a1", "ws_a1"))
+            publisher = Recording(lambda event: event["resources"]["workspace_id"] == "ws_a1")
+            worker = OutboxPublisher(
+                store, publisher, batch_size=2, idle_interval=60 if notify else 0.01,
+                min_backoff=30, max_backoff=30,
+            )
+            worker.start()
+            try:
+                await _until(lambda: publisher.attempts, timeout=2)
+                # Commit more than one batch after the failed workspace has entered backoff.
+                healthy = [f"evt_b{index}" for index in range(5)]
+                async with store.transaction() as tx:
+                    for event_id in healthy:
+                        await tx.append_event(_event(event_id, "ws_b1"))
+                if notify:
+                    worker.notify()
+                await _until(lambda: len(publisher.acknowledged) == len(healthy), timeout=2)
+                assert [event["event_id"] for event in publisher.acknowledged] == healthy
+                # Wake-ups and healthy batches neither retry the failing head early nor overtake it.
+                assert [event["event_id"] for event in publisher.attempts] == ["evt_a0", *healthy]
+                assert [event.event_id for event in await store.pending_events(10)] == ["evt_a0", "evt_a1"]
+            finally:
+                await worker.close(timeout=1)
+
+    asyncio.run(scenario())
+
+
+def test_retry_deadline_wakes_worker_before_its_idle_poll(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        async with _store(config) as store:
+            async with store.transaction() as tx:
+                await tx.append_event(_event("evt_1"))
+            publisher = Recording(lambda event: len(publisher.attempts) == 1)
+            worker = OutboxPublisher(store, publisher, idle_interval=60, min_backoff=0.02, max_backoff=0.02)
+            worker.start()
+            try:
+                await _until_async(lambda: store.pending_events(10), [], timeout=2)
+                assert publisher.attempts == [_event("evt_1"), _event("evt_1")]
+                assert publisher.acknowledged == [_event("evt_1")]
+            finally:
+                await worker.close(timeout=1)
+
+    asyncio.run(scenario())
+
+
 def test_shutdown_cancels_in_flight_publish_and_leaves_it_recoverable(config: DatabaseConfig) -> None:
     async def scenario() -> None:
         async with _store(config) as store:
