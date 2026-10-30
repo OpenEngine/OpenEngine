@@ -13,7 +13,7 @@ Coding agents are fast. The hard part is making their output trustworthy every t
 
 ![OpenEngine lifecycle graph: implement, run CI, review in parallel, rerank, and open a pull request](docs/images/oe_land.png)
 
-▶ [Watch the walkthrough](docs/images/oe-graphs-and-loops.mp4): graphs, loops, and what OpenEngine does on GitHub, in 90 seconds.
+https://github.com/user-attachments/assets/f76429d7-86b4-4a37-af2d-52124af453c0
 
 ## Try it in two minutes
 

@@ -1,10 +1,13 @@
-"""Render the graphs-and-loops walkthrough video (docs/images/oe-graphs-and-loops.mp4).
+"""Render the graphs-and-loops walkthrough video embedded in the README.
 
 The terminal scenes are scripted to match the CLI's output formats; the GitHub
 scenes scroll through headless-Chrome captures of real issues and pull requests.
 Needs macOS (Menlo, SF and Apple Symbols fonts, Google Chrome) and ffmpeg:
 
-    uv run --with pillow --with fonttools python scripts/render_walkthrough.py docs/images/oe-graphs-and-loops.mp4
+    uv run --with pillow --with fonttools python scripts/render_walkthrough.py walkthrough.mp4
+
+To update the README, drag the result into a GitHub comment and replace the README's
+user-attachments URL with the one GitHub returns.
 
 Set ELEVENLABS_API_KEY to narrate each subtitle (OE_WALKTHROUGH_VOICE picks the voice);
 clips are cached in the temp directory, and without either the video renders silent.
