@@ -30,7 +30,7 @@ info:
     | `oe.v1.tools.get` | namespace and name | Tool |
     | `oe.v1.tools.list` | namespace, optional label selector | tools the caller may see |
     | `oe.v1.tools.delete` | namespace and name | deletion result |
-    | `oe.v1.tools.invoke.{namespace}.{name}` | invocation ID, step, arguments | invocation accepted |
+    | `oe.v1.tools.invoke.{namespace}.{name}` | invocation ID, arguments | invocation accepted |
     | `oe.v1.tools.grants.apply` | ToolGrant resource | accepted once stored |
     | `oe.v1.tools.grants.get` | namespace and name | ToolGrant |
     | `oe.v1.tools.grants.list` | namespace and filters | grants |
@@ -87,10 +87,21 @@ info:
       authorization too.
 
     ## Invocations
-    The service derives the tool from the subject and the workspace from the
-    caller's verified credentials, then creates the ToolInvocation itself.
-    Clients cannot apply one, so they cannot forge its identity or
-    authorization. The resolved tool definition is stored with it, so
+    The service derives the tool from the subject, and the workspace and step
+    attempt from the caller's verified NATS credential, then creates the
+    ToolInvocation itself, filling `spec.workspaceRef` and `spec.stepAttemptId`.
+    Neither is in the payload. Clients cannot apply one, so they cannot forge
+    its identity or authorization.
+
+    A workspace calls with the user credential the Virtual Control Plane
+    issues for one task attempt inside the tenant's account. Its claims name
+    the workspace and the `stepAttemptId`; it may publish only to
+    `oe.v1.tools.invoke.>` and the reply inbox prefix, and expires at the
+    attempt's deadline. The runtime places it in the workspace, and the
+    Virtual Control Plane revokes it when the attempt ends, when the Graph
+    Engine deletes the attempt's grants. A credential that names no step
+    attempt is rejected with PERMISSION_DENIED. Grants resolve by the
+    credential's `(workspace, stepAttemptId)`. The resolved tool definition is stored with it, so
     changing the Tool cannot change accepted work. Deleting and recreating a
     Tool or a ToolGrant under the same name gives it a new `uid`; nothing
     carries over through name reuse.

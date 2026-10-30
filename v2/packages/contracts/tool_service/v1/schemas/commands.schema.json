@@ -43,16 +43,15 @@
       ]
     },
     "invoke_tool_payload": {
-      "description": "Call the Tool the subject names. The workspace comes from the caller's verified credentials, never from the payload. Rejected with NOT_FOUND for an unknown tool, INVALID_STATE when it is not Ready, PERMISSION_DENIED without an active grant for the workspace or step, and INVALID_ARGUMENT when `arguments` fail the tool's `inputSchema` or the grant's constraints. Accepted means a ToolInvocation named `invocationId` was recorded.",
+      "description": "Call the Tool the subject names. The workspace and step attempt come from the caller's verified NATS credential, never from the payload. Rejected with NOT_FOUND for an unknown tool, INVALID_STATE when it is not Ready, PERMISSION_DENIED when the credential names no step attempt or the attempt has no active grant, and INVALID_ARGUMENT when `arguments` fail the tool's `inputSchema` or the grant's constraints. Accepted means a ToolInvocation named `invocationId` was recorded.",
       "type": "object",
-      "required": ["invocationId", "stepAttemptId", "arguments"],
+      "required": ["invocationId", "arguments"],
       "additionalProperties": false,
       "properties": {
         "invocationId": {
           "description": "The caller's name for the invocation, unique in the namespace; it becomes the ToolInvocation's `metadata.name`.",
           "$ref": "../../../common/v1/types.schema.json#/$defs/resource_name"
         },
-        "stepAttemptId": { "$ref": "../../../common/v1/types.schema.json#/$defs/step_attempt_id" },
         "arguments": { "type": "object", "description": "Checked against the tool's `inputSchema`." }
       }
     },
