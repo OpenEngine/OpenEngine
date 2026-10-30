@@ -196,6 +196,7 @@ class _Surface:
 
     app: object
     client: httpx.AsyncClient
+    service_token: str = ""
 
     def subscribe(
         self,
@@ -204,7 +205,8 @@ class _Surface:
         cursor: int | str | None = None,
         last_event_id: int | None = None,
     ):
-        return _subscribe(self.app, run_id, cursor=cursor, last_event_id=last_event_id)
+        return _subscribe(self.app, run_id, cursor=cursor, last_event_id=last_event_id,
+                          service_token=self.service_token)
 
     async def read(
         self, run_id: str, kind: str, count: int = 1, **where: int
@@ -216,10 +218,13 @@ class _Surface:
 
 @asynccontextmanager
 async def _subscribe(
-    app: object, run_id: str, *, cursor: int | str | None, last_event_id: int | None
+    app: object, run_id: str, *, cursor: int | str | None, last_event_id: int | None,
+    service_token: str = "",
 ) -> AsyncIterator[_Feed]:
     feed = _Feed()
     headers = [(b"host", b"test")]
+    if service_token:
+        headers.append((b"authorization", f"Bearer {service_token}".encode()))
     if last_event_id is not None:
         headers.append((b"last-event-id", str(last_event_id).encode()))
     path = f"/api/runs/{run_id}/events"
@@ -257,7 +262,7 @@ async def _subscribe(
 
 
 @asynccontextmanager
-async def _server(runtime: GraphRuntime, *, async_client) -> AsyncIterator[_Surface]:
+async def _server(runtime: GraphRuntime, *, async_client, service_token: str = "") -> AsyncIterator[_Surface]:
     """A running control server, entered and left the way a real one is.
 
     Through the app's own lifespan rather than by calling `runtime.aclose()`
@@ -267,8 +272,18 @@ async def _server(runtime: GraphRuntime, *, async_client) -> AsyncIterator[_Surf
     """
     app = create_app(runtime)
     async with app.router.lifespan_context(app):
-        async with async_client(app, base_url="http://test") as client:
-            yield _Surface(app, client)
+        from engine.apps.web.github_login import GitHubLogin
+
+        protected = GitHubLogin(None, service_token=lambda: service_token).middleware(app) if service_token else app
+        async with async_client(protected, base_url="http://test") as client:
+            if service_token:
+                for supplied in ("", "wrong"):
+                    assert (await client.post("/api/runs", json={"graphId": str(GRAPH)}, headers={
+                        "Authorization": f"Bearer {supplied}"})).status_code == 401
+                    assert (await client.get("/api/runs/missing/events", headers={
+                        "Authorization": f"Bearer {supplied}"})).status_code == 401
+                client.headers["Authorization"] = f"Bearer {service_token}"
+            yield _Surface(protected, client, service_token)
 
 
 async def _start(surface: _Surface, graph: GraphId = GRAPH, **body: object) -> dict:
@@ -543,8 +558,9 @@ def test_a_fan_out_reports_every_node_of_the_superstep_at_once(
 # --- steering: routed to the execution, not through the graph ---------------
 
 
+@pytest.mark.parametrize("service_token", ["", "s" * 40])
 def test_steering_reaches_the_execution_without_restarting_the_node(
-    build: Backend, *, async_client
+    build: Backend, service_token: str, *, async_client
 ) -> None:
     """The whole requirement: a message to something already running.
 
@@ -557,7 +573,7 @@ def test_steering_reaches_the_execution_without_restarting_the_node(
     runtime = build(graph)
 
     async def scenario() -> tuple[dict, httpx.Response, list[dict], dict]:
-        async with _server(runtime, async_client=async_client) as surface:
+        async with _server(runtime, async_client=async_client, service_token=service_token) as surface:
             run = await _start(surface)
             run_id = str(run["runId"])
             await surface.read(run_id, "transcript")

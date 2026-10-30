@@ -2744,11 +2744,11 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
     )
 
     # Scope connections and pending flows to the verified browser identity.
-    # No authenticated user inherits the legacy local account's credentials.
+    # Browser users never inherit the shared account; service credentials use it.
     _github_flows: dict[tuple[str, str], tuple[DeviceFlowState, int, str]] = {}
 
     def _github_store(request: Request) -> GitHubCredentialStore:
-        if not github_login.configured:
+        if not github_login.configured or github_login._has_service_token(request):
             return _credential_store
         user = github_login._read_session(request)
         if user is None:
@@ -2798,7 +2798,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 # Agents act as the host's `oe connect github` connection.
                 # With sign-in on, the one made here is the user's own and is
                 # not it.
-                "agentsUseConnection": not github_login.configured,
+                "agentsUseConnection": not github_login.configured or github_login._has_service_token(_request),
             }
         )
 

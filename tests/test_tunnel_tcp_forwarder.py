@@ -44,17 +44,25 @@ def daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.Fixt
     skips that step of the guide would.
     """
     public_url = getattr(request, "param", True)
+    browser_login = public_url == "login"
     for name in (
         "ENGINE_HOST", "ENGINE_PORT", "ENGINE_SQLITE_PATH", "ENGINE_GRAPH_STATE_DIRECTORY",
         "ENGINE_GITHUB_LOGIN_CLIENT_ID", "ENGINE_GITHUB_LOGIN_REDIRECT_URI",
         "ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "ENGINE_SERVICE_TOKEN", "ENGINE_ONBOARDING_TOKEN",
     ):
         monkeypatch.delenv(name, raising=False)
+    if browser_login:
+        monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_ID", "id")
+        monkeypatch.setenv("ENGINE_GITHUB_LOGIN_CLIENT_SECRET", "secret")
+        monkeypatch.setenv("ENGINE_GITHUB_LOGIN_REDIRECT_URI",
+                           f"https://{PUBLIC_HOST}/api/auth/github/callback")
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "device-client")
     monkeypatch.setenv("ENGINE_SERVICE_TOKEN", TOKEN)
     monkeypatch.setenv("ENGINE_STATE_DIRECTORY", str(tmp_path / "state"))
     monkeypatch.chdir(tmp_path)
     config = tmp_path / "engine.toml"
-    config.write_text(f'public_url = "https://{PUBLIC_HOST}"\n' if public_url else "")
+    config.write_text((f'public_url = "https://{PUBLIC_HOST}"\n' if public_url else "")
+                      + ("[access]\noperators = [1]\n" if browser_login else ""))
     port = _free_port()
     server = uvicorn.Server(uvicorn.Config(build_app(config), host="127.0.0.1", port=port, log_level="error"))
     thread = threading.Thread(target=server.run, daemon=True)
@@ -138,11 +146,24 @@ def test_a_tcp_forwarder_needs_the_token_even_without_public_url(tcp_forwarder: 
     )
 
 
-@pytest.mark.parametrize("daemon", [False], indirect=True)
+@pytest.mark.parametrize("daemon", [False, "login"], indirect=True)
 def test_cli_connections_against_token_protected_daemon(daemon, monkeypatch, capsys):
     from engine.apps.cli import __main__ as cli
     from engine.apps.cli import connect
     from engine.cli.backends import Backend
+    from engine.apps.web.github_auth import DeviceFlowComplete, DeviceFlowState
+    from unittest.mock import AsyncMock, MagicMock
+    import keyring
+
+    saved = {}
+    monkeypatch.setattr(keyring, "get_keyring", lambda: MagicMock(priority=5))
+    monkeypatch.setattr(keyring, "get_password", lambda s, u: saved.get((s, u)))
+    monkeypatch.setattr(keyring, "set_password", lambda s, u, v: saved.update({(s, u): v}))
+    monkeypatch.setattr(keyring, "delete_password", lambda s, u: saved.pop((s, u), None))
+    monkeypatch.setattr("engine.apps.web.api.start_device_flow", AsyncMock(return_value=DeviceFlowState(
+        "device", "code", "https://github.com/login/device", 900, 0)))
+    monkeypatch.setattr("engine.apps.web.api.poll_device_flow",
+                        AsyncMock(return_value=DeviceFlowComplete("shared-token")))
 
     backend = Backend("local", f"http://127.0.0.1:{daemon}", token_env="CLI_TEST_TOKEN")
     monkeypatch.setattr(connect, "selected_backend", lambda _arguments: backend)
@@ -150,8 +171,10 @@ def test_cli_connections_against_token_protected_daemon(daemon, monkeypatch, cap
         monkeypatch.setenv("CLI_TEST_TOKEN", token)
         expected = 0 if token == TOKEN else 1
         assert cli.main(["connect", "gh"]) == expected
+        assert cli.main(["connect", "github"]) == expected
         assert cli.main(["connections"]) == expected
         assert cli.main(["connection", "list"]) == expected
+        assert cli.main(["disconnect", "github"]) == expected
         output = capsys.readouterr()
         if expected:
             assert "authentication required" in output.err

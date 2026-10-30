@@ -838,3 +838,46 @@ def test_browser_users_have_isolated_credentials_and_device_flows(
     assert GitHubCredentialStore(user_id=2).get() is None
     assert GitHubCredentialStore().get() == "legacy-personal-token"
     assert GitHubCredentialStore(user_id=1).credential_identity != GitHubCredentialStore(user_id=2).credential_identity
+
+
+def test_service_connection_uses_shared_store_with_browser_login(
+    monkeypatch, *, github_auth_app, client
+):
+    from engine.apps.web.github_login import GitHubLogin, GitHubLoginConfig
+
+    saved = {}
+    monkeypatch.setattr(keyring, "get_keyring", _high_priority_backend)
+    monkeypatch.setattr(keyring, "get_password", lambda s, u: saved.get((s, u)))
+    monkeypatch.setattr(keyring, "set_password", lambda s, u, v: saved.update({(s, u): v}))
+    monkeypatch.setattr(keyring, "delete_password", lambda s, u: saved.pop((s, u), None))
+    personal = GitHubCredentialStore(user_id=1)
+    personal.set("personal-token")
+    shared = GitHubCredentialStore()
+    config = GitHubLoginConfig("id", "secret", "https://engine.test/api/auth/github/callback")
+    token = "s" * 40
+    login = GitHubLogin(config, service_token=lambda: token)
+    monkeypatch.setattr("engine.apps.web.api.GitHubLogin", lambda *_, **__: login)
+    app = github_auth_app(login_config=config, credential_store=shared)
+    start = AsyncMock(return_value=DeviceFlowState("device", "code", "https://github.com/login/device", 900, 5))
+    poll = AsyncMock(return_value=DeviceFlowComplete("shared-token"))
+    monkeypatch.setattr("engine.apps.web.api.start_device_flow", start)
+    monkeypatch.setattr("engine.apps.web.api.poll_device_flow", poll)
+    with client(app, base_url="https://engine.test") as browser:
+        for supplied in ("", "wrong"):
+            headers = {"Authorization": f"Bearer {supplied}"}
+            for method, path in (("GET", "status"), ("POST", "connect"),
+                                 ("POST", "connect/poll"), ("POST", "disconnect")):
+                assert browser.request(method, f"/api/github/{path}", headers=headers).status_code == 401
+        headers = {"Authorization": f"Bearer {token}"}
+        assert browser.get("/api/github/status", headers=headers).json()["agentsUseConnection"] is True
+        assert browser.post("/api/github/connect", headers=headers).json()["userCode"] == "code"
+        assert browser.post("/api/github/connect/poll", headers=headers).json()["status"] == "complete"
+        assert shared.get() == "shared-token"
+        browser.cookies.set("engine_session", login._make_session_cookie(1, "alice"))
+        assert browser.get("/api/github/status").json()["agentsUseConnection"] is False
+        # Explicit service credentials still select the shared store with a cookie present.
+        assert browser.post("/api/github/disconnect", headers=headers).status_code == 204
+        assert shared.get() is None
+        assert personal.get() == "personal-token"
+    start.assert_awaited_once()
+    poll.assert_awaited_once_with("test-client-id", "device", 5)
