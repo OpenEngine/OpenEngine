@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "jsonschema>=4.23",
     "nats-py>=2.16.0",
+    "nkeys>=0.2.1",
     "openengine-telemetry",
     "pyyaml>=6.0",
 ]

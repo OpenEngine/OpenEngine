@@ -25,6 +25,7 @@ await server.close()   # drain and close the dedicated connection within a 5-sec
 | `errors` | `ServiceError` for `error.schema.json`, with `retryable` kept as sent; `Unavailable` |
 | `client` | the bounded, retrying requester |
 | `server` | the subscription adapter, the `Authorizer` port and `LocalOperator` |
+| `operator` | provisions operator-mode NATS for the shared deployment: nkeys, signed JWTs, the resolver config and service `.creds` |
 
 A route's key may name subject parameters, such as
 `operations.{operation_id}.get`: the server checks each against
@@ -70,3 +71,26 @@ preempt them. Forced transport abort is covered for TCP, not WebSockets.
 Local-operator mode assumes a trusted managed broker with no remote ingress.
 Its listener check is not publisher identity; authenticated remote callers and
 broker permissions are tracked in #1051.
+
+### Operator mode
+
+The shared deployment runs nats-server in operator mode, which
+`openengine.messaging.operator` provisions; see
+[infra/nats](../../infra/nats/README.md#operator-mode) for the layout it
+writes and how the server is started from it. `oe up` does not use it: local
+development keeps the single-account `infra/nats/nats-server.conf`, with every
+service dedicated to `LOCAL_TENANT`.
+
+```bash
+uv run python -m openengine.messaging.operator provision DIRECTORY   # generate everything
+uv run python -m openengine.messaging.operator show DIRECTORY        # the service account's exports
+```
+
+`Deployment.generate()` makes an operator, the system account, the service
+account and one user per shared service (`cxn`, `ge`, `tools`, `vcp`), all
+as ed25519 nkeys with JWTs signed by their issuer (`nkeys` does the signing).
+`Deployment.write(directory)` writes the JWTs, the seeds and `.creds` with
+owner-only permissions, and `nats-server.conf`. `Deployment.account` signs an
+extra account into the resolver, which the live tests use for a test-only
+tenant; per-tenant provisioning is #1237, and `tenant_imports` gives the
+imports such an account needs.
