@@ -1,5 +1,9 @@
 # OpenEngine V2 architecture
 
+## Security architecture
+
+[Open the interactive security atlas](https://openengine.cc/v2/security/). The map separates code on its pinned main revision from contracts, ticket requirements, unmerged PRs and proposals, with source anchors and captured evidence for each area. Check its snapshot date before treating a ticket or implementation status as current.
+
 ## Services
 OpenEngine is split into four services:
 
