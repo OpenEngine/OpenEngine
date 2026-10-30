@@ -32,7 +32,7 @@ from nats.errors import (
 
 from openengine.messaging import envelopes
 from openengine.messaging.errors import ServiceError, Unavailable
-from openengine.messaging.tenancy import Mode, Principal, shared_subject, subject_template
+from openengine.messaging.tenancy import Mode, Principal, SharedClientNeedsAccount, shared_subject, subject_template
 from openengine.telemetry import sending
 
 DEFAULT_TIMEOUT_SECONDS = 2.0
@@ -58,7 +58,7 @@ class Client:
         principal: Principal | None = None, tenancy: Mode = Mode.DEDICATED,
     ) -> None:
         if tenancy is Mode.SHARED and (principal is None or principal.account is None):
-            raise ValueError("a shared-mode client needs a principal with an account key to address")
+            raise SharedClientNeedsAccount
         self._nats = nats
         self.timeout = timeout
         self.attempts = attempts

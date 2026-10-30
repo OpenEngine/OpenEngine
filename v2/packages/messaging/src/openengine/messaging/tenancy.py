@@ -45,6 +45,35 @@ class Mode(StrEnum):
     SHARED = "shared"
 
 
+class TenancyError(ValueError):
+    """A tenant ID, account key or subject that does not fit the tenancy contracts."""
+
+
+class NotATenantId(TenancyError):
+    def __init__(self, description: str) -> None:
+        super().__init__(f"not a tenant_id: {description}")
+
+
+class NilTenantId(TenancyError):
+    def __init__(self) -> None:
+        super().__init__("the nil UUID is never a tenant")
+
+
+class NotAnAccount(TenancyError):
+    def __init__(self, description: str) -> None:
+        super().__init__(f"not an account key: {description}")
+
+
+class NotAnOeSubject(TenancyError):
+    def __init__(self, subject: str) -> None:
+        super().__init__(f"not an oe.v1 subject: {subject}")
+
+
+class SharedClientNeedsAccount(TenancyError):
+    def __init__(self) -> None:
+        super().__init__("a shared-mode client needs a principal with an account key to address")
+
+
 @dataclass(frozen=True)
 class Principal:
     """Whom a request is for: its tenant, and the account key it arrived through where one is known."""
@@ -59,18 +88,18 @@ class Principal:
 
 
 def check_tenant_id(tenant_id: object) -> str:
-    """`tenant_id` if it is a well-formed, non-nil tenant ID; raise ValueError otherwise."""
+    """`tenant_id` if it is a well-formed, non-nil tenant ID; raise TenancyError otherwise."""
     if found := envelopes.violations(f"{TYPES}#/$defs/tenant_id", tenant_id):
-        raise ValueError(f"not a tenant_id: {found[0][1]}")
+        raise NotATenantId(found[0][1])
     if set(str(tenant_id)) <= set("0-"):
-        raise ValueError("the nil UUID is never a tenant")
+        raise NilTenantId
     return str(tenant_id)
 
 
 def check_account(account: object) -> str:
-    """`account` if it is a well-formed account public key; raise ValueError otherwise."""
+    """`account` if it is a well-formed account public key; raise TenancyError otherwise."""
     if found := envelopes.violations(f"{TYPES}#/$defs/account", account):
-        raise ValueError(f"not an account key: {found[0][1]}")
+        raise NotAnAccount(found[0][1])
     return str(account)
 
 
@@ -165,5 +194,5 @@ def subject_template(subject: str) -> str:
 def _with_third_token(subject: str, token: str) -> str:
     tokens = subject.split(".")
     if tokens[:ACCOUNT_POSITION] != ["oe", "v1"] or len(tokens) <= ACCOUNT_POSITION:
-        raise ValueError(f"not an oe.v1 subject: {subject}")
+        raise NotAnOeSubject(subject)
     return ".".join(tokens[:ACCOUNT_POSITION] + [token] + tokens[ACCOUNT_POSITION:])

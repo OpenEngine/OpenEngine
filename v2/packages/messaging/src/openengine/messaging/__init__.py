@@ -21,6 +21,7 @@ from openengine.messaging.tenancy import (
     Principal,
     Shared,
     Tenancy,
+    TenancyError,
 )
 
 __all__ = [
@@ -41,6 +42,7 @@ __all__ = [
     "ServiceError",
     "Shared",
     "Tenancy",
+    "TenancyError",
     "Unavailable",
     "listen_address",
 ]
