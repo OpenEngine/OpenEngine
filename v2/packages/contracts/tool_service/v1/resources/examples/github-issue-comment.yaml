@@ -53,8 +53,7 @@ spec:
     stepAttemptId: stepa_88_review_1
   toolRef:
     name: github-issue-comment
-  constraints:
-    issueNumbers: [42]
+  when: context.arguments.issueNumber == 42
   expiresAt: "2026-10-22T00:00:00Z"
 status:
   phase: Active
@@ -86,3 +85,13 @@ status:
       - name: reviewer-comment-access
         uid: grant-uid-123
   attemptCount: 0
+---
+apiVersion: openengine.cc/v1alpha1
+kind: Policy
+metadata:
+  name: no-issue-43-comments
+  namespace: default
+spec:
+  policy: 'forbid(principal, action == Action::"invoke", resource == Tool::"tool-uid-123") when { context.arguments.issueNumber == 43 };'
+status:
+  phase: Active

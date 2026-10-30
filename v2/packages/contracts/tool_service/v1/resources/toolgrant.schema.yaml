@@ -40,14 +40,18 @@ $defs:
       toolRef:
         description: The Tool in the grant's namespace.
         $ref: '#/$defs/name_ref'
-      constraints:
+      when:
         description: >-
-          Limits on the arguments, such as `issueNumbers: [42]`. Their shape
-          is the tool's adapter's to define; it validates them when the grant
-          is applied and enforces them on every call.
-        type: object
-        maxProperties: 64
-        default: {}
+          In Cedar, the extra conditions a call must satisfy for the grant to
+          allow it, such as `context.arguments.issueNumber == 42`. `context`
+          holds the call's `arguments`, checked against the tool's
+          `inputSchema`, and its `now` in epoch milliseconds; `resource` is the
+          tool. The principal and the action are fixed by the grant, so they
+          may not be referenced. Omitted means the grant allows every call to
+          the tool.
+        type: string
+        minLength: 1
+        maxLength: 4096
       expiresAt:
         description: After this UTC time the grant denies every call. Omitted means it does not expire.
         $ref: ../../../common/v1/types.schema.json#/$defs/utc_timestamp

@@ -61,7 +61,7 @@ class Group:
 GROUPS = (
     Group("connection_bus", "Connection Bus", ("Connection",)),
     Group("graph_engine", "Graph Engine", ("Graph", "Loop")),
-    Group("tool_service", "Tool Service", ("Tool", "ToolGrant", "ToolInvocation")),
+    Group("tool_service", "Tool Service", ("Tool", "ToolGrant", "Policy", "ToolInvocation")),
     Group("virtual_control_plane", "Virtual Control Plane", ("Workspace",)),
 )
 KINDS = tuple(kind for group in GROUPS for kind in group.kinds)

@@ -24,11 +24,7 @@
           "toolRef": {
             "name": "github-issue-comment"
           },
-          "constraints": {
-            "issueNumbers": [
-              42
-            ]
-          },
+          "when": "context.arguments.issueNumber == 42",
           "expiresAt": "2026-10-22T00:00:00Z"
         }
       }

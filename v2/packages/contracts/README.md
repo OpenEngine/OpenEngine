@@ -23,7 +23,8 @@ answers (`action: receive`, with a typed reply) and the events it publishes
 | Control and query subjects (`oe.v1.…`) with typed requests and replies | GE answers `oe.v1.ge.control.graphs.apply`, `oe.v1.ge.query.graphs.list`, `oe.v1.ge.query.graphs.{graph_id}.get` and `oe.v1.ge.query.operations.{operation_id}.get`, and rejects its other subjects with `UNSUPPORTED_CAPABILITY`, through [`openengine-messaging`](../messaging/README.md). No other service answers yet. |
 | Event subjects and payloads (`oe.v1.{svc}.events.…`, `oe.v1.tools.events.invocations.…`) | The `cxn-events`, `ge-events`, `tools-events` and `vcp-events` streams exist (`oe migrate`) and capture these subjects. VCP publishes committed events from its transactional outbox to `vcp-events`, but no lifecycle handler produces any yet; nothing publishes to the others. |
 | Operation, job, execution, workspace, session and approval models | GE records `graphs.apply` operations, graph revisions and command receipts, each scoped to a project (`default` unless a request names one; a project name grants no authorization by itself). Nothing else implements them. |
-| Tool, grant and invocation tables (`tools` database) | Migrations only; no store reads or writes them yet. |
+| Tool, grant, policy and invocation tables (`tools` database) | Migrations only; no store reads or writes them yet. |
+| Tool authorization in Cedar (a grant's `when` and the operator's `forbid` policies) | `authorization.py` in the tool service: the Cedar schema, the condition and ceiling checks, and the decision. No service code calls it yet. |
 | Validation tooling | Implemented: schema, subject, cross-field and example checks; AsyncAPI validation and HTML rendering. |
 
 This work creates no consumers or broker permissions. The tool service adds
@@ -80,7 +81,7 @@ Every kind, whichever service owns it, has `apiVersion: openengine.cc/v1alpha1`
 | -- | -- | -- |
 | Connection Bus | `Connection` | `connections.apply` |
 | Graph Engine | `Graph`, `Loop` | `graphs.apply`, `loops.apply` |
-| Tool Service | `Tool`, `ToolGrant`, `ToolInvocation` | `tools.apply`; `toolgrants.apply` by GE from a Graph step's `agent.tools`; invocations are created by `tools.invoke` |
+| Tool Service | `Tool`, `ToolGrant`, `Policy`, `ToolInvocation` | `tools.apply`; `toolgrants.apply` by GE from a Graph step's `agent.tools`; `policies.apply` by trusted callers; invocations are created by `tools.invoke` |
 | Virtual Control Plane | `Workspace` | `workspaces.apply` |
 
 Each kind is defined once, as a JSON Schema in YAML under
@@ -151,7 +152,7 @@ are a separate format.
 The tool service follows its own subject layout, which separates resource
 management from execution: `oe.v1.tools.{apply,get,list,delete}`,
 `oe.v1.tools.invoke.{namespace}.{name}`, `oe.v1.tools.grants.…`,
-`oe.v1.tools.invocations.…`, and events on
+`oe.v1.tools.policies.…`, `oe.v1.tools.invocations.…`, and events on
 `oe.v1.tools.events.invocations.{namespace}.{invocation_id}.{event}` in the
 `tools-events` stream. Its namespaces and names are subject tokens of
 lower-case letters, digits and `-` (`resource_name` in `types.schema.json`).

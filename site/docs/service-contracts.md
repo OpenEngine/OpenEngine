@@ -29,6 +29,7 @@ creates it, a known one updates it.
 | [Loop](pathname:///contracts/graph_engine/v1/resources/#loop) | Graph Engine | Runs a graph on a schedule. | [`loop.schema.yaml`](pathname:///contracts/graph_engine/v1/resources/loop.schema.yaml) |
 | [Tool](pathname:///contracts/tool_service/v1/resources/#tool) | Tool Service | A capability agents can call, bound to one connection. | [`tool.schema.yaml`](pathname:///contracts/tool_service/v1/resources/tool.schema.yaml) |
 | [ToolGrant](pathname:///contracts/tool_service/v1/resources/#toolgrant) | Tool Service | Lets a workspace, or one step in it, call a tool. Graphs declare them in each step's `tools`. | [`toolgrant.schema.yaml`](pathname:///contracts/tool_service/v1/resources/toolgrant.schema.yaml) |
+| [Policy](pathname:///contracts/tool_service/v1/resources/#policy) | Tool Service | A Cedar `forbid` that no grant may exceed; an operator's ceiling on tool access. | [`policy.schema.yaml`](pathname:///contracts/tool_service/v1/resources/policy.schema.yaml) |
 | [ToolInvocation](pathname:///contracts/tool_service/v1/resources/#toolinvocation) | Tool Service | The record of one call. The service creates it; you read it. | [`toolinvocation.schema.yaml`](pathname:///contracts/tool_service/v1/resources/toolinvocation.schema.yaml) |
 | [Workspace](pathname:///contracts/virtual_control_plane/v1/resources/#workspace) | Virtual Control Plane | A place where agents work, on a provider. | [`workspace.schema.yaml`](pathname:///contracts/virtual_control_plane/v1/resources/workspace.schema.yaml) |
 

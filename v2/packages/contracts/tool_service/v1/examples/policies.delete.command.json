@@ -1,0 +1,14 @@
+{
+  "message": "DeletePolicyCommand",
+  "subject": "oe.v1.tools.policies.delete",
+  "payload": {
+    "command_id": "cmd_policies_delete_1",
+    "causal_path": [
+      "cmd_policies_delete_1"
+    ],
+    "payload": {
+      "namespace": "default",
+      "name": "no-issue-43-comments"
+    }
+  }
+}

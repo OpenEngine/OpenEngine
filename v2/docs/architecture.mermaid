@@ -64,13 +64,15 @@ flowchart LR
         end
     end
     subgraph tools["Tool Service (tools)"]
-        tools_control["NATS control<br/><b>oe.v1.tools.</b><br/>apply<br/>delete<br/>invoke.{namespace}.{name}<br/>grants.apply<br/>grants.delete<br/>invocations.cancel"]
+        tools_control["NATS control<br/><b>oe.v1.tools.</b><br/>apply<br/>delete<br/>invoke.{namespace}.{name}<br/>grants.apply<br/>grants.delete<br/>policies.apply<br/>policies.delete<br/>invocations.cancel"]
         class tools_control subjects
-        tools_query["NATS query<br/><b>oe.v1.tools.</b><br/>get<br/>list<br/>grants.get<br/>grants.list<br/>invocations.get<br/>invocations.list"]
+        tools_query["NATS query<br/><b>oe.v1.tools.</b><br/>policies.list<br/>get<br/>list<br/>grants.get<br/>grants.list<br/>invocations.get<br/>invocations.list"]
         class tools_query subjects
         tools_events["NATS events → stream tools-events<br/><b>oe.v1.tools.events.invocations.{namespace}.{invocation_id}.</b><br/>accepted<br/>running<br/>succeeded<br/>failed<br/>blocked-auth<br/>outcome-unknown<br/>cancelled"]
         class tools_events subjects
         subgraph tools_db["database tools"]
+            tools_t_policies[("policies<br/>A ceiling on tool access, written by an operator in Cedar. It is a forbid that a grant may never exceed, and it is checked with the grants on every call.")]
+            class tools_t_policies table
             tools_t_tool_grants[("tool_grants<br/>Who may call which tool. tool_uid is the tool the grant was bound to when applied; a grant whose tool has since been replaced denies every call.")]
             class tools_t_tool_grants table
             tools_t_tool_invocation_attempts[("tool_invocation_attempts<br/>Each try at an invocation. idempotency_key is what a provider-idempotent tool repeats on every attempt; outcome stays null while an attempt runs or when an interrupted one could not be reconciled.")]
