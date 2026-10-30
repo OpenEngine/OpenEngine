@@ -649,11 +649,11 @@ def loops_list(arguments: argparse.Namespace) -> int:
     loops = client.get("/loops", project=project)["loops"]
     if not arguments.json:
         _table(loops, [
-            ("NAME", "name"), ("GRAPH", lambda l: f"{l['graph']} v{l['version']}"), ("STATE", "state"),
-            ("EVERY", lambda l: _duration(l["everySeconds"])),
-            ("NEXT", lambda l: l["nextRunAt"] or "-"), ("ACTIVE RUN", lambda l: l["activeRunId"] or "-"),
-            ("PRS", lambda l: f"{l['prCount']}/{l['limits']['maxPrs'] or '∞'}"),
-            ("SPEND", _spend), ("PAUSED BECAUSE", lambda l: l["pauseReason"] or "-"),
+            ("NAME", "name"), ("GRAPH", lambda loop: f"{loop['graph']} v{loop['version']}"), ("STATE", "state"),
+            ("EVERY", lambda loop: _duration(loop["everySeconds"])),
+            ("NEXT", lambda loop: loop["nextRunAt"] or "-"), ("ACTIVE RUN", lambda loop: loop["activeRunId"] or "-"),
+            ("PRS", lambda loop: f"{loop['prCount']}/{loop['limits']['maxPrs'] or '∞'}"),
+            ("SPEND", _spend), ("PAUSED BECAUSE", lambda loop: loop["pauseReason"] or "-"),
         ])
     else:
         _print({"loops": loops})
