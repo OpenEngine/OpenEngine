@@ -11,7 +11,7 @@
 
 Coding agents are fast. The hard part is making their output trustworthy when nobody is watching. OpenEngine is an open-source software factory built around graphs and loops:
 
-- **Graphs for the work you repeat.** A graph is a YAML or Python file: the steps, their prompts, and which agent runs each one. Implement-and-review, fixing Dependabot PRs whose CI failed, grooming issues, a nightly security review. Review steps can require a different agent than the one that wrote the code, which makes the review adversarial by construction. Graphs are versioned, so a change to the process is reviewed like a change to the code.
+- **Graphs for the work you repeat.** A graph is a YAML or Python file: the steps, their prompts, and which agent runs each one.
 - **Loops that keep it going.** A loop runs a graph on a schedule, inside limits on spend and open pull requests, and pauses with a reason when it hits one. Each run reports what it did or why it skipped.
 - **Your hardware, your agents.** Every machine running `oe daemon` is a backend, and one `oe` CLI switches between them, so tens or hundreds of loops can run across a Mac mini under the desk, a Linux box in the rack, or a cloud VM. Agents are the coding CLIs you already have: Claude Code, Codex, OpenCode, or local models through Ollama.
 - **Work continues while your laptop is closed.** Loops run on the daemon's machine, not yours. Assign an issue to OpenEngine to start a run, @-mention it on a pull request to steer one, and come back to pull requests with adversarial findings and an impact rating already posted.
