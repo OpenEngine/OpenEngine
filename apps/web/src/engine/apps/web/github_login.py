@@ -623,6 +623,7 @@ _AUTH_EXEMPT = frozenset({
     f"{_PATH}/callback",
     f"{_PATH}/status",
     f"{_PATH}/logout",
+    "/api/slack/callback",  # Authenticated by pending OAuth state in its handler.
     "/api/slack/events",  # Authenticated by the Slack signature in its handler.
     "/api/github/events",  # Authenticated by the GitHub signature in its handler.
 })
