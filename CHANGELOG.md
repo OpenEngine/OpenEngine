@@ -18,6 +18,61 @@ a distinct `ENGINE_ONBOARDING_TOKEN` and a backend configured with
   still load with deprecation warnings and will be removed in the next release.
   Legacy string checkout paths remain accepted silently.
 
+## [1.12.0](https://github.com/OpenEngine/OpenEngine/compare/v1.11.0...v1.12.0) (2026-10-31)
+
+
+### Features
+
+* **contracts:** define internal workspace runtime protocol ([#1183](https://github.com/OpenEngine/OpenEngine/issues/1183)) ([b0e2471](https://github.com/OpenEngine/OpenEngine/commit/b0e24711c7da5badb6c6546c6ffbceee3aa32da7))
+* **e2e:** add the benchmark spec scaffold, masking helper and teardown ([#1181](https://github.com/OpenEngine/OpenEngine/issues/1181)) ([3a8c258](https://github.com/OpenEngine/OpenEngine/commit/3a8c258be7b6b62411a736a635af1c8e3e356b44)), closes [#1139](https://github.com/OpenEngine/OpenEngine/issues/1139)
+* **e2e:** clone the calculator repo and apply its settings ([#1208](https://github.com/OpenEngine/OpenEngine/issues/1208)) ([1ce621e](https://github.com/OpenEngine/OpenEngine/commit/1ce621e9927e76a20848ace09a1e739d806ea965)), closes [#1144](https://github.com/OpenEngine/OpenEngine/issues/1144)
+* **e2e:** drive the calculator milestone with a graph the guide makes ([#1242](https://github.com/OpenEngine/OpenEngine/issues/1242)) ([b8fabab](https://github.com/OpenEngine/OpenEngine/commit/b8fabab04d539af450df758597626ebed80b6e68))
+* **e2e:** seed the calculator milestone and issues ([#1190](https://github.com/OpenEngine/OpenEngine/issues/1190)) ([997dac6](https://github.com/OpenEngine/OpenEngine/commit/997dac6ee9c8ff3b6e3180ab8ec3f8d16f5c8ffe)), closes [#1141](https://github.com/OpenEngine/OpenEngine/issues/1141)
+* **e2e:** set up OpenEngine in a clean container ([#1200](https://github.com/OpenEngine/OpenEngine/issues/1200)) ([99358db](https://github.com/OpenEngine/OpenEngine/commit/99358db407bc6041282bbc4b742f8d55b9bca7bd)), closes [#1143](https://github.com/OpenEngine/OpenEngine/issues/1143)
+* **e2e:** start a Cloudflare quick tunnel and point a webhook at OpenEngine ([#1189](https://github.com/OpenEngine/OpenEngine/issues/1189)) ([28ec129](https://github.com/OpenEngine/OpenEngine/commit/28ec129dd10db72b75da51b6504c7b763825c10e)), closes [#1142](https://github.com/OpenEngine/OpenEngine/issues/1142)
+* **messaging:** derive the request principal from the caller's account ([#1259](https://github.com/OpenEngine/OpenEngine/issues/1259)) ([9e3c7d5](https://github.com/OpenEngine/OpenEngine/commit/9e3c7d505ffe2f312ea55f8dd0df4dad41061c8f))
+* **tools:** replace ToolGrant constraints with a Cedar condition ([#1260](https://github.com/OpenEngine/OpenEngine/issues/1260)) ([7abe008](https://github.com/OpenEngine/OpenEngine/commit/7abe008a4e93964e8ef9815ed8d2cb7e4ed1d300))
+* **v2-cli:** check Graph rules and expressions in oe graph validate ([#1171](https://github.com/OpenEngine/OpenEngine/issues/1171)) ([ce5650b](https://github.com/OpenEngine/OpenEngine/commit/ce5650b113db0ccffb0fbfb0e7551ed6f252909a))
+* **v2-ge:** apply graphs as immutable revisions with durable command receipts ([#1182](https://github.com/OpenEngine/OpenEngine/issues/1182)) ([d4a7fbc](https://github.com/OpenEngine/OpenEngine/commit/d4a7fbc6a4180e326ef36fbb8870ea0a08a19403))
+* **v2-ge:** list and get graph revisions by name ([#1191](https://github.com/OpenEngine/OpenEngine/issues/1191)) ([8483f46](https://github.com/OpenEngine/OpenEngine/commit/8483f46c8c85d1b939a0c4d22d3caa16521915bc))
+* **v2-ge:** scope graph names and registry queries to projects ([#1199](https://github.com/OpenEngine/OpenEngine/issues/1199)) ([15fc020](https://github.com/OpenEngine/OpenEngine/commit/15fc020fb7941187cd99518136b6060b2048c906))
+* **v2-vcp:** boot the service by default with application boundaries ([#1187](https://github.com/OpenEngine/OpenEngine/issues/1187)) ([862dc9d](https://github.com/OpenEngine/OpenEngine/commit/862dc9d60901ab5e6cdda932d40460a24aad9d12))
+* **v2-vcp:** finish four-table lifecycle persistence. Closes [#1111](https://github.com/OpenEngine/OpenEngine/issues/1111) ([#1246](https://github.com/OpenEngine/OpenEngine/issues/1246)) ([16c17f4](https://github.com/OpenEngine/OpenEngine/commit/16c17f4b8a173daf544f58abc0050e5a8a8f9793))
+* **v2-vcp:** provision and ensure owned smolvm workspaces ([#1262](https://github.com/OpenEngine/OpenEngine/issues/1262)) ([05d14dc](https://github.com/OpenEngine/OpenEngine/commit/05d14dc6d751c726dbfd2c1b5382be3f619c0be6))
+* **v2-vcp:** publish workspace events through a transactional outbox ([#1248](https://github.com/OpenEngine/OpenEngine/issues/1248)) ([c607983](https://github.com/OpenEngine/OpenEngine/commit/c607983f51ed46aaf186a3617bb7c1c9c98e0f08))
+* **v2:** require a table comment and render it into ERDs and Architecture.md ([#1217](https://github.com/OpenEngine/OpenEngine/issues/1217)) ([28950d2](https://github.com/OpenEngine/OpenEngine/commit/28950d23baba9d9f508863d6f6aa2e3f845226ca))
+* **vcp:** accept workspace creation and expose lifecycle queries ([#1257](https://github.com/OpenEngine/OpenEngine/issues/1257)) ([fa227ca](https://github.com/OpenEngine/OpenEngine/commit/fa227ca05270eae8bd590af8b2973358f9dbd645))
+
+
+### Bug Fixes
+
+* [#807](https://github.com/OpenEngine/OpenEngine/issues/807) WorkOrder workflow names are indistinguishable after onboard ([#1247](https://github.com/OpenEngine/OpenEngine/issues/1247)) ([2d20285](https://github.com/OpenEngine/OpenEngine/commit/2d2028552b110aee12140ec3a3e351dc57d48e37))
+* **e2e:** secure tunneled daemons and publish remote access guide ([#1223](https://github.com/OpenEngine/OpenEngine/issues/1223)) ([c879265](https://github.com/OpenEngine/OpenEngine/commit/c8792656abc20fb2f5825bfdbedab4240b315237))
+* **graph-service:** record loop run start failures ([#1158](https://github.com/OpenEngine/OpenEngine/issues/1158)) ([bbaa21e](https://github.com/OpenEngine/OpenEngine/commit/bbaa21e0c3e0ad70cecd8d78bcf9437f1c97b17e))
+* normalize server repository paths for Slack work orders ([#1170](https://github.com/OpenEngine/OpenEngine/issues/1170)) ([b13494e](https://github.com/OpenEngine/OpenEngine/commit/b13494e02b26373f5acc62eb5d3aeaf2b31a80a1))
+* **review:** Allow forks to be reviewed if a maintainer requests it ([#1132](https://github.com/OpenEngine/OpenEngine/issues/1132)) ([99b297f](https://github.com/OpenEngine/OpenEngine/commit/99b297f85f598fa41ef6b20aceb3546b5ca25b46))
+* **runtime:** link tdd-guide pull requests to the picked issue ([#1154](https://github.com/OpenEngine/OpenEngine/issues/1154)) ([2207636](https://github.com/OpenEngine/OpenEngine/commit/220763685146ca1732eec7c6d5f1a3c4259aeffb))
+* **runtime:** mark empty exceptions failed and explain CI timeouts ([#1195](https://github.com/OpenEngine/OpenEngine/issues/1195)) ([f9614a4](https://github.com/OpenEngine/OpenEngine/commit/f9614a44c67bee199acbeacbc064d2bc34e9b6d6))
+* **v2:** preserve authorization and bound shutdown across NATS outages ([#1212](https://github.com/OpenEngine/OpenEngine/issues/1212)) ([924fd41](https://github.com/OpenEngine/OpenEngine/commit/924fd41c75c9ae0cc8cd39a76477b4df7bef616d))
+* **web:** accept service tokens for CLI connections and MCP operations ([#1250](https://github.com/OpenEngine/OpenEngine/issues/1250)) ([54b6b24](https://github.com/OpenEngine/OpenEngine/commit/54b6b241668989c76467697a9da910036380ff29))
+* **web:** bound expanded mobile conversation headers ([#1196](https://github.com/OpenEngine/OpenEngine/issues/1196)) ([3fdb77a](https://github.com/OpenEngine/OpenEngine/commit/3fdb77a512223ccd832b62805e6cf049bddda3bd))
+
+
+### Documentation
+
+* add a graphs-and-loops walkthrough video and drop oe go from the README ([#1244](https://github.com/OpenEngine/OpenEngine/issues/1244)) ([caf448a](https://github.com/OpenEngine/OpenEngine/commit/caf448ab452aa4d932420434abb790ef1c87ed21))
+* **blog:** why we test OpenEngine against the real thing ([#1270](https://github.com/OpenEngine/OpenEngine/issues/1270)) ([5ff640a](https://github.com/OpenEngine/OpenEngine/commit/5ff640a8e6ce27512806b2be744f70cb6c9bfbb8))
+* **contracts:** define a tenant as a NATS account ([#1240](https://github.com/OpenEngine/OpenEngine/issues/1240)) ([f29718c](https://github.com/OpenEngine/OpenEngine/commit/f29718c13097d92053589fc280c0daabba591d44))
+* **e2e:** add the Protect Your OpenEngine with a Token guide ([#1213](https://github.com/OpenEngine/OpenEngine/issues/1213)) ([39e918e](https://github.com/OpenEngine/OpenEngine/commit/39e918eaf7279f2bb18f7be031d9c0ffd6682ed2))
+* embed the walkthrough video and rewrite the README opening ([#1251](https://github.com/OpenEngine/OpenEngine/issues/1251)) ([2ee5c15](https://github.com/OpenEngine/OpenEngine/commit/2ee5c15fed6ad5ee83e4f2d76262c97b05a8b4af))
+* **plans:** record GitHub App and bot passkey spike findings ([#1179](https://github.com/OpenEngine/OpenEngine/issues/1179)) ([f323128](https://github.com/OpenEngine/OpenEngine/commit/f3231286157e8ff490cbbbb99a3c57b5913d348f)), closes [#1137](https://github.com/OpenEngine/OpenEngine/issues/1137)
+* **plans:** run the benchmark as whatever account gh is logged in as ([#1152](https://github.com/OpenEngine/OpenEngine/issues/1152)) ([6b18369](https://github.com/OpenEngine/OpenEngine/commit/6b18369c47b4b6bf0d6edf08ac704e038c721002))
+* readability note for architecture image ([0b8c65f](https://github.com/OpenEngine/OpenEngine/commit/0b8c65f37acea8f6657bc07e846839ee7b12287d))
+* restore formatting in ARCHITECTURE.md ([cefb6c4](https://github.com/OpenEngine/OpenEngine/commit/cefb6c436f1b99fc2a89b92c3234701c6d731f0e))
+* **tools:** identify the invoking step attempt from its NATS credential, not the payload ([#1255](https://github.com/OpenEngine/OpenEngine/issues/1255)) ([ce2c0b7](https://github.com/OpenEngine/OpenEngine/commit/ce2c0b7f1259729308a518a1edc1ef1c61fc39ba))
+* Update README ([10c9532](https://github.com/OpenEngine/OpenEngine/commit/10c953203a421c9863e871b8243cccbb56811867))
+* **v2:** publish security architecture atlas ([#1245](https://github.com/OpenEngine/OpenEngine/issues/1245)) ([1e97f1c](https://github.com/OpenEngine/OpenEngine/commit/1e97f1c463c89467304221b98e7ed9a10f88ebf4))
+
 ## [1.11.0](https://github.com/OpenEngine/OpenEngine/compare/v1.10.0...v1.11.0) (2026-10-23)
 
 
