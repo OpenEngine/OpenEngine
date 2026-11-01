@@ -1,0 +1,9 @@
+# Every table declared with global_table(): a table with no tenant_id, which any
+# tenant's requests may reach. Each needs a reason and a CODEOWNERS review.
+# assert_tenant_scoped() fails a global_table() missing here, and an entry here
+# with no global_table() to match.
+#
+# [[tables]]
+# service = "cxn"
+# table = "connection_routes"
+# reason = "maps (provider, external_id) to its tenant before the tenant is known"

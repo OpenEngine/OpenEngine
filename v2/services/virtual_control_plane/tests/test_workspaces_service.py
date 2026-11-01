@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import LOCAL_TENANT, DatabaseConfig
 
 from virtual_control_plane.application.ports import ProviderUnavailable, UnsupportedProvider
 from virtual_control_plane.application.workspaces import WorkspaceService
@@ -26,7 +26,7 @@ def config(tmp_path: Path) -> DatabaseConfig:
 
 def test_creating_an_unregistered_provider_fails_explicitly(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        workspaces = PERSISTENCE.open(config)
+        workspaces = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         service = WorkspaceService(workspaces, {})
         try:
             with pytest.raises(UnsupportedProvider):
@@ -44,7 +44,7 @@ def test_recovering_with_only_a_different_provider_registered_fails_rather_than_
 ) -> None:
     async def scenario() -> None:
         worktree = FakeWorktreeProvider()
-        workspaces = PERSISTENCE.open(config)
+        workspaces = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             created = await WorkspaceService(workspaces, {worktree.provider: worktree}).create(worktree.provider)
 
@@ -67,7 +67,7 @@ def test_recovering_with_only_a_different_provider_registered_fails_rather_than_
 def test_recovering_an_unavailable_provider_fails_rather_than_reducing_isolation(config: DatabaseConfig) -> None:
     async def scenario() -> None:
         vm = FakeVmProvider()
-        workspaces = PERSISTENCE.open(config)
+        workspaces = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             created = await WorkspaceService(workspaces, {vm.provider: vm}).create(vm.provider)
 
@@ -90,7 +90,7 @@ def test_recovering_an_unavailable_provider_fails_rather_than_reducing_isolation
 def test_destroying_an_unregistered_provider_fails_explicitly(config: DatabaseConfig) -> None:
     async def scenario() -> None:
         worktree = FakeWorktreeProvider()
-        workspaces = PERSISTENCE.open(config)
+        workspaces = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             created = await WorkspaceService(workspaces, {worktree.provider: worktree}).create(worktree.provider)
 

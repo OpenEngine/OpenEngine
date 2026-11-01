@@ -16,6 +16,7 @@ import yaml
 
 from openengine.contracts.validate import load_contract, validate_message
 from openengine.messaging import LOCAL_TENANT, ErrorCode, LocalOperator, Principal, Request, Server, ServiceError
+from openengine.persistence import LOCAL_TENANT as LOCAL_TENANT_ID
 from openengine.persistence import DatabaseConfig
 
 from graph_engine.persistence import PERSISTENCE, sqlite
@@ -52,7 +53,7 @@ def authorizer() -> LocalOperator:
 def send(tmp_path: Path, authorizer: LocalOperator):
     config = DatabaseConfig(sqlite_directory=tmp_path)
     PERSISTENCE.upgrade(config)
-    store = PERSISTENCE.open(config)
+    store = PERSISTENCE.open(config).scoped(LOCAL_TENANT_ID)
     registry = Registry(store, authorizer)
     server = Server(
         None, "ge", "nats://127.0.0.1:4222", queries=registry.queries(), commands=registry.commands(), authorizer=authorizer,
@@ -433,7 +434,7 @@ def test_a_receipt_kept_before_projects_still_replays(tmp_path: Path) -> None:
         ), {"subject": APPLY, "fingerprint": fingerprint, "response": json.dumps(response)})
     PERSISTENCE.upgrade(config)
 
-    store = PERSISTENCE.open(config)
+    store = PERSISTENCE.open(config).scoped(LOCAL_TENANT_ID)
     registry = Registry(store)
     server = Server(None, "ge", "nats://127.0.0.1:4222", queries=registry.queries(), commands=registry.commands())
     loop = asyncio.new_event_loop()

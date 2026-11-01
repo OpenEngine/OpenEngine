@@ -2,7 +2,7 @@
 name = "openengine-persistence"
 version = "0.0.0"
 description = "The database layer OpenEngine V2's services share: one config selects SQLite or Postgres."
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
     "aiosqlite>=0.22",
     "alembic>=1.16",

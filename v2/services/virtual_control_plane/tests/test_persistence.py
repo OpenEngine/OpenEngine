@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import inspect
 
-from openengine.persistence import Backend, BackendNotImplemented, DatabaseConfig
+from openengine.persistence import LOCAL_TENANT, Backend, BackendNotImplemented, DatabaseConfig
 from openengine.persistence.migrations import downgrade
 
 from virtual_control_plane.persistence import PERSISTENCE
@@ -35,7 +35,7 @@ def test_migrations_roll_back(config: DatabaseConfig) -> None:
 
 def test_tracks_a_workspace_through_its_lifecycle(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        workspaces = PERSISTENCE.open(config)
+        workspaces = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             workspace = await workspaces.create(WorkspaceProvider.PROCESS, {"path": "/work/ws-1"})
             other = await workspaces.create(WorkspaceProvider.SMOLVM)
@@ -58,7 +58,7 @@ def test_tracks_a_workspace_through_its_lifecycle(config: DatabaseConfig) -> Non
 
 def test_recovering_ownership_updates_the_locator(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        workspaces = PERSISTENCE.open(config)
+        workspaces = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         try:
             workspace = await workspaces.create(WorkspaceProvider.SMOLVM, {"vm_id": "vm-1"})
 
@@ -75,7 +75,7 @@ def test_recovering_ownership_updates_the_locator(config: DatabaseConfig) -> Non
 
 def test_postgres_store_is_a_stub() -> None:
     with pytest.raises(BackendNotImplemented, match="virtual control plane's store"):
-        PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES))
+        PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES)).scoped(LOCAL_TENANT)
 
 
 def test_list_filters_in_sql_using_legacy_status_index(config: DatabaseConfig, monkeypatch) -> None:
@@ -85,7 +85,7 @@ def test_list_filters_in_sql_using_legacy_status_index(config: DatabaseConfig, m
     from virtual_control_plane.persistence.durable import DurableStore
 
     async def scenario() -> None:
-        workspaces = PERSISTENCE.open(config)
+        workspaces = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
         durable = DurableStore(workspaces.database)
         try:
             ready = await workspaces.create(WorkspaceProvider.PROCESS)

@@ -438,3 +438,12 @@ def test_oversized_references_skip_uniqueness_checks(monkeypatch, count):
     assert len(wire) < runtime.MAX_WIRE_BYTES
     assert errors(case)
     assert runtime.validate_wire_message("execute", wire, case["subject"])
+
+
+def test_wire_nesting_limit_ignores_brackets_inside_strings():
+    case = example("progress")
+    case["payload"]["padding"] = "[" * (runtime.MAX_JSON_DEPTH + 1)
+    wire = json.dumps(case["payload"]).encode()
+    assert runtime._too_deep(wire.decode()) is False
+    deep = b"[" * (runtime.MAX_JSON_DEPTH + 1) + b"]" * (runtime.MAX_JSON_DEPTH + 1)
+    assert runtime._too_deep(deep.decode()) is True
