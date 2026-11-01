@@ -128,7 +128,7 @@ change together:
 | Subject namespace | `v1` in `oe.v1.…` | The wire API generation | a breaking change; `oe.v2` is served alongside `oe.v1` until callers move |
 | Contract directory | `{service}/v1/`, `common/v1/` | The files that define that generation | with the subject namespace: `oe.v2` lives in `{service}/v2/` |
 | Resource apiVersion | `apiVersion: openengine.cc/v1alpha1` on every kind | One API group, `openengine.cc`, for every service's resources, at the subject namespace's version plus a stability suffix | the `v1` part with the subject namespace; the suffix as `v1` matures: `v1alpha1`, `v1alpha2`, …, `v1beta1`, then `v1` once stable |
-| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.3`, GE's `1.0.0-draft.7`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
+| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.4`, tools' `1.0.0-draft.5`, GE's `1.0.0-draft.8`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
 | AsyncAPI format | `asyncapi: 3.1.0` in each document | The specification the documents are written in | the documents move to a newer AsyncAPI specification |
 
 The resource apiVersion is defined once, as `api_version` in
@@ -181,7 +181,13 @@ namespaces (tools) live inside a tenant. `oe up` runs a single account,
 whose tenant is the fixed LOCAL_TENANT, `00000000-0000-7000-8000-000000000001`
 (`local_tenant`).
 
-A request's tenant is the account the caller's connection belongs to. No
+NATS isolates each account's subjects, reply inboxes and JetStream. Identical
+subject, inbox or stream names in different accounts do not share traffic or
+data. This is the [milestone 19](https://github.com/OpenEngine/OpenEngine/milestone/19)
+contract; runtime identity propagation, database tenancy and NATS account
+provisioning are separate implementation work.
+
+A request's tenant is the account the caller's authenticated connection belongs to. No
 payload carries it, and the subjects tenants use carry no tenant or account
 token: they stay `oe.v1.{svc}.{control|query|events}.…` (and
 `oe.v1.tools.…`). Before a shared service receives a tenant's request, NATS
@@ -408,6 +414,7 @@ component the reference pages load, by exact version in `reference.py`.
 cd v2/packages/contracts/tooling
 npm ci                      # install the pinned AsyncAPI parser
 npm run validate            # parse each document and resolve every $ref it reaches
+npm test                    # exact account-token address regression cases
 
 cd v2
 uv run python -m openengine.contracts.validate              # examples, subjects, cross-field rules

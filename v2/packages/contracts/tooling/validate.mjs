@@ -9,6 +9,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hasAccountToken } from "./tenant-address.mjs";
 import { Parser, fromFile } from "@asyncapi/parser";
 
 const contracts = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -30,7 +31,7 @@ for (const service of services) {
   }
   if (document && !service.startsWith("internal/")) {
     for (const channel of document.channels()) {
-      if ((channel.address() ?? "").split(".").includes("{account}")) {
+      if (hasAccountToken(channel.address())) {
         console.log(`${service}: error account-token: channel ${channel.id()} address ${channel.address()} contains {account}`);
         problems.push(channel);
       }

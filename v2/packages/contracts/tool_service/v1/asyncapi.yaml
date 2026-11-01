@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:tool-service
 info:
   title: OpenEngine Tool Service (tools)
-  version: 1.0.0-draft.4
+  version: 1.0.0-draft.5
   description: |
     The Tool Service keeps the tools agents may call, who may call them, and a
     durable record of every call. This document describes the NATS interface
@@ -141,9 +141,14 @@ info:
     caller's connection belongs to, never a payload field, and the acting
     identity within it comes from that authenticated connection (or a
     verified delegation). The tenancy registry maps each account's public
-    key (the shared `account` type) to its `tenant_id`, a UUIDv7.
+    key (the shared `account` type) to its `tenant_id`, a lower-case canonical, non-nil UUIDv7.
     `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
-    (`local_tenant`).
+    (`local_tenant`, `00000000-0000-7000-8000-000000000001`).
+
+    NATS isolates each account's subjects, reply inboxes and JetStream. The
+    same subject or stream name in another account grants no access to this
+    tenant. These are the milestone 19 account isolation requirements; account
+    provisioning and runtime identity propagation are implemented separately.
 
     ## Tenant subjects
     Tenants use the subjects in this document, `oe.v1.tools.…`; none carries a

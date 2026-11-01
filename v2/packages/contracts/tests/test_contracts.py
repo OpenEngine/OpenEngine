@@ -434,3 +434,30 @@ def test_account_accepts_an_account_public_key() -> None:
 )
 def test_account_rejects(value: str) -> None:
     assert not type_accepts("account", value)
+
+
+@pytest.mark.parametrize("address", [
+    "{account}",
+    "{account}.oe.v1.cxn.control.connections.apply",
+    "oe.v1.{account}.cxn.control.connections.apply",
+    "oe.v1.cxn.control.{account}",
+])
+def test_account_token_is_rejected_at_every_position(address: str) -> None:
+    contract = load_contract("connection_bus")
+    document = copy.deepcopy(contract.document)
+    document["channels"]["connectionsApply"]["address"] = address
+    assert len(validate.tenant_address_problems(dataclasses.replace(contract, document=document))) == 1
+
+
+@pytest.mark.parametrize("address", [
+    None,
+    "",
+    "oe.v1.cxn.query.{account_id}",
+    "oe.v1.cxn.query.prefix{account}",
+    "oe.v1.cxn.query.{account}suffix",
+])
+def test_account_token_rule_matches_only_whole_tokens(address: str | None) -> None:
+    contract = load_contract("connection_bus")
+    document = copy.deepcopy(contract.document)
+    document["channels"]["connectionsApply"]["address"] = address
+    assert validate.tenant_address_problems(dataclasses.replace(contract, document=document)) == []

@@ -4,7 +4,8 @@
   "description": "Pinned AsyncAPI parser for validating the OpenEngine V2 service contracts.",
   "type": "module",
   "scripts": {
-    "validate": "node validate.mjs"
+    "validate": "node validate.mjs",
+    "test": "node --test tenant-address.test.mjs"
   },
   "devDependencies": {
     "@asyncapi/parser": "3.6.3"
