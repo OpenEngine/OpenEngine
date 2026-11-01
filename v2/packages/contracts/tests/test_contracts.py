@@ -434,3 +434,19 @@ def test_account_accepts_an_account_public_key() -> None:
 )
 def test_account_rejects(value: str) -> None:
     assert not type_accepts("account", value)
+
+
+@pytest.mark.parametrize("service", SERVICES)
+@pytest.mark.parametrize("address", [
+    "{account}.oe.v1.svc.query.get",
+    "oe.v1.svc.query.{account}",
+    "oe.v1.{account}.svc.query.get",
+])
+def test_tenant_account_token_is_rejected_at_any_position(service: str, address: str) -> None:
+    contract = load_contract(service)
+    document = copy.deepcopy(contract.document)
+    name = next(iter(document["channels"]))
+    document["channels"][name]["address"] = address
+    problems = validate.tenant_address_problems(dataclasses.replace(contract, document=document))
+    assert len(problems) == 1
+    assert "contains {account}" in problems[0]

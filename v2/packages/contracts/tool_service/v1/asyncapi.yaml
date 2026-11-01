@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:tool-service
 info:
   title: OpenEngine Tool Service (tools)
-  version: 1.0.0-draft.4
+  version: 1.0.0-draft.5
   description: |
     The Tool Service keeps the tools agents may call, who may call them, and a
     durable record of every call. This document describes the NATS interface
@@ -144,6 +144,11 @@ info:
     key (the shared `account` type) to its `tenant_id`, a UUIDv7.
     `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
     (`local_tenant`).
+
+    Accounts isolate subjects, reply inboxes and JetStream: the same subject
+    or inbox name in another account does not grant access to this tenant's
+    messages or streams. Shared-service access requires explicit imports and
+    exports; these contracts define the boundary, not broker provisioning.
 
     ## Tenant subjects
     Tenants use the subjects in this document, `oe.v1.tools.…`; none carries a

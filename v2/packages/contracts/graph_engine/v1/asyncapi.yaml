@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:graph-engine
 info:
   title: OpenEngine Graph Engine (ge)
-  version: 1.0.0-draft.7
+  version: 1.0.0-draft.8
   description: |
     The Graph Engine decides which steps of a graph run and when. This document
     describes the NATS interface **GE serves**: the commands and queries it
@@ -60,6 +60,11 @@ info:
     the operator on that machine, and every request through a loopback
     listener is allowed. A request through any other listener is rejected
     with `PERMISSION_DENIED`.
+
+    Accounts isolate subjects, reply inboxes and JetStream: the same subject
+    or inbox name in another account does not grant access to this tenant's
+    messages or streams. Shared-service access requires explicit imports and
+    exports; these contracts define the boundary, not broker provisioning.
 
     ## Tenant subjects
     Tenants use the subjects in this document,

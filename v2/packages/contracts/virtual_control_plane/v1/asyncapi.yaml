@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:virtual-control-plane
 info:
   title: OpenEngine Virtual Control Plane (vcp)
-  version: 1.0.0-draft.3
+  version: 1.0.0-draft.4
   description: |
     The Virtual Control Plane manages workspaces (where agents work), the
     compute runtimes behind them, and the agent sessions and task attempts
@@ -60,6 +60,11 @@ info:
     the workspace. VCP revokes it when the attempt ends, at the same point the
     Graph Engine deletes the attempt's tool grants. The tool service reads the
     workspace and step attempt from it; see the tool service contract.
+
+    Accounts isolate subjects, reply inboxes and JetStream: the same subject
+    or inbox name in another account does not grant access to this tenant's
+    messages or streams. Shared-service access requires explicit imports and
+    exports; these contracts define the boundary, not broker provisioning.
 
     ## Tenant subjects
     Tenants use the subjects in this document,

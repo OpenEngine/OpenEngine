@@ -9,6 +9,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tenantAddressProblems } from "./tenant-addresses.mjs";
 import { Parser, fromFile } from "@asyncapi/parser";
 
 const contracts = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -28,13 +29,10 @@ for (const service of services) {
   for (const diagnostic of diagnostics) {
     console.log(`${service}: ${severity[diagnostic.severity]} ${diagnostic.code}: ${diagnostic.message} at ${diagnostic.path.join(".")}`);
   }
-  if (document && !service.startsWith("internal/")) {
-    for (const channel of document.channels()) {
-      if ((channel.address() ?? "").split(".").includes("{account}")) {
-        console.log(`${service}: error account-token: channel ${channel.id()} address ${channel.address()} contains {account}`);
-        problems.push(channel);
-      }
-    }
+  if (document) {
+    const addresses = tenantAddressProblems(service, document.channels());
+    for (const problem of addresses) console.log(problem);
+    problems.push(...addresses);
   }
   if (!document || problems.length) failed = true;
   console.log(`${service}: ${!document || problems.length ? "invalid" : "valid"}`);
