@@ -22,6 +22,13 @@ LOCAL_TENANT = '00000000000070008000000000000001'
 TABLES = ('graphs', 'graph_revisions', 'operations', 'command_receipts')
 
 
+class UnsafeTenantDowngrade(RuntimeError):
+    """Tenant rows would lose their isolation on downgrade."""
+
+    def __init__(self, table: str) -> None:
+        super().__init__(f'{table} has non-local tenant rows; remove them to downgrade')
+
+
 def _rebuild(scoped: bool) -> None:
     bind = op.get_bind()
     old = sa.MetaData()
@@ -63,5 +70,5 @@ def downgrade() -> None:
     bind = op.get_bind()
     for name in TABLES:
         if bind.scalar(sa.text(f'SELECT COUNT(*) FROM {name} WHERE tenant_id != :local'), {'local': LOCAL_TENANT}):
-            raise RuntimeError(f'{name} has non-local tenant rows; remove them to downgrade')
+            raise UnsafeTenantDowngrade(name)
     _rebuild(False)
