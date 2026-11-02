@@ -97,6 +97,10 @@ class Transaction:
         statement = insert(table).values(key=key, body=value)
         await self._connection.execute(statement.on_conflict_do_update(index_elements=["key"], set_={"body": value}))
 
+    async def delete(self, collection: Collection, key: str) -> None:
+        table = _collection(collection)
+        await self._connection.execute(table.delete().where(table.c.key == key))
+
     async def all(self, collection: Collection) -> list[Document]:
         table = _collection(collection)
         return list((await self._connection.execute(sa.select(table.c.body).order_by(table.c.key))).scalars())

@@ -120,5 +120,14 @@ class FakeAllocationProvider:
             raise ServiceError("PROVIDER_ERROR", "owned allocation is gone", retryable=False)
         return self.allocations[ownership.runtime_id]
 
+    async def destroy(self, ownership: Ownership, locator: Locator | None) -> None:
+        self._owned(ownership)
+        if self.failure:
+            raise self.failure
+        self.allocations.pop(ownership.runtime_id, None)
+        if self.crash:
+            self.crash = False
+            raise asyncio.CancelledError()
+
     def context(self, ownership: Ownership, locator: Locator, specification: dict) -> RuntimeContext:
         return RuntimeContext(root=locator["fake"], working_directory=".")

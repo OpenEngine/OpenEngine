@@ -116,7 +116,7 @@ def test_nats_retry_concurrency_restart_and_typed_queries(binary, tmp_path, monk
                 for subject, code in [(QUERY + "workspaces.bad.get", "INVALID_ARGUMENT"),
                                       (QUERY + "workspaces.ws_missing.get", "NOT_FOUND"),
                                       ("oe.v1.vcp.control.workspaces.ws_missing.ensure", "NOT_FOUND"),
-                                      ("oe.v1.vcp.control.workspaces.ws_missing.destroy", "UNSUPPORTED_CAPABILITY")]:
+                                      ("oe.v1.vcp.control.workspaces.ws_missing.destroy", "INVALID_ARGUMENT")]:
                     reply = json.loads((await connection.request(subject, envelopes.encode({"params": {}} if ".query." in subject else envelopes.command({})))).data)
                     assert reply["error"]["code"] == code
                 lost = DropReply(connection)
@@ -618,7 +618,7 @@ def test_ensure_is_idempotent_and_recovers_pending_and_running_operations(tmp_pa
 
 
 @pytest.mark.parametrize("status", ["pending", "running"])
-@pytest.mark.parametrize("operation", ["workspaces.apply", "workspaces.ensure"])
+@pytest.mark.parametrize("operation", ["workspaces.apply", "workspaces.ensure", "workspaces.destroy"])
 def test_missing_provider_fails_operations_explicitly_without_stalling_other_work(tmp_path, operation, status):
     async def scenario():
         store = storage(tmp_path)
@@ -626,9 +626,10 @@ def test_missing_provider_fails_operations_explicitly_without_stalling_other_wor
         lifecycle = Lifecycle(store, {"process": process, "other": other})
         created = await lifecycle.apply(_request(APPLY, envelopes.command({"workspace": DOCUMENT})))
         workspace_id, response = created["resource_id"], created
-        if operation == "workspaces.ensure":
+        if operation != "workspaces.apply":
             await lifecycle.reconcile()
-            response = await lifecycle.ensure(_ensure(workspace_id))
+            response = await (lifecycle.ensure(_ensure(workspace_id)) if operation == "workspaces.ensure"
+                              else lifecycle.destroy(_destroy(workspace_id)))
         async with store.transaction() as tx:
             record = await tx.get("operations", response["operation_id"])
             record["snapshot"]["status"] = status
@@ -653,7 +654,7 @@ def test_missing_provider_fails_operations_explicitly_without_stalling_other_wor
                                    "message": "provider process is not configured on this host"}
         workspace = await store.read("workspaces", workspace_id)
         assert "active_operation_id" not in workspace  # the lock is released
-        if operation == "workspaces.apply":
+        if operation != "workspaces.ensure":
             assert workspace["snapshot"]["state"] == "failed" and workspace["snapshot"]["version"] == before["version"] + 1
             # The unrelated workspace's provisioning and ready events, plus this failure.
             assert len(await store.pending_events(100)) == events + 3
@@ -662,7 +663,15 @@ def test_missing_provider_fails_operations_explicitly_without_stalling_other_wor
             assert len(await store.pending_events(100)) == events + 2  # the unrelated workspace's events only
         assert await store.read("workspace_runtimes", workspace_id) == ownership  # retained for cleanup
         assert (await _snapshot(store, "operations", unrelated["operation_id"]))["status"] == "succeeded"
-        assert process.calls + process.ensures == (1 if operation == "workspaces.ensure" else 0)
+        assert process.calls + process.ensures == (1 if operation != "workspaces.apply" else 0)
+
+        # Once the provider is back, explicit cleanup can finish using retained ownership.
+        if operation == "workspaces.destroy":
+            lifecycle = Lifecycle(store, {"process": process, "other": other})
+            cleanup = await lifecycle.destroy(_destroy(workspace_id))
+            assert cleanup["status"] == "accepted"
+            await lifecycle.reconcile()
+            assert not process.allocations and await store.read("workspace_runtimes", workspace_id) is None
 
         # Once the provider is back, a ready workspace can be ensured with a new command.
         if operation == "workspaces.ensure":
@@ -707,4 +716,135 @@ def test_transient_failures_back_off_with_a_cap_and_eventually_fail(tmp_path, mo
         assert provider.calls == 3
         await store.close()
 
+    asyncio.run(scenario())
+
+
+def _destroy(workspace_id, payload=None, **extra):
+    return _request(f"oe.v1.vcp.control.workspaces.{workspace_id}.destroy",
+                    envelopes.command(payload if payload is not None else {
+                        "retention": {"artifacts": "retain", "checkpoints": "delete"}}, **extra), workspace_id)
+
+
+@pytest.fixture
+def active_attempts():
+    """Execution tickets will maintain this application-level list."""
+    return ["attempt_active"]
+
+
+def test_destroy_admission_and_active_attempt_guard(tmp_path, active_attempts):
+    async def scenario():
+        store, provider = storage(tmp_path), FakeProvider()
+        lifecycle = Lifecycle(store, {"process": provider})
+        created = await lifecycle.apply(_request(APPLY, envelopes.command({"workspace": DOCUMENT})))
+        workspace_id = created["resource_id"]
+        busy = await lifecycle.destroy(_destroy(workspace_id))
+        assert busy["error"]["code"] == "UNAVAILABLE"
+        await lifecycle.reconcile()
+        missing = await lifecycle.destroy(_destroy("ws_missing"))
+        stale = await lifecycle.destroy(_destroy(workspace_id, expected_version=1))
+        invalid = await lifecycle.destroy(_destroy(workspace_id, {}))
+        assert [r["error"]["code"] for r in (missing, stale, invalid)] == ["NOT_FOUND", "VERSION_CONFLICT", "INVALID_ARGUMENT"]
+        async with store.transaction() as tx:
+            workspace = await tx.get("workspaces", workspace_id)
+            workspace["snapshot"]["active_attempt_ids"] = active_attempts
+            await tx.put("workspaces", workspace_id, workspace)
+        blocked_request = _destroy(workspace_id)
+        blocked = await lifecycle.destroy(blocked_request)
+        assert blocked["error"]["code"] == "INVALID_STATE" and len(provider.allocations) == 1
+        async with store.transaction() as tx:
+            workspace = await tx.get("workspaces", workspace_id)
+            workspace["snapshot"]["active_attempt_ids"] = []
+            await tx.put("workspaces", workspace_id, workspace)
+        assert blocked == await lifecycle.destroy(blocked_request)  # terminal rejection receipt
+        # close never substitutes for explicit destruction, including after start.
+        lifecycle.start()
+        await lifecycle.close()
+        assert len(provider.allocations) == 1
+        for state in ("provisioning", "restoring", "suspending", "destroying"):
+            async with store.transaction() as tx:
+                workspace = await tx.get("workspaces", workspace_id)
+                workspace["snapshot"]["state"] = state
+                await tx.put("workspaces", workspace_id, workspace)
+            assert (await lifecycle.destroy(_destroy(workspace_id)))["error"]["code"] == "INVALID_STATE"
+        await store.close()
+    asyncio.run(scenario())
+
+
+def test_destroy_retry_schedule_and_exhaustion_survive_restart(tmp_path, monkeypatch):
+    from virtual_control_plane.application import lifecycle as module
+    monkeypatch.setattr(module, "MAX_ATTEMPTS", 3)
+
+    async def scenario():
+        store, provider = storage(tmp_path), FakeProvider()
+        lifecycle = Lifecycle(store, {"process": provider})
+        created = await lifecycle.apply(_request(APPLY, envelopes.command({"workspace": DOCUMENT})))
+        workspace_id = created["resource_id"]
+        await lifecycle.reconcile()
+        ownership = await store.read("workspace_runtimes", workspace_id)
+        request = _destroy(workspace_id)
+        accepted = await lifecycle.destroy(request)
+        provider.failure = ServiceError("UNAVAILABLE", "cannot delete")
+        await lifecycle.reconcile()
+        record = await store.read("operations", accepted["operation_id"])
+        assert record["attempts"] == 1 and record["not_before"] > module.now()
+        assert (await _snapshot(store, "workspaces", workspace_id))["state"] == "destroying"
+        await store.close()
+        store = storage(tmp_path)
+        lifecycle = Lifecycle(store, {"process": provider})
+        assert accepted == await lifecycle.destroy(request)
+        await lifecycle.reconcile()  # persisted backoff prevents an early call
+        assert (await store.read("operations", accepted["operation_id"]))["attempts"] == 1
+        for _ in range(2):
+            async with store.transaction() as tx:
+                record = await tx.get("operations", accepted["operation_id"])
+                record["not_before"] = "2000-01-01T00:00:00Z"
+                await tx.put("operations", accepted["operation_id"], record)
+            await lifecycle.reconcile()
+        failed = await _snapshot(store, "operations", accepted["operation_id"])
+        assert failed["status"] == "failed" and failed["error"]["details"]["attempts"] == 3
+        workspace = await _snapshot(store, "workspaces", workspace_id)
+        assert workspace["state"] == "failed" and workspace["failure"] == failed["error"]
+        assert provider.allocations and await store.read("workspace_runtimes", workspace_id) == ownership
+        assert "active_operation_id" not in await store.read("workspaces", workspace_id)
+        provider.failure = None
+        cleanup = await lifecycle.destroy(_destroy(workspace_id))
+        await lifecycle.reconcile()
+        assert (await _snapshot(store, "operations", cleanup["operation_id"]))["status"] == "succeeded"
+        assert accepted == await lifecycle.destroy(request)  # first failure remains queryable
+        assert (await _snapshot(store, "operations", accepted["operation_id"])) == failed
+        assert [e.envelope["event_type"] for e in await store.pending_events(100)] == [
+            "workspace.provisioning", "workspace.ready", "workspace.failed", "workspace.destroyed"]
+        await store.close()
+    asyncio.run(scenario())
+
+
+def test_destroy_completion_rollback_keeps_ownership_for_restart(tmp_path):
+    async def scenario():
+        store, provider = storage(tmp_path), FakeProvider()
+        lifecycle = Lifecycle(store, {"process": provider})
+        created = await lifecycle.apply(_request(APPLY, envelopes.command({"workspace": DOCUMENT})))
+        workspace_id = created["resource_id"]
+        await lifecycle.reconcile()
+        ownership = await store.read("workspace_runtimes", workspace_id)
+        request = _destroy(workspace_id)
+        accepted = await lifecycle.destroy(request)
+        async def interrupted(*args):
+            message = "completion transaction interrupted after ownership deletion"
+            raise OSError(message)
+        lifecycle._event = interrupted
+        with pytest.raises(OSError):
+            await lifecycle.reconcile()
+        assert not provider.allocations  # external deletion succeeded
+        assert await store.read("workspace_runtimes", workspace_id) == ownership  # transaction rolled back
+        assert (await _snapshot(store, "operations", accepted["operation_id"]))["status"] == "running"
+        assert len(await store.pending_events(100)) == 2
+        await store.close()
+        store = storage(tmp_path)
+        lifecycle = Lifecycle(store, {"process": provider})
+        await lifecycle.reconcile()
+        assert await lifecycle.destroy(request) == accepted
+        assert (await _snapshot(store, "operations", accepted["operation_id"]))["status"] == "succeeded"
+        assert await store.read("workspace_runtimes", workspace_id) is None
+        assert len(await store.pending_events(100)) == 3
+        await store.close()
     asyncio.run(scenario())

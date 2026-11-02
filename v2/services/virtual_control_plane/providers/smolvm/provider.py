@@ -135,6 +135,16 @@ class Smolvm:
         await self._prepare(name, ownership, specification["spec"])
         return self._locator(ownership)
 
+    async def destroy(self, ownership: Ownership, locator: Locator | None) -> None:
+        name = machine_name(ownership)
+        if locator and locator.get("machine") not in (None, name):
+            _terminal("locator does not name the owned machine", machine=name)
+        if await self._owned(ownership) is None:
+            return
+        await self._run("machine", "delete", "--name", name, "--force")
+        if await self._owned(ownership) is not None:
+            _unavailable("owned machine still exists after deletion", machine=name)
+
     def context(self, ownership: Ownership, locator: Locator, specification: dict[str, Any]) -> RuntimeContext:
         context = specification["spec"].get("context", {})
         return RuntimeContext(
@@ -166,10 +176,12 @@ class Smolvm:
     async def _machines(self) -> list[dict[str, Any]]:
         output, _, _ = await self._run("machine", "ls", "--json")
         try:
-            machines = json.loads(output or b"[]")
+            machines = json.loads(output)
         except ValueError:
             _unavailable("smolvm machine ls returned unreadable output")
-        return machines if isinstance(machines, list) else []
+        if not isinstance(machines, list) or any(not isinstance(machine, dict) or not machine.get("name") for machine in machines):
+            _unavailable("smolvm machine ls returned an invalid inventory")
+        return machines
 
     async def _owned(self, ownership: Ownership) -> dict[str, Any] | None:
         """The machine this ownership names, or None; a foreign one under that name is refused."""
@@ -178,7 +190,7 @@ class Smolvm:
             if machine.get("name") == name:
                 labels = machine.get("labels") or {}
                 expected = _labels(ownership)
-                if any(labels.get(key) != value for key, value in expected.items() if key != "oe.generation"):
+                if any(labels.get(key) != value for key, value in expected.items()):
                     raise OwnershipMismatch(PROVIDER, name)
                 return machine
         return None
