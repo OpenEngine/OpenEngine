@@ -1,7 +1,7 @@
 """VCP's domain/application layer stays independent of transport, storage and provider details.
 
 `virtual_control_plane.application` drives the smolvm adapter in
-`providers/smolvm` (and #1054's worktree adapter) only through the ports in
+`providers/smolvm` and `providers/worktree` only through the ports in
 `application/ports.py` -- never by importing one, which is what would force
 this layer to branch on which one it holds, or let whole-vCPU and image rules
 leak into every workspace.
@@ -50,6 +50,13 @@ def test_the_smolvm_adapter_keeps_its_guest_layout_and_cli_to_itself() -> None:
     sources = "\n".join(path.read_text() for path in APPLICATION.rglob("*.py"))
 
     for detail in ("/workspace", "machine exec", "oe-vcp-", "--cpus", "microvm"):
+        assert detail not in sources, detail
+
+
+def test_the_worktree_adapter_keeps_git_and_host_processes_to_itself() -> None:
+    sources = "\n".join(path.read_text() for path in APPLICATION.rglob("*.py"))
+
+    for detail in ("worktree add", "owner.json", "flock", "killpg", "workspace_daemon"):
         assert detail not in sources, detail
 
 

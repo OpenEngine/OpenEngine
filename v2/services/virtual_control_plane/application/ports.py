@@ -4,8 +4,9 @@ A port is implemented twice for this slice's acceptance criteria -- once by a
 Git worktree/host-process-shaped double, once by a smolvm-shaped double -- so
 `tests/test_provider_conformance.py` can run the same lifecycle assertions
 against both without the application layer branching on which one it holds.
-`providers/smolvm` is the real managed adapter behind `AllocationProvider`;
-#1054 adds the worktree one and #1055/#1118 the runtime-supervision side. Transactional persistence is defined in `application/transactions.py`;
+`providers/smolvm` and `providers/worktree` are the real managed adapters
+behind `AllocationProvider`; #1055 adds agent supervision and fencing.
+Transactional persistence is defined in `application/transactions.py`;
 `application/outbox.py` publishes the events those transactions append.
 """
 
