@@ -592,6 +592,7 @@ dependencies = [
     { name = "openengine-messaging" },
     { name = "openengine-persistence" },
     { name = "openengine-telemetry" },
+    { name = "openengine-workspace-daemon" },
 ]
 
 [package.metadata]
@@ -601,6 +602,7 @@ requires-dist = [
     { name = "openengine-messaging", editable = "packages/messaging" },
     { name = "openengine-persistence", editable = "packages/persistence" },
     { name = "openengine-telemetry", editable = "packages/telemetry" },
+    { name = "openengine-workspace-daemon", editable = "services/workspace_daemon" },
 ]
 
 [[package]]

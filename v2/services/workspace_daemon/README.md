@@ -91,4 +91,5 @@ Production credentials are provisioned out of band (`--credentials`); the
 shared local account behind `--local-test-account` is a test fixture.
 Cancellation, steering, progress, real ACP executors, OS-level separation of
 the workload's identity from the journal, VM installation and suspend/restore
-are later work (#1122, #1054/#1055 and their successors).
+are later work (#1122, #1055 and their successors). Beside a worktree, VCP's
+worktree adapter starts and stops this process (see the VCP README).

@@ -1,10 +1,9 @@
 """Shared lifecycle conformance: the same assertions against a worktree-shaped
 and a VM-shaped `WorkspaceProviderPort` double.
 
-#1054 (worktree) and #1114 (smolvm) are expected to pass this same module
-against their real adapters; `WorkspaceService` never branches on which
-provider it holds, so neither should they need a provider-specific test file
-for this lifecycle.
+The managed cases below run the real worktree (#1054) and smolvm (#1114)
+adapters too; `WorkspaceService` and `Lifecycle` never branch on which
+provider they hold, so neither needs a provider-specific lifecycle test.
 """
 
 from __future__ import annotations
@@ -103,10 +102,12 @@ def test_destroy_releases_the_workspace_through_its_own_provider(config: Databas
 # --- Managed lifecycle conformance ------------------------------------------
 #
 # The same `Lifecycle` scenarios against every `AllocationProvider`: the
-# host-shaped double and the real smolvm adapter on its deterministic CLI fake.
-# #1054's worktree adapter is expected to add itself to `BACKENDS` and pass
-# unchanged. Nothing below names a guest path, image or machine.
+# host-shaped double, the real smolvm adapter on its deterministic CLI fake and
+# the real Git worktree adapter on the host. Nothing below names a guest path,
+# image, machine or worktree.
 
+import json  # noqa: E402
+import os  # noqa: E402
 from copy import deepcopy  # noqa: E402
 
 from openengine.messaging import Request, envelopes  # noqa: E402
@@ -115,6 +116,7 @@ from virtual_control_plane.application.lifecycle import SCHEMAS, Lifecycle  # no
 from virtual_control_plane.application.ports import Ownership  # noqa: E402
 from virtual_control_plane.persistence.durable import DurableStore  # noqa: E402
 from virtual_control_plane.providers.smolvm import Smolvm, machine_name  # noqa: E402
+from virtual_control_plane.providers.worktree import Worktree  # noqa: E402
 from virtual_control_plane.tests import smolvm_fake  # noqa: E402
 from virtual_control_plane.tests.fakes import MISSING_TOOL, FakeAllocationProvider  # noqa: E402
 
@@ -188,7 +190,50 @@ class SmolvmBackend:
         adapter._start = interrupted
 
 
-BACKENDS = [HostBackend, SmolvmBackend]
+class WorktreeBackend:
+    """The real worktree adapter; runtime directories persist under its root across restarts.
+
+    No workspace daemon is configured: supervision has its own tests in
+    `test_worktree_provider.py` and the public NATS test.
+    """
+
+    provider, isolation = "process", "process"
+
+    def __init__(self, tmp_path: Path) -> None:
+        self.root = tmp_path.resolve() / "worktrees"
+        self.current = self.restart()
+
+    def restart(self) -> Worktree:
+        self.current = Worktree(self.root, tools=("git", "terminal", MISSING_TOOL))
+        return self.current
+
+    def compute(self) -> list[str]:
+        return sorted(name for name in os.listdir(self.root) if not name.startswith("."))
+
+    def make_foreign(self, ownership: Ownership) -> None:
+        directory = self.root / ownership.runtime_id
+        directory.mkdir()
+        self._foreign = json.dumps({"provider": "process", "workspace_id": "ws_someone_else",
+                                    "runtime_id": ownership.runtime_id, "generation": 1, "repositories": []})
+        (directory / "owner.json").write_text(self._foreign)
+
+    def foreign_untouched(self, ownership: Ownership) -> bool:
+        directory = self.root / ownership.runtime_id
+        return os.listdir(directory) == ["owner.json"] and (directory / "owner.json").read_text() == self._foreign
+
+    def crash_after_allocation(self) -> None:
+        # Interrupt right after the owned directory and its files exist, before the commit.
+        adapter, prepare = self.current, self.current._prepare
+
+        async def interrupted(*args) -> None:
+            await prepare(*args)
+            adapter._prepare = prepare
+            raise asyncio.CancelledError()
+
+        adapter._prepare = interrupted
+
+
+BACKENDS = [HostBackend, SmolvmBackend, WorktreeBackend]
 
 
 def _document(provider: str, name: str = "example", **spec) -> dict:
@@ -449,6 +494,32 @@ def test_destroy_refuses_foreign_compute_and_retains_ownership(config, tmp_path,
             assert await store.read("workspace_runtimes", workspace_id) == original
             assert backend.foreign_untouched(ownership)
             assert "workspace.destroyed" not in [e.envelope["event_type"] for e in await store.pending_events(100)]
+        finally:
+            await store.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend_type", BACKENDS, ids=lambda backend: backend.__name__)
+def test_destroy_refuses_active_attempts_without_touching_compute(config, tmp_path, backend_type):
+    backend = backend_type(tmp_path)
+
+    async def scenario():
+        store = _store(config)
+        lifecycle = Lifecycle(store, {backend.provider: backend.current})
+        try:
+            created = await lifecycle.apply(_request(APPLY, {"workspace": _document(backend.provider)}))
+            workspace_id = created["resource_id"]
+            await lifecycle.reconcile()
+            async with store.transaction() as tx:
+                workspace = await tx.get("workspaces", workspace_id)
+                workspace["snapshot"]["active_attempt_ids"] = ["attempt_live"]
+                await tx.put("workspaces", workspace_id, workspace)
+            refused = await lifecycle.destroy(_destroy(workspace_id))
+            await lifecycle.reconcile()
+            assert refused["error"]["code"] == "INVALID_STATE"
+            assert len(backend.compute()) == 1 and await store.read("workspace_runtimes", workspace_id)
+            assert (await _snapshot(store, "workspaces", workspace_id))["state"] == "ready"
         finally:
             await store.close()
 
