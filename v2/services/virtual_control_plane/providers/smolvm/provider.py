@@ -135,6 +135,16 @@ class Smolvm:
         await self._prepare(name, ownership, specification["spec"])
         return self._locator(ownership)
 
+    async def destroy(self, ownership: Ownership, locator: Locator | None) -> None:
+        name = machine_name(ownership)
+        if locator and locator.get("machine") not in (None, name):
+            _terminal("locator does not name the owned machine", machine=name)
+        if await self._owned(ownership, destroying=True) is None:
+            return
+        await self._run("machine", "delete", "--name", name, "--force")
+        if await self._owned(ownership, destroying=True) is not None:
+            _unavailable("owned machine still exists after deletion", machine=name)
+
     def context(self, ownership: Ownership, locator: Locator, specification: dict[str, Any]) -> RuntimeContext:
         context = specification["spec"].get("context", {})
         return RuntimeContext(
@@ -163,24 +173,41 @@ class Smolvm:
         # Outbound network for repository clones; the workload only keeps the guest up.
         return [*arguments, "--net", "--", "sleep", "infinity"]
 
-    async def _machines(self) -> list[dict[str, Any]]:
+    async def _machines(self, *, destroying: bool) -> list[dict[str, Any]]:
+        """The machine inventory. Destroy reads absence as success, so it refuses empty or malformed output."""
         output, _, _ = await self._run("machine", "ls", "--json")
+        if not output and not destroying:
+            return []
         try:
-            machines = json.loads(output or b"[]")
+            machines = json.loads(output)
         except ValueError:
             _unavailable("smolvm machine ls returned unreadable output")
-        return machines if isinstance(machines, list) else []
+        if not destroying:
+            return machines if isinstance(machines, list) else []
+        if not isinstance(machines, list):
+            _unavailable("smolvm machine ls returned an invalid inventory")
+        for machine in machines:
+            if not isinstance(machine, dict) or not machine.get("name"):
+                _unavailable("smolvm machine ls returned an invalid inventory")
+        return machines
 
-    async def _owned(self, ownership: Ownership) -> dict[str, Any] | None:
-        """The machine this ownership names, or None; a foreign one under that name is refused."""
+    async def _owned(self, ownership: Ownership, *, destroying: bool = False) -> dict[str, Any] | None:
+        """The machine this ownership names, or None; a foreign one under that name is refused.
+
+        Provision and ensure find their machine across generation bumps; destroy
+        only deletes a machine carrying the exact generation it owns.
+        """
         name = machine_name(ownership)
-        for machine in await self._machines():
-            if machine.get("name") == name:
-                labels = machine.get("labels") or {}
-                expected = _labels(ownership)
-                if any(labels.get(key) != value for key, value in expected.items() if key != "oe.generation"):
-                    raise OwnershipMismatch(PROVIDER, name)
-                return machine
+        expected = _labels(ownership)
+        if not destroying:
+            expected.pop("oe.generation")
+        for machine in await self._machines(destroying=destroying):
+            if machine.get("name") != name:
+                continue
+            labels = machine.get("labels") or {}
+            if any(labels.get(key) != value for key, value in expected.items()):
+                raise OwnershipMismatch(PROVIDER, name)
+            return machine
         return None
 
     async def _start(self, name: str) -> None:

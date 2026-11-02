@@ -317,6 +317,12 @@ def test_failed_preparation_fails_the_workspace_and_retains_ownership(config: Da
             assert await store.read("workspace_runtimes", workspace_id)
             rejected = await lifecycle.ensure(_ensure(workspace_id))
             assert rejected["error"]["code"] == "INVALID_STATE"
+            # Failed preparation saved ownership but no locator; cleanup still finds its compute.
+            assert (await store.read("workspace_runtimes", workspace_id))["locator"] is None
+            cleanup = await lifecycle.destroy(_destroy(workspace_id))
+            await lifecycle.reconcile()
+            assert (await _snapshot(store, "operations", cleanup["operation_id"]))["status"] == "succeeded"
+            assert not backend.compute() and await store.read("workspace_runtimes", workspace_id) is None
         finally:
             await store.close()
 
@@ -349,6 +355,100 @@ def test_allocation_before_a_crash_is_reconciled_after_restart(config: DatabaseC
             assert workspace["state"] == "ready" and workspace["runtime"]["generation"] == 1
             assert len(backend.compute()) == 1  # the same compute, not a second one
             assert deepcopy(workspace)["runtime"]["runtime_id"] == (await _ownership(store, workspace_id)).runtime_id
+        finally:
+            await store.close()
+
+    asyncio.run(scenario())
+
+
+def _destroy(workspace_id: str, **extra) -> Request:
+    return _request(f"oe.v1.vcp.control.workspaces.{workspace_id}.destroy",
+                    {"retention": {"artifacts": "retain", "checkpoints": "delete"}},
+                    {"workspace_id": workspace_id}, **extra)
+
+
+@pytest.mark.parametrize("backend_type", BACKENDS, ids=lambda backend: backend.__name__)
+@pytest.mark.parametrize("interruption", ["pending", "running", "deleted"])
+def test_destroy_is_restart_safe_and_replays_one_outcome(config, tmp_path, backend_type, interruption):
+    backend = backend_type(tmp_path)
+
+    async def scenario():
+        store = _store(config)
+        lifecycle = Lifecycle(store, {backend.provider: backend.current})
+        created = await lifecycle.apply(_request(APPLY, {"workspace": _document(backend.provider)}))
+        workspace_id = created["resource_id"]
+        await lifecycle.reconcile()
+        request = _destroy(workspace_id, expected_version=2)
+        accepted = await lifecycle.destroy(request)
+        assert accepted == await lifecycle.destroy(request)
+        assert len(backend.compute()) == 1  # acceptance committed before any external deletion
+        assert (await _snapshot(store, "workspaces", workspace_id))["state"] == "destroying"
+        assert (await lifecycle.ensure(_ensure(workspace_id)))["error"]["code"] == "UNAVAILABLE"
+        if interruption == "running":
+            async with store.transaction() as tx:
+                record = await tx.get("operations", accepted["operation_id"])
+                record["snapshot"]["status"] = "running"
+                await tx.put("operations", accepted["operation_id"], record)
+        if interruption == "deleted":
+            async def crash_before_commit(*args):
+                raise asyncio.CancelledError()
+            lifecycle._complete = crash_before_commit
+            await lifecycle.reconcile()  # actual worker deletes, then crashes before completion
+            assert not backend.compute()
+            assert (await _snapshot(store, "operations", accepted["operation_id"]))["status"] == "running"
+            assert await store.read("workspace_runtimes", workspace_id)
+        await lifecycle.close()
+        await store.close()
+
+        store = _store(config)
+        lifecycle = Lifecycle(store, {backend.provider: backend.restart()})
+        try:
+            await lifecycle.reconcile()
+            await lifecycle.reconcile()
+            assert accepted == await lifecycle.destroy(request)  # stale version still replays
+            workspace = await _snapshot(store, "workspaces", workspace_id)
+            operation = await _snapshot(store, "operations", accepted["operation_id"])
+            assert workspace["state"] == "destroyed" and workspace["version"] == 4 and "runtime" not in workspace
+            assert operation["status"] == "succeeded" and operation["result"] == {"retention": request.body["payload"]["retention"]}
+            for kind, value in (("workspace", workspace), ("operations", operation)):
+                envelopes.check(f"{SCHEMAS}/{kind}.schema.json#/$defs/{'operation' if kind == 'operations' else kind}", value)
+            assert not backend.compute() and await store.read("workspace_runtimes", workspace_id) is None
+            events = [event.envelope for event in await store.pending_events(100)]
+            assert [e["event_type"] for e in events] == ["workspace.provisioning", "workspace.ready", "workspace.destroyed"]
+            assert events[-1]["resource_version"] == 4
+            assert events[-1]["payload"]["operation"]["operation_id"] == accepted["operation_id"]
+            # New commands on tombstones do not touch compute or publish duplicate outcomes.
+            repeated = await lifecycle.destroy(_destroy(workspace_id))
+            assert (await _snapshot(store, "operations", repeated["operation_id"]))["status"] == "succeeded"
+            assert await _snapshot(store, "workspaces", workspace_id) == workspace
+            assert len(await store.pending_events(100)) == 3
+        finally:
+            await store.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("backend_type", BACKENDS, ids=lambda backend: backend.__name__)
+def test_destroy_refuses_foreign_compute_and_retains_ownership(config, tmp_path, backend_type):
+    backend = backend_type(tmp_path)
+
+    async def scenario():
+        store = _store(config)
+        lifecycle = Lifecycle(store, {backend.provider: backend.current})
+        try:
+            created = await lifecycle.apply(_request(APPLY, {"workspace": _document(backend.provider)}))
+            workspace_id = created["resource_id"]
+            ownership = await _ownership(store, workspace_id)
+            backend.make_foreign(ownership)
+            await lifecycle.reconcile()  # failed creation, possibly without any persisted locator
+            original = await store.read("workspace_runtimes", workspace_id)
+            accepted = await lifecycle.destroy(_destroy(workspace_id))
+            await lifecycle.reconcile()
+            assert (await _snapshot(store, "operations", accepted["operation_id"]))["status"] == "failed"
+            assert (await _snapshot(store, "workspaces", workspace_id))["state"] == "failed"
+            assert await store.read("workspace_runtimes", workspace_id) == original
+            assert backend.foreign_untouched(ownership)
+            assert "workspace.destroyed" not in [e.envelope["event_type"] for e in await store.pending_events(100)]
         finally:
             await store.close()
 

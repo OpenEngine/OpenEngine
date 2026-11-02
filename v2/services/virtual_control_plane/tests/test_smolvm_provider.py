@@ -213,3 +213,81 @@ def test_cli_failures_are_transient_while_a_missing_or_hung_cli_is_handled(adapt
         asyncio.run(slow.provision(OWNERSHIP, document()))
     assert time.monotonic() - started < 5
     assert json.loads(json.dumps(error.value.to_dict()))["code"] == "PROVIDER_ERROR"
+
+
+@pytest.mark.parametrize("label", ["oe.workspace", "oe.runtime", "oe.generation"])
+def test_destroy_checks_every_ownership_label(adapter, root, label):
+    async def scenario():
+        locator = await adapter.provision(OWNERSHIP, document())
+        machine = smolvm_fake.machines(root)[machine_name(OWNERSHIP)]
+        machine["labels"][label] = "foreign"
+        smolvm_fake.save_machine(root, machine)
+        before = len(smolvm_fake.commands(root))
+        with pytest.raises(OwnershipMismatch):
+            await adapter.destroy(OWNERSHIP, locator)
+        assert smolvm_fake.machines(root)[machine_name(OWNERSHIP)] == machine
+        assert [c[1] for c in smolvm_fake.commands(root)[before:]] == ["ls"]
+    asyncio.run(scenario())
+
+
+def test_destroy_confirms_absence_and_retries_cli_failure(adapter, root):
+    async def scenario():
+        locator = await adapter.provision(OWNERSHIP, document())
+        smolvm_fake.inject_faults(root, delete=1)
+        with pytest.raises(ServiceError) as failure:
+            await adapter.destroy(OWNERSHIP, locator)
+        assert failure.value.retryable and smolvm_fake.machines(root)
+        await adapter.destroy(OWNERSHIP, locator)
+        assert not smolvm_fake.machines(root)
+        assert subcommands(root)[-3:] == ["ls", "delete", "ls"]
+        await adapter.destroy(OWNERSHIP, None)
+        assert subcommands(root)[-1] == "ls"  # absence is success, even without a locator
+        with pytest.raises(ServiceError):
+            await adapter.destroy(OWNERSHIP, {"machine": "foreign"})
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("inventory", [b'', b'{}', b'null', b'[null]', b'[{"labels": {}}]', b'not json'])
+def test_destroy_never_treats_unreadable_inventory_as_absence(adapter, monkeypatch, inventory):
+    calls = []
+    async def run(*args):
+        calls.append(args)
+        return inventory, b"", 0
+    monkeypatch.setattr(adapter, "_run", run)
+    with pytest.raises(ServiceError) as failure:
+        asyncio.run(adapter.destroy(OWNERSHIP, None))
+    assert failure.value.retryable and calls == [("machine", "ls", "--json")]
+
+
+def test_destroy_does_not_report_success_until_compute_is_absent(adapter, root, monkeypatch):
+    async def scenario():
+        locator = await adapter.provision(OWNERSHIP, document())
+        original = adapter._run
+        async def no_delete(*args, **kwargs):
+            if args[:2] == ("machine", "delete"):
+                return b"", b"", 0
+            return await original(*args, **kwargs)
+        monkeypatch.setattr(adapter, "_run", no_delete)
+        with pytest.raises(ServiceError) as failure:
+            await adapter.destroy(OWNERSHIP, locator)
+        assert failure.value.retryable and smolvm_fake.machines(root)
+    asyncio.run(scenario())
+
+
+def test_ensure_finds_its_machine_across_a_generation_bump(adapter, root):
+    async def scenario():
+        locator = await adapter.provision(OWNERSHIP, document())
+        machine = smolvm_fake.machines(root)[machine_name(OWNERSHIP)]
+        machine["labels"]["oe.generation"] = "2"
+        smolvm_fake.save_machine(root, machine)
+        assert await adapter.ensure(OWNERSHIP, locator, document()) == locator
+    asyncio.run(scenario())
+
+
+def test_only_destroy_treats_empty_inventory_output_as_unreadable(adapter, monkeypatch):
+    async def run(*args):
+        return b"", b"", 0
+    monkeypatch.setattr(adapter, "_run", run)
+    assert asyncio.run(adapter._owned(OWNERSHIP)) is None
+    with pytest.raises(ServiceError):
+        asyncio.run(adapter._owned(OWNERSHIP, destroying=True))

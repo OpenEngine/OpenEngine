@@ -715,3 +715,61 @@ def test_service_restart_publishes_events_committed_before_a_crash(tmp_path: Pat
     assert asyncio.run(_stream(broker.url)) == [
         ("oe.v1.vcp.events.workspaces.ws_a1.workspace.provisioning", "evt_1", _event("evt_1")),
     ]
+
+
+@pytest.mark.integration
+def test_real_nats_create_ensure_destroy_observes_durable_lifecycle(config, broker):
+    from openengine.messaging import Client, Server
+    from virtual_control_plane.application.lifecycle import Lifecycle
+    from virtual_control_plane.tests.fakes import FakeAllocationProvider
+    from virtual_control_plane.tests.test_lifecycle import DOCUMENT
+
+    async def scenario():
+        connection = await nats.connect(broker.url)
+        provider = FakeAllocationProvider()
+        try:
+            async with _store(config) as store:
+                lifecycle = Lifecycle(store, {"process": provider})
+                server = Server(connection, "vcp", broker.url, queries=lifecycle.queries(), commands=lifecycle.commands())
+                await server.start()
+                try:
+                    client = Client(connection)
+                    created = await client.command(SUBJECT, {"workspace": DOCUMENT})
+                    workspace_id = created["resource_id"]
+                    prefix = f"oe.v1.vcp.control.workspaces.{workspace_id}."
+                    await lifecycle.reconcile()
+                    ensured = await client.command(prefix + "ensure", {})
+                    await lifecycle.reconcile()
+                    retention = {"artifacts": "retain", "checkpoints": "delete"}
+                    destroyed = await client.command(prefix + "destroy", {"retention": retention},
+                                                     command_id="cmd_destroy", expected_version=2)
+                    assert provider.allocations  # accepted, no provider deletion yet
+                    await lifecycle.reconcile()
+                    assert await client.command(prefix + "destroy", {"retention": retention},
+                                                command_id="cmd_destroy", expected_version=2) == destroyed
+                    for response in (created, ensured, destroyed):
+                        query = await client.query(f"oe.v1.vcp.query.operations.{response['operation_id']}.get")
+                        assert query["result"]["operation"]["status"] == "succeeded"
+                    workspace = await client.query(f"oe.v1.vcp.query.workspaces.{workspace_id}.get")
+                    assert workspace["result"]["workspace"]["state"] == "destroyed" and not provider.allocations
+                    committed = [e.envelope for e in await store.pending_events(100)]
+                    assert [e["event_type"] for e in committed] == [
+                        "workspace.provisioning", "workspace.ready", "workspace.destroyed"]
+                    assert [e["resource_version"] for e in committed] == [1, 2, 4]
+                    assert committed[-1]["payload"]["retention"] == retention
+                    assert await OutboxPublisher(store, JetStreamEvents(connection.jetstream())).publish_pending() == 3
+                    assert not await store.pending_events(100)
+                finally:
+                    await server.drain()
+                    await lifecycle.close()
+        finally:
+            await connection.close()
+        # Stream storage, rather than a live Core NATS subscription, owns these events.
+        await asyncio.to_thread(broker.stop)
+        await asyncio.to_thread(broker.start)
+        published = await _stream(broker.url)
+        assert [envelope for _, _, envelope in published] == committed
+        assert all(subject == event_subject(event) and msg_id == event["event_id"]
+                   for subject, msg_id, event in published)
+
+    asyncio.run(scenario())

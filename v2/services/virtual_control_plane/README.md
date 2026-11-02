@@ -20,7 +20,8 @@ truthful-readiness contract `ge` uses. Authorization runs through the shared
 dialed).
 
 The service serves `workspaces.apply`, `workspaces.{workspace_id}.ensure`,
-`capabilities.get`, `workspaces.list`, `workspaces.{workspace_id}.get` and
+`workspaces.{workspace_id}.destroy`, `capabilities.get`, `workspaces.list`,
+`workspaces.{workspace_id}.get` and
 `operations.{operation_id}.get` through the shared messaging routes. The smolvm
 adapter (below) is registered only when `OE_VCP_SMOLVM_IMAGE` is set; without
 it capabilities remain empty and creation returns `UNSUPPORTED_CAPABILITY`.
@@ -156,7 +157,7 @@ backoff; a missing tool, a vanished machine, an ownership mismatch and a
 missing CLI binary are terminal. Registration is opt-in:
 `OE_VCP_SMOLVM_IMAGE` names the guest image, `OE_VCP_SMOLVM_TOOLS`
 (default `git,terminal`) the tools to advertise and `OE_VCP_SMOLVM_EXECUTABLE`
-the CLI. Destruction, daemon installation, guest credentials and agent
+the CLI. Daemon installation, guest credentials and agent
 execution are later tickets.
 
 `tests/smolvm_fake.py` is a deterministic CLI stand-in (machines as JSON
@@ -164,15 +165,58 @@ records, a guest directory per machine, real `sh`/`git`/`tar` behind
 `machine exec`, injectable faults) so routine CI needs no virtualization.
 `tests/test_smolvm_provider.py` covers the adapter against it;
 `tests/test_provider_conformance.py` runs the managed lifecycle cases --
-create, idempotent ensure, ownership mismatch, failed preparation, restart
-reconciliation and capability reporting -- against both the host-shaped double
-and the smolvm adapter. `tests/test_smolvm_smoke.py` is the opt-in real
+create, idempotent ensure, explicit destroy, ownership mismatch, failed
+preparation, restart reconciliation and capability reporting -- against both
+the host-shaped double and the smolvm adapter. `tests/test_smolvm_smoke.py` is the opt-in real
 smoke test (create, restart, ensure, delete):
 
 ```sh
 OE_VCP_SMOLVM_IMAGE=alpine:3.20 uv run --project v2 --frozen pytest \
   v2/services/virtual_control_plane/tests/test_smolvm_smoke.py -s
 ```
+
+### Explicit destruction
+
+`workspaces.{workspace_id}.destroy` requires `retention.artifacts` and
+`retention.checkpoints`, each `retain` or `delete`, with no defaults. Version
+checks run before acceptance. Ready, failed and suspended workspaces can be
+destroyed; active attempts are rejected with `INVALID_STATE` by an application
+rule. Execution admission must maintain `active_attempt_ids` and refuse new
+attempts once state is `destroying`; execution and cancellation remain future
+work. A concurrent lifecycle operation returns retryable `UNAVAILABLE`.
+
+Acceptance commits the immutable receipt, retention choices, pending operation
+and `destroying` state/version before any deletion. `AllocationProvider.destroy`
+receives persisted ownership and the optional opaque locator (failed provisioning
+may never have saved one). It must check workspace, runtime **and generation**,
+leave foreign compute untouched, and return only after confirming absence.
+smolvm checks its named machine's labels, deletes with `machine delete --force`,
+and lists again to confirm. An already absent machine succeeds without deletion;
+an invalid or unavailable inventory cannot prove absence.
+
+Only confirmed success atomically removes runtime ownership and the public
+runtime, marks the operation succeeded and workspace destroyed, and appends one
+`workspace.destroyed` event carrying the accepted retention choices. Acceptance
+and completion each advance the workspace version. Replaying the command returns
+the original receipt even after version changes; a fresh command on a destroyed
+tombstone succeeds without another state change, provider call or event.
+
+Pending/running destruction resumes with the same ownership after restart,
+including a crash after deletion but before completion. Transient failures use
+the same capped retry backoff and attempt limit as allocation. Terminal failure,
+retry exhaustion or a provider missing on restart leaves ownership intact,
+records a failed operation and visible workspace failure, publishes
+`workspace.failed`, and frees the operation lock. Other workspaces continue.
+Restore the provider or resolve the mismatch, then explicitly destroy with a new
+command ID; the original command's receipt and failed outcome remain unchanged.
+
+Artifact storage and checkpoints do not exist in this implementation. Both
+retention choices are validated, persisted and reported, but have no stored
+objects to act on. `retain` does **not** preserve files in compute: destruction
+removes the machine and its workspace files. There is no backup, artifact export,
+checkpoint retention implementation or automatic GC. Metadata, receipts,
+operations and events remain for audit/replay. Service shutdown cancels workers
+and leaves compute and ownership alone; it never initiates destruction.
 
 ### Where the ports go
 
@@ -205,7 +249,8 @@ reprovisioning with a different one or a lower-isolation fallback --
 
 ### Out of scope here
 
-The worktree adapter (#1054), workspace destruction, guest daemon and agent
+The worktree adapter (#1054), automatic garbage collection, artifact storage,
+checkpoint retention implementation, cancellation, guest daemon and agent
 execution, checkpoint/suspend/restore, and authenticated public (non-loopback)
 callers (#1051, which plugs into the same `Authorizer` boundary once it exists).
 
@@ -262,9 +307,9 @@ still requires #1187's exclusive state-directory lock. This is a single-host
 foundation, not PostgreSQL/HA support.
 
 There is no automatic pruning. Receipts (including original responses),
-workspace documents, runtime ownership and operations survive reopening and are
-retained indefinitely, satisfying the public contract's minimum seven-day
-command-ID retention. Disk usage therefore grows; future bounded retention
+workspace documents and operations survive reopening and are retained indefinitely,
+satisfying the public contract's minimum seven-day command-ID retention. Runtime
+ownership survives until explicit destruction confirms compute absence. Disk usage therefore grows; future bounded retention
 must preserve the retry window and unreconciled ownership. Creation handlers
 and fake provider effects are covered by the lifecycle tests above; sessions and attempts remain in follow-up tickets. The persistence tests
 use deterministic JSON records and do not execute an agent or allocate compute.

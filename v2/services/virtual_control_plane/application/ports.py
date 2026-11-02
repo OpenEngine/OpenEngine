@@ -148,7 +148,7 @@ class OwnershipMismatch(RuntimeError):
 class AllocationProvider(Protocol):
     """Managed allocation boundary; implementations must honor the identity after restart.
 
-    Every method receives the persisted `Ownership`. `provision` and `ensure`
+    Every method receives the persisted `Ownership`. `provision`, `ensure` and `destroy`
     run outside any transaction and may be interrupted at any point; a repeated
     call with the same ownership must converge on the same compute, never a
     second allocation. Returned locators remain opaque to VCP: only the
@@ -178,6 +178,17 @@ class AllocationProvider(Protocol):
         """Reassert ownership of existing compute and make it running and prepared.
 
         Never reprovisions compute that is gone and never adopts foreign compute.
+        """
+        ...
+
+    async def destroy(self, ownership: Ownership, locator: Locator | None) -> None:
+        """Delete only matching workspace/runtime/generation compute and confirm absence.
+
+        Idempotent even with no locator (provision may have crashed before saving
+        one). Already absent is success; foreign compute must remain untouched.
+        Return only after absence is confirmed; uncertainty raises and retains
+        ownership for retry or later explicit cleanup. This releases compute
+        only; artifact and checkpoint storage are not implemented yet.
         """
         ...
 
