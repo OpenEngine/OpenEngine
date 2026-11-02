@@ -272,3 +272,22 @@ def test_destroy_does_not_report_success_until_compute_is_absent(adapter, root, 
             await adapter.destroy(OWNERSHIP, locator)
         assert failure.value.retryable and smolvm_fake.machines(root)
     asyncio.run(scenario())
+
+
+def test_ensure_finds_its_machine_across_a_generation_bump(adapter, root):
+    async def scenario():
+        locator = await adapter.provision(OWNERSHIP, document())
+        machine = smolvm_fake.machines(root)[machine_name(OWNERSHIP)]
+        machine["labels"]["oe.generation"] = "2"
+        smolvm_fake.save_machine(root, machine)
+        assert await adapter.ensure(OWNERSHIP, locator, document()) == locator
+    asyncio.run(scenario())
+
+
+def test_only_destroy_treats_empty_inventory_output_as_unreadable(adapter, monkeypatch):
+    async def run(*args):
+        return b"", b"", 0
+    monkeypatch.setattr(adapter, "_run", run)
+    assert asyncio.run(adapter._owned(OWNERSHIP)) is None
+    with pytest.raises(ServiceError):
+        asyncio.run(adapter._owned(OWNERSHIP, destroying=True))

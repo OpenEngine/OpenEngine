@@ -37,6 +37,8 @@ DESTROY = f"{SCHEMAS}/commands.schema.json#/$defs/destroy_command"
 RETRY_BASE_SECONDS = 1.0
 RETRY_CAP_SECONDS = 60.0
 MAX_ATTEMPTS = 8
+# The provider verb each durable operation runs.
+VERBS = {"workspaces.apply": "provision", "workspaces.ensure": "ensure", "workspaces.destroy": "destroy"}
 
 log = logging.getLogger(__name__)
 
@@ -47,6 +49,18 @@ def now() -> str:
 
 def identity(prefix: str) -> str:
     return prefix + uuid4().hex
+
+
+def new_operation(body: dict[str, Any], operation: str, workspace_id: str, timestamp: str,
+                  status: str = "pending") -> dict[str, Any]:
+    return {"operation_id": identity("op_"), "command_id": body["command_id"], "operation": operation,
+            "status": status, "resources": {"workspace_id": workspace_id},
+            "created_at": timestamp, "updated_at": timestamp}
+
+
+def accepted(body: dict[str, Any], operation_id: str, workspace_id: str) -> dict[str, Any]:
+    return {"command_id": body["command_id"], "status": "accepted", "operation_id": operation_id,
+            "resource_id": workspace_id}
 
 
 def retry_delay(attempts: int) -> float:
@@ -157,10 +171,8 @@ class Lifecycle:
             if existing["specification"] != document:
                 raise ServiceError(ErrorCode.UNSUPPORTED_CAPABILITY, "workspace updates are not supported yet",
                                    details={"capability": "workspaces.apply.update"})
-            return {"command_id": body["command_id"], "status": "accepted",
-                    "operation_id": existing["operation_id"], "resource_id": existing["snapshot"]["workspace_id"]}
-        workspace_id, operation_id, runtime_id = identity("ws_"), identity("op_"), identity("rt_")
-        timestamp = now()
+            return accepted(body, existing["operation_id"], existing["snapshot"]["workspace_id"])
+        workspace_id, runtime_id, timestamp = identity("ws_"), identity("rt_"), now()
         snapshot = {
             "workspace_id": workspace_id, "name": name, "version": 1, "provider": spec["provider"],
             "state": "provisioning", "resources": {
@@ -173,35 +185,42 @@ class Lifecycle:
                        if source in spec.get("owner", {})},
             "active_attempt_ids": [], "created_at": timestamp, "updated_at": timestamp,
         }
-        operation = {"operation_id": operation_id, "command_id": body["command_id"], "operation": "workspaces.apply",
-                     "status": "pending", "resources": {"workspace_id": workspace_id},
-                     "created_at": timestamp, "updated_at": timestamp}
+        operation = new_operation(body, "workspaces.apply", workspace_id, timestamp)
+        operation_id = operation["operation_id"]
         await tx.put("workspaces", workspace_id, {"snapshot": snapshot, "specification": document,
                                                   "operation_id": operation_id, "active_operation_id": operation_id})
         await tx.put("operations", operation_id, {"snapshot": operation, "causal_path": body["causal_path"]})
         await tx.put("workspace_runtimes", workspace_id, {"runtime_id": runtime_id, "generation": 1,
                                                         "provider": spec["provider"], "locator": None})
         await self._event(tx, snapshot, operation, body["causal_path"], "provisioning", {"provider": spec["provider"]})
-        return {"command_id": body["command_id"], "status": "accepted", "operation_id": operation_id,
-                "resource_id": workspace_id}
+        return accepted(body, operation_id, workspace_id)
 
-    async def _accept_ensure(self, tx, request: Request) -> dict[str, Any]:
-        body = request.body
-        self._validate(body, ENSURE)
-        workspace_id = request.parameters["workspace_id"]
+    @staticmethod
+    async def _load_workspace(tx, request: Request) -> tuple[str, dict[str, Any], dict[str, Any]]:
+        """The addressed workspace at the expected version, or the shared rejection."""
+        workspace_id, expected = request.parameters["workspace_id"], request.body.get("expected_version")
         workspace = await tx.get("workspaces", workspace_id)
         if workspace is None or "snapshot" not in workspace:
             raise ServiceError(ErrorCode.NOT_FOUND, "workspace does not exist",
                                details={"resource_type": "workspace", "resource_id": workspace_id})
         snapshot = workspace["snapshot"]
-        expected = body.get("expected_version")
         if expected is not None and expected != snapshot["version"]:
             raise ServiceError(ErrorCode.VERSION_CONFLICT, "workspace version changed",
                                details={"expected_version": expected, "actual_version": snapshot["version"]})
+        return workspace_id, workspace, snapshot
+
+    @staticmethod
+    def _require_idle(workspace: dict[str, Any]) -> None:
         if active := workspace.get("active_operation_id"):
             # Retryable and unrecorded: the same command ID is accepted once the operation finishes.
             raise ServiceError(ErrorCode.UNAVAILABLE, "another operation on this workspace is in progress",
                                details={"operation_id": active})
+
+    async def _accept_ensure(self, tx, request: Request) -> dict[str, Any]:
+        body = request.body
+        self._validate(body, ENSURE)
+        workspace_id, workspace, snapshot = await self._load_workspace(tx, request)
+        self._require_idle(workspace)
         if snapshot["state"] == "suspended" and body["payload"].get("restore", "allow") == "allow":
             raise ServiceError(ErrorCode.UNSUPPORTED_CAPABILITY, "restoring a suspended workspace is not supported",
                                details={"capability": "restore_same_host", "provider": snapshot["provider"]})
@@ -212,29 +231,16 @@ class Lifecycle:
         if snapshot["provider"] not in self.providers:
             raise ServiceError(ErrorCode.UNSUPPORTED_CAPABILITY, "provider is not configured",
                                details={"capability": "provider." + snapshot["provider"]})
-        operation_id, timestamp = identity("op_"), now()
-        operation = {"operation_id": operation_id, "command_id": body["command_id"], "operation": "workspaces.ensure",
-                     "status": "pending", "resources": {"workspace_id": workspace_id},
-                     "created_at": timestamp, "updated_at": timestamp}
-        workspace["active_operation_id"] = operation_id
+        operation = new_operation(body, "workspaces.ensure", workspace_id, now())
+        workspace["active_operation_id"] = operation["operation_id"]
         await tx.put("workspaces", workspace_id, workspace)
-        await tx.put("operations", operation_id, {"snapshot": operation, "causal_path": body["causal_path"]})
-        return {"command_id": body["command_id"], "status": "accepted", "operation_id": operation_id,
-                "resource_id": workspace_id}
+        await tx.put("operations", operation["operation_id"], {"snapshot": operation, "causal_path": body["causal_path"]})
+        return accepted(body, operation["operation_id"], workspace_id)
 
     async def _accept_destroy(self, tx, request: Request) -> dict[str, Any]:
         body = request.body
         self._validate(body, DESTROY)
-        workspace_id = request.parameters["workspace_id"]
-        workspace = await tx.get("workspaces", workspace_id)
-        if workspace is None or "snapshot" not in workspace:
-            raise ServiceError(ErrorCode.NOT_FOUND, "workspace does not exist",
-                               details={"resource_type": "workspace", "resource_id": workspace_id})
-        snapshot = workspace["snapshot"]
-        expected = body.get("expected_version")
-        if expected is not None and expected != snapshot["version"]:
-            raise ServiceError(ErrorCode.VERSION_CONFLICT, "workspace version changed",
-                               details={"expected_version": expected, "actual_version": snapshot["version"]})
+        workspace_id, workspace, snapshot = await self._load_workspace(tx, request)
         # Execution admission must maintain this list and refuse new attempts
         # once destruction is accepted. Destroy itself never cancels attempts.
         allowed = ["ready", "failed", "suspended", "destroyed"]
@@ -242,18 +248,16 @@ class Lifecycle:
             raise ServiceError(ErrorCode.INVALID_STATE, "workspace has active attempts",
                                details={"resource_type": "workspace", "resource_id": workspace_id,
                                         "current_state": snapshot["state"], "allowed_states": allowed})
-        if active := workspace.get("active_operation_id"):
-            raise ServiceError(ErrorCode.UNAVAILABLE, "another operation on this workspace is in progress",
-                               details={"operation_id": active})
+        self._require_idle(workspace)
         if snapshot["state"] not in allowed:
             raise ServiceError(ErrorCode.INVALID_STATE, "workspace cannot be destroyed in this state",
                                details={"resource_type": "workspace", "resource_id": workspace_id,
                                         "current_state": snapshot["state"], "allowed_states": allowed})
-        operation_id, timestamp = identity("op_"), now()
+        timestamp = now()
         destroyed = snapshot["state"] == "destroyed"
-        operation = {"operation_id": operation_id, "command_id": body["command_id"], "operation": "workspaces.destroy",
-                     "status": "succeeded" if destroyed else "pending", "resources": {"workspace_id": workspace_id},
-                     "created_at": timestamp, "updated_at": timestamp}
+        operation = new_operation(body, "workspaces.destroy", workspace_id, timestamp,
+                                  "succeeded" if destroyed else "pending")
+        operation_id = operation["operation_id"]
         retention = body["payload"]["retention"]
         if destroyed:
             # A fresh command for a tombstone is a no-op; replay uses its receipt.
@@ -265,8 +269,7 @@ class Lifecycle:
         await tx.put("workspaces", workspace_id, workspace)
         await tx.put("operations", operation_id, {"snapshot": operation, "causal_path": body["causal_path"],
                                                    "retention": retention})
-        return {"command_id": body["command_id"], "status": "accepted", "operation_id": operation_id,
-                "resource_id": workspace_id}
+        return accepted(body, operation_id, workspace_id)
 
     async def _event(self, tx, workspace, operation, path, state, payload) -> None:
         event_id = identity("evt_")
@@ -357,8 +360,7 @@ class Lifecycle:
     async def _execute(self, record) -> None:
         operation = record["snapshot"]
         workspace_id = operation["resources"]["workspace_id"]
-        ensure = operation["operation"] == "workspaces.ensure"
-        destroy = operation["operation"] == "workspaces.destroy"
+        verb = VERBS[operation["operation"]]
         async with self.store.transaction() as tx:
             workspace = await tx.get("workspaces", workspace_id)
             runtime = await tx.get("workspace_runtimes", workspace_id)
@@ -372,36 +374,34 @@ class Lifecycle:
             # unrelated work proceeds, and ownership stays for cleanup once it is back.
             error = ServiceError(ErrorCode.PROVIDER_ERROR, f"provider {runtime['provider']} is not configured on this host",
                                  details={"provider": runtime["provider"]}).to_dict()
-            return await self._complete(record, ensure, None, error)
+            return await self._complete(record, verb, None, error)
         ownership = Ownership(workspace_id, runtime["runtime_id"], runtime["generation"])
         try:
             async with asyncio.timeout(ALLOCATION_TIMEOUT_SECONDS):
-                if destroy:
-                    await provider.destroy(ownership, runtime["locator"])
-                    locator = None
-                elif ensure:
+                if verb == "destroy":
+                    locator = await provider.destroy(ownership, runtime["locator"])
+                elif verb == "ensure":
                     locator = await provider.ensure(ownership, runtime["locator"], workspace["specification"])
                 else:
                     locator = await provider.provision(ownership, workspace["specification"])
         except TimeoutError:
-            return await self._retry(record, ensure, ServiceError(ErrorCode.UNAVAILABLE, "provider call timed out"))
+            return await self._retry(record, verb, ServiceError(ErrorCode.UNAVAILABLE, "provider call timed out"))
         except ServiceError as failure:
             if failure.retryable:
-                return await self._retry(record, ensure, failure)
-            return await self._complete(record, ensure, None, failure.to_dict())
+                return await self._retry(record, verb, failure)
+            return await self._complete(record, verb, None, failure.to_dict())
         except Exception:
             log.exception("provider %s failed", operation["operation"])
-            verb = "destroy" if destroy else "ensure" if ensure else "provision"
             error = ServiceError(ErrorCode.PROVIDER_ERROR, f"provider could not {verb} the workspace").to_dict()
-            return await self._complete(record, ensure, None, error)
-        await self._complete(record, ensure, locator, None)
+            return await self._complete(record, verb, None, error)
+        await self._complete(record, verb, locator, None)
 
-    async def _retry(self, record, ensure: bool, failure: ServiceError) -> None:
+    async def _retry(self, record, verb: str, failure: ServiceError) -> None:
         attempts = record.get("attempts", 0) + 1
         if attempts >= MAX_ATTEMPTS:
             error = ServiceError(ErrorCode.PROVIDER_ERROR, f"provider failed {attempts} times; last: {failure.message}"[:2048],
                                  details={"attempts": attempts, "last_error": failure.to_dict()}).to_dict()
-            return await self._complete(record, ensure, None, error)
+            return await self._complete(record, verb, None, error)
         delay = retry_delay(attempts)
         record["attempts"] = attempts
         record["not_before"] = (datetime.now(UTC) + timedelta(seconds=delay)).isoformat().replace("+00:00", "Z")
@@ -411,7 +411,7 @@ class Lifecycle:
         async with self.store.transaction() as tx:
             await tx.put("operations", record["snapshot"]["operation_id"], record)
 
-    async def _complete(self, record, ensure: bool, locator, error) -> None:
+    async def _complete(self, record, verb: str, locator, error) -> None:
         operation = record["snapshot"]
         workspace_id = operation["resources"]["workspace_id"]
         timestamp = now()
@@ -428,22 +428,7 @@ class Lifecycle:
                 operation["error"] = error
             if workspace.get("active_operation_id") == operation["operation_id"]:
                 workspace.pop("active_operation_id")
-            if operation["operation"] == "workspaces.destroy":
-                snapshot.update(state="failed" if error else "destroyed", version=snapshot["version"] + 1,
-                                updated_at=timestamp)
-                if error:
-                    snapshot["failure"] = error
-                    payload = {"error": error, "runtime_generation": runtime["generation"]}
-                else:
-                    snapshot.pop("runtime", None)
-                    snapshot.pop("failure", None)
-                    operation["result"] = {"retention": record["retention"]}
-                    payload = operation["result"]
-                    # Only the provider's confirmed absence releases ownership.
-                    await tx.delete("workspace_runtimes", workspace_id)
-                    runtime = None
-                await self._event(tx, snapshot, operation, record["causal_path"], snapshot["state"], payload)
-            elif ensure:
+            if verb == "ensure":
                 # A ready workspace stays as it is: no state change, version bump
                 # or second ready event. A failed ensure retains ownership too.
                 if not error:
@@ -451,11 +436,21 @@ class Lifecycle:
                                            "restored": False}
                     runtime["locator"] = locator
             else:
-                snapshot.update(state="failed" if error else "ready", version=snapshot["version"] + 1, updated_at=timestamp)
+                snapshot.update(version=snapshot["version"] + 1, updated_at=timestamp)
                 if error:
-                    snapshot["failure"] = error
+                    snapshot.update(state="failed", failure=error)
                     payload = {"error": error, "runtime_generation": runtime["generation"]}
+                elif verb == "destroy":
+                    snapshot["state"] = "destroyed"
+                    snapshot.pop("runtime", None)
+                    snapshot.pop("failure", None)
+                    operation["result"] = {"retention": record["retention"]}
+                    payload = operation["result"]
+                    # Only the provider's confirmed absence releases ownership.
+                    await tx.delete("workspace_runtimes", workspace_id)
+                    runtime = None
                 else:
+                    snapshot["state"] = "ready"
                     runtime["locator"] = locator
                     snapshot["runtime"] = {"runtime_id": runtime["runtime_id"], "generation": runtime["generation"],
                                            "state": "running", "started_at": timestamp}
