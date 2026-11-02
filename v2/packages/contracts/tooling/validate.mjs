@@ -6,7 +6,6 @@
 //
 //   node validate.mjs                  every service
 //   node validate.mjs graph_engine     one service
-import { accountTokenChannels } from "./tenant-addresses.mjs";
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,9 +29,11 @@ for (const service of services) {
     console.log(`${service}: ${severity[diagnostic.severity]} ${diagnostic.code}: ${diagnostic.message} at ${diagnostic.path.join(".")}`);
   }
   if (document && !service.startsWith("internal/")) {
-    for (const channel of accountTokenChannels(service, document)) {
-      console.log(`${service}: error account-token: channel ${channel.id()} address ${channel.address()} contains {account}`);
-      problems.push(channel);
+    for (const channel of document.channels()) {
+      if ((channel.address() ?? "").split(".").includes("{account}")) {
+        console.log(`${service}: error account-token: channel ${channel.id()} address ${channel.address()} contains {account}`);
+        problems.push(channel);
+      }
     }
   }
   if (!document || problems.length) failed = true;

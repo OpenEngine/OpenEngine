@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:virtual-control-plane
 info:
   title: OpenEngine Virtual Control Plane (vcp)
-  version: 1.0.0-draft.4
+  version: 1.0.0-draft.3
   description: |
     The Virtual Control Plane manages workspaces (where agents work), the
     compute runtimes behind them, and the agent sessions and task attempts
@@ -46,16 +46,11 @@ info:
     ## Identity
     A tenant is a NATS account. A request's tenant is the account the
     caller's connection belongs to, never a payload field, and the acting
-    identity within it comes from verified connection credentials (or a
+    identity within it comes from that authenticated connection (or a
     verified delegation). The tenancy registry maps each account's public
     key (the shared `account` type) to its `tenant_id`, a UUIDv7.
     `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
     (`local_tenant`).
-
-    Each account isolates its subjects, reply inboxes and JetStream. Identical
-    subject and inbox names do not grant access across accounts. This is the
-    multi-tenancy design; runtime credential propagation, provisioning and
-    broker configuration are separate work.
 
     When VCP starts a task attempt it issues a NATS user credential for that
     attempt inside the tenant's account. Its claims name the workspace and the
@@ -69,7 +64,7 @@ info:
     ## Tenant subjects
     Tenants use the subjects in this document,
     `oe.v1.vcp.{control|query|events}.…`; none carries a tenant or account
-    token. When shared VCP receives a tenant's request, NATS rewrites its subject
+    token. Before VCP receives a tenant's request, NATS rewrites its subject
     into the internal form `oe.v1.{account}.vcp.…`, with the caller's account
     public key as the third token. Only NATS produces that form: the service
     account exports its subjects with `account_token_position: 3`, and a
