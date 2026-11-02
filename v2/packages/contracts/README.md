@@ -202,9 +202,11 @@ A project, namespace or actor in a payload cannot choose a tenant or grant
 access to another account. Tenant-facing subjects remain unchanged.
 
 This section defines the required boundary, not deployed broker behavior.
-Messaging Principal/Client/Server changes, queue groups, runtime rewriting,
-broker exports/imports, operator-mode setup, account provisioning and registry
-persistence are deferred. So are database tenant migrations and RLS,
+The [messaging package](../messaging/README.md) implements request principals,
+shared Client/Server addressing, account-token stripping before routing and
+service queue groups. Broker subject rewriting through exports/imports,
+operator-mode setup, account provisioning and registry persistence are deferred.
+So are database tenant migrations and RLS,
 per-attempt credentials and live NATS/database isolation suites. The internal
 workspace runtime contract retains its separate `oe.internal.v1` scope.
 
