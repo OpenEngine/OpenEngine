@@ -46,7 +46,11 @@ export default defineConfig({
     // Clears what the last run left (repo, folder, tunnel) before this one starts. Nothing is
     // deleted afterwards, so a failed run leaves its repo and folder to look at.
     { ...projects[0]!, name: "setup", testDir: "./tests/benchmark", testMatch: /.*\.setup\.ts/ },
-    { ...projects[0]!, name: "benchmark", grep: /@benchmark/, dependencies: ["setup"] },
+    // The journey, whose guide the reporter writes. What is tagged @verify checks that its run worked and is not part of it.
+    { ...projects[0]!, name: "benchmark", grep: /@benchmark/, grepInvert: /@verify/, dependencies: ["setup"] },
+    // The verifier, run after the journey passed: `npm run oe-benchmark` starts it with `--project=verify` and no guide reporter,
+    // since the reporter would write a page for it. It has no setup: setup deletes the repository it checks.
+    { ...projects[0]!, name: "verify", testMatch: /benchmark\.spec\.ts/, grep: /@verify/ },
   ],
   webServer: webServerConfig,
 })

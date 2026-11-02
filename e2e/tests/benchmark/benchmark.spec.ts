@@ -7,6 +7,7 @@ import { issues } from "../../fixtures/calculator/issues.ts"
 import { milestone } from "../../fixtures/calculator/milestone.ts"
 import { driveMilestone, type Budget } from "../../support/driver.ts"
 import { show, step } from "../../support/show.ts"
+import { expectDisplay, key, press } from "../../support/verifier.ts"
 import { launchQuickTunnel } from "../../support/quick-tunnel.ts"
 import { benchmarkCategory } from "../docCategories"
 
@@ -62,7 +63,7 @@ test.use({
 })
 
 test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
-  test.describe(
+  test.describe.serial(
     withDocMeta("Build Software With OpenEngine", {
       description: "A step-by-step guide to building software with OpenEngine: install it, give it a list of GitHub issues, and watch it build the project, using a small calculator as the example.",
       sidebar_position: 1,
@@ -549,6 +550,59 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           // Stopped here as well as by teardown, so a run that passes leaves nothing running.
           await terminal.run("oe daemon stop", { timeout: 120_000 }).catch(() => {})
         }
+      })
+
+      // The benchmark's pass or fail for the calculator: a fixed check of what the journey built, written by a person and
+      // never shown to the agents. It checks that the guide's run worked, so none of its steps are in the guide. It runs
+      // right after the journey, and only if the journey passed, since the next run's setup deletes the repository.
+      test("Verify the calculator", { tag: ["@verify"] }, async ({ page }) => {
+        const url = `https://${await whoami()}.github.io/${BENCH_REPO}/`
+
+        await step("The calculator is deployed with all its keys", async () => {
+          // The deploy follows the last merge by a minute or so. The last key to be built is ÷, so wait until the page has it.
+          await expect(async () => {
+            await page.goto(url)
+            await expect(key(page, "÷")).toBeVisible({ timeout: 2_000 })
+          }).toPass({ timeout: 10 * 60_000, intervals: [20_000] })
+        })
+
+        await step("It adds", async () => {
+          await page.goto(url)
+          await press(page, "1+1=")
+          await expectDisplay(page, "2")
+        })
+
+        await step("It subtracts", async () => {
+          await page.goto(url)
+          await press(page, "5-3=")
+          await expectDisplay(page, "2")
+        })
+
+        await step("It multiplies", async () => {
+          await page.goto(url)
+          await press(page, "3×4=")
+          await expectDisplay(page, "12")
+        })
+
+        await step("It divides", async () => {
+          await page.goto(url)
+          await press(page, "10÷2=")
+          await expectDisplay(page, "5")
+        })
+
+        await step("It says Error when dividing by zero, and carries on", async () => {
+          await page.goto(url)
+          await press(page, "10÷0=")
+          await expectDisplay(page, "Error")
+          await press(page, "C7")
+          await expectDisplay(page, "7")
+        })
+
+        await step("It clears the display", async () => {
+          await page.goto(url)
+          await press(page, "77C")
+          await expectDisplay(page, "0")
+        })
       })
     },
   )

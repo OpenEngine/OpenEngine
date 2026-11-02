@@ -6,7 +6,7 @@
     "test": "playwright test",
     "test:ui": "playwright test --ui",
     "doc": "TEST2DOC=true playwright test --config=playwright-test2doc.config.ts --grep-invert \"@skip-docs|@benchmark\"",
-    "oe-benchmark": "TEST2DOC=true playwright test --config=playwright-benchmark.config.ts",
+    "oe-benchmark": "TEST2DOC=true playwright test --config=playwright-benchmark.config.ts --project=benchmark && PLAYWRIGHT_JSON_OUTPUT_NAME=benchmark-results/verify.json playwright test --config=playwright-benchmark.config.ts --project=verify --reporter=list,json",
     "oe-benchmark:clean": "node scripts/benchmark-clean.ts",
     "types": "tsc",
     "postinstall": "node scripts/fix-node-pty.mjs",
