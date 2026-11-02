@@ -81,7 +81,8 @@ def downgrade() -> None:
         table = sa.table(name, sa.column('tenant_id', sa.Uuid()))
         if bind.scalar(sa.select(sa.func.count()).select_from(table).where(
                 table.c.tenant_id != UUID(LOCAL_TENANT))):
-            raise RuntimeError(f'{name} has rows outside LOCAL_TENANT; remove them to downgrade')
+            message = f'{name} has rows outside LOCAL_TENANT; remove them to downgrade'
+            raise RuntimeError(message)
     _detach_attempts()
     for table in TABLES:
         _keys(table, False)
