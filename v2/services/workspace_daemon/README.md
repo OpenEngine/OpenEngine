@@ -125,8 +125,10 @@ operator-configured adapter behind the same executor port as `fake`:
 - Every prompt read and write shares a deadline (`--prompt-timeout-seconds`,
   default 3600), so an adapter that stops reading or answering fails the
   attempt. The whole process tree is fenced before any terminal update,
-  including after `end_turn`; text streamed before a failed turn is still
-  journaled. Any other error during the turn fails the fenced
+  including after `end_turn`. Only then are the turn's remaining text (also
+  after a failed turn) and its usage journaled, so waiting for outbox capacity
+  never keeps the agent alive past its deadline; a cancelled wait fences and
+  skips that journaling. Any other error during the turn fails the fenced
   attempt as `executor_failed`.
 
 `supervision.py` is the only supervisor the installed daemon has. The daemon

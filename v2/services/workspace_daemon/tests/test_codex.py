@@ -188,6 +188,49 @@ def test_blocked_io_and_crashes_fail_only_after_the_tree_is_fenced(tmp_path, mod
     asyncio.run(scenario())
 
 
+def test_timed_out_agent_is_fenced_before_buffered_text_waits_for_outbox_capacity(tmp_path):
+    async def scenario():
+        fence = GroupFence()
+        # attempt.started alone fills the outbox (setup already delivered runtime.ready).
+        journal, vcp, outbox = await setup(tmp_path, codex(tmp_path, "partial_hang", fence, prompt_timeout=0.5),
+                                           max_pending_updates=1)
+        assert (await journal.execute(EXECUTE, task()))["status"] == "accepted"
+        worker = ExecutionWorker(journal)
+        await worker.run_once()
+        for _ in range(200):
+            if fence.fenced and all(p.returncode is not None for p in fence.processes.values()):
+                break
+            await asyncio.sleep(0.05)
+        assert fence.fenced and all(p.returncode is not None for p in fence.processes.values())
+        assert worker.tasks, "the buffered text waits for capacity, after fencing"
+        while worker.tasks:
+            await drain(outbox)
+            await asyncio.sleep(0.01)
+        await drain(outbox)
+        assert [u["payload"]["text"] for u in updates(vcp, "attempt.progress")] == ["Partial answer"]
+        assert updates(vcp)[-1]["kind"] == "attempt.failed"
+        await journal.store.close()
+    asyncio.run(scenario())
+
+
+def test_cancelled_wait_fences_and_skips_journaling(tmp_path):
+    async def scenario():
+        fence = GroupFence()
+        journal, _, _ = await setup(tmp_path, codex(tmp_path, "partial_hang", fence), max_pending_updates=1)
+        assert (await journal.execute(EXECUTE, task()))["status"] == "accepted"
+        worker = ExecutionWorker(journal)
+        await worker.run_once()
+        await asyncio.sleep(1)
+        tasks = list(worker.tasks.values())
+        for value in tasks:
+            value.cancel()
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), 10)  # shutdown is not held by the outbox
+        assert len(fence.fenced) == 1 and all(p.returncode is not None for p in fence.processes.values())
+        assert (await state(journal))["state"] == "running"  # recovered later through fencing and executor_lost
+        await journal.store.close()
+    asyncio.run(scenario())
+
+
 def test_launcher_directories_must_not_be_writable_by_the_agent(tmp_path, monkeypatch):
     unsafe = tmp_path / "unsafe"
     unsafe.mkdir()
@@ -202,7 +245,7 @@ def test_launcher_directories_must_not_be_writable_by_the_agent(tmp_path, monkey
 def test_unexpected_wait_errors_fail_the_fenced_attempt_rather_than_lose_it(tmp_path, monkeypatch):
     async def scenario():
         fence = GroupFence()
-        journal, vcp, outbox = await setup(tmp_path, codex(tmp_path, fence=fence))
+        journal, vcp, outbox = await setup(tmp_path, codex(tmp_path, "flood", fence))
 
         async def broken(attempt_id, value):
             raise ValueError(value)  # for example a journal or encoding error

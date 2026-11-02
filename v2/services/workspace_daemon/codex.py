@@ -132,16 +132,14 @@ class CodexExecutor:
 
         outcome: Outcome = ("failed", {"error": {"code": "PROVIDER_ERROR", "message": "Agent did not complete its turn",
                                                  "retryable": False}, "reason": "executor_failed"}, "killed")
+        reported: dict[str, Any] | None = None
         try:
             started = now()
-            try:
-                result = await client.prompt(prompt, update, self.prompt_timeout)
-            finally:
-                await flush(1)  # text the agent already streamed is kept even if the turn then fails
+            result = await client.prompt(prompt, update, self.prompt_timeout)
             usage = result.get("usage") or {}
             if all(type(usage.get(key)) is int and usage[key] >= 0 for key in ("inputTokens", "outputTokens")):
-                await progress({"kind": "usage", "period_start": started, "period_end": now(), "usage": {
-                    name: usage[key] for key, name in USAGE.items() if type(usage.get(key)) is int and usage[key] >= 0}})
+                reported = {"kind": "usage", "period_start": started, "period_end": now(), "usage": {
+                    name: usage[key] for key, name in USAGE.items() if type(usage.get(key)) is int and usage[key] >= 0}}
             if result.get("stopReason") == "end_turn":
                 outcome = ("completed", {"result": {"summary": summary.strip() or "Agent completed the task."}},
                            "exited")
@@ -152,8 +150,16 @@ class CodexExecutor:
             log.exception("ACP prompt failed unexpectedly", extra={"daemon.attempt_id": attempt_id})
         finally:
             # A finished turn is not evidence that the agent's tools stopped.
+            # Cancellation still fences here, and then skips the journaling below.
             if not await self._stop(handle, client, client.process):
                 raise UnconfirmedTermination
+        # Only once the tree is fenced may journaling wait for outbox capacity: the agent cannot outlive its deadline.
+        try:
+            await flush(1)  # text the agent already streamed is kept even if the turn failed
+            if reported is not None:
+                await progress(reported)
+        except Exception:
+            log.exception("final ACP progress was not journaled", extra={"daemon.attempt_id": attempt_id})
         return outcome
 
     async def fence(self, attempt: dict[str, Any]) -> bool:

@@ -5,7 +5,7 @@
 Every received frame is appended to LOG as JSON; known session IDs persist
 beside it, so a restarted agent can load them. MODE selects one behavior:
 `normal`, `no_resume`, `no_read_only`, `exit` (crash mid-prompt), `partial_exit`
-(crash after streaming some text), `hang` (never
+(crash after streaming some text), `partial_hang` (stream some text, then hang), `hang` (never
 answers the prompt), `stop_reading` (stops reading stdin after set_mode),
 `flood` (many chunks), `child` (leaves a grandchild running).
 """
@@ -75,7 +75,9 @@ while True:
         if mode == "partial_exit":
             chunk(session_id, "Partial answer")
             sys.exit(3)
-        if mode == "hang":
+        if mode == "partial_hang":
+            chunk(session_id, "Partial answer")
+        if mode in ("hang", "partial_hang"):
             time.sleep(3600)
         send({"id": "permission_1", "method": "session/request_permission", "params": {
             "sessionId": session_id, "toolCall": {"toolCallId": "call_1", "title": "Write a file"},
