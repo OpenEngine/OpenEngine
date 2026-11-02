@@ -34,8 +34,8 @@ class UpdateOutbox:
         """Deliver one update; True when VCP committed it."""
         store, subject = self.journal.store, self.journal.updates
         async with store.read() as tx:
-            meta = await tx.get("meta", "runtime")
-            pending = None if meta.get("blocked") else await tx.oldest_pending()
+            meta = await tx.runtime()
+            pending = None if meta["blocked"] else await tx.oldest_pending()
         if pending is None:
             return False
         sequence, wire = pending
@@ -54,10 +54,10 @@ class UpdateOutbox:
             self.backoff.failed(key)
             return False
         async with store.transaction() as tx:
-            meta = await tx.get("meta", "runtime")
+            meta = await tx.runtime()
             if ack["status"] == "committed":
                 await tx.acknowledge(sequence)
-                if sequence == meta.get("ready_sequence"):
+                if sequence == meta["ready_sequence"]:
                     meta["ready"] = True  # VCP committed readiness: admission may begin.
             elif ack["error"]["code"] == "EVENT_GAP" and await tx.has_update(ack["expected_sequence"]):
                 await tx.replay_from(ack["expected_sequence"])
@@ -66,7 +66,7 @@ class UpdateOutbox:
                                                   "event_id": ack["event_id"]})
                 log.error("update rejected; runtime blocked for reconciliation",
                           extra={f"daemon.{k}": v for k, v in meta["blocked"].items()})
-            await tx.put("meta", "runtime", meta)
+            await tx.save_runtime(meta)
         if ack["status"] == "committed":
             self.backoff.done(key)
             return True

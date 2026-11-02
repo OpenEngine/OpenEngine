@@ -93,9 +93,8 @@ class RuntimeUpdates:
         if rejection := fence(runtime, workspace, target):
             raise rejection
         assert workspace is not None
-        key = digest([target["runtime_id"], message["event_id"]])
-        if previous := await tx.get("runtime_updates", key):
-            if previous["digest"] != digest(message):
+        if previous := await tx.runtime_update(target["runtime_id"], message["event_id"]):
+            if previous != digest(message):
                 raise Rejected("EVENT_CONFLICT", "event ID was reused with different content", quarantine=True)
             return  # Duplicate delivery: committed without repeating any effect.
         # The fenced runtime still owns its attempts whatever the workspace state,
@@ -122,8 +121,7 @@ class RuntimeUpdates:
             await self._project(tx, message)
         status.update(sequence=message["sequence"], boot_id=message["boot_id"])
         await tx.put("runtime_status", target["runtime_id"], status)
-        await tx.put("runtime_updates", key, {"runtime_id": target["runtime_id"], "event_id": message["event_id"],
-                                              "sequence": message["sequence"], "digest": digest(message)})
+        await tx.record_runtime_update(target["runtime_id"], message["event_id"], message["sequence"], digest(message))
 
     async def _project(self, tx, message: dict[str, Any]) -> None:
         target = message["target"]

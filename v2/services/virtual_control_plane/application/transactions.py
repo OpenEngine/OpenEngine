@@ -16,7 +16,7 @@ from typing import Any, Literal, Protocol
 
 Document = dict[str, Any]
 Collection = Literal["workspaces", "operations", "workspace_runtimes", "sessions", "attempts", "attempt_bindings",
-                     "runtime_status", "runtime_updates"]
+                     "runtime_status"]
 
 
 class CommandIdConflict(ValueError):
@@ -65,8 +65,16 @@ class Transaction(Protocol):
         """
         ...
 
-    async def append_runtime_command(self, command_id: str, subject: str, wire: bytes) -> None:
+    async def append_runtime_command(self, command_id: str, attempt_id: str, subject: str, wire: bytes) -> None:
         """Insert exact validated UTF-8 bytes once; never overwrite an accepted command."""
+        ...
+
+    async def runtime_update(self, runtime_id: str, event_id: str) -> str | None:
+        """The content digest of a committed runtime update, if any."""
+        ...
+
+    async def record_runtime_update(self, runtime_id: str, event_id: str, sequence: int, digest: str) -> None:
+        """Insert-only: a committed update's identity, sequence and content digest."""
         ...
 
     async def settle_runtime_command(self, command_id: str, status: str, acknowledgement: bytes) -> bool:

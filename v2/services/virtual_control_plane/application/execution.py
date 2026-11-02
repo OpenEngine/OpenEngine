@@ -147,7 +147,7 @@ class Execution:
         await tx.put("attempt_bindings", attempt_id, {**binding, "execution": message["execution"], "session_mode": selection["mode"]})
         await tx.put("operations", operation["operation_id"], {"snapshot": operation, "causal_path": body["causal_path"]})
         await tx.put("workspaces", workspace_id, record)
-        await tx.append_runtime_command(command_id, subject, wire)
+        await tx.append_runtime_command(command_id, attempt_id, subject, wire)
         return accepted(body, operation["operation_id"], attempt_id)
 
     @staticmethod

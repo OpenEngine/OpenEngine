@@ -18,25 +18,41 @@ track runtime command delivery and updates
 
  CREATE INDEX ix_sessions_workspace_page ON sessions (json_extract(body, '$.snapshot.workspace_id'), json_extract(body, '$.snapshot.created_at'), key);
 
-@@ -58,11 +60,17 @@
- CREATE TABLE runtime_commands (
+@@ -55,17 +57,32 @@
+    published_at DATETIME
+ );
+
+-CREATE TABLE runtime_commands (
++CREATE TABLE "runtime_commands" (
     command_id VARCHAR(128) NOT NULL,
     subject TEXT NOT NULL,
--   wire BLOB NOT NULL,
-+   wire BLOB NOT NULL, status VARCHAR(16) DEFAULT 'pending' NOT NULL, acknowledgement BLOB,
-    PRIMARY KEY (command_id)
+    wire BLOB NOT NULL,
+-   PRIMARY KEY (command_id)
++   attempt_id VARCHAR(128) NOT NULL,
++   status VARCHAR(16) DEFAULT 'pending' NOT NULL,
++   acknowledgement BLOB,
++   PRIMARY KEY (command_id),
++   CONSTRAINT fk_runtime_commands_attempt_id_attempts FOREIGN KEY(attempt_id) REFERENCES attempts ("key"),
++   CONSTRAINT ck_runtime_commands_status CHECK (status IN ('pending', 'acknowledged', 'rejected', 'blocked'))
  );
 
  CREATE TABLE runtime_status (
-+   "key" VARCHAR(128) NOT NULL,
-+   body JSON NOT NULL,
-+   PRIMARY KEY ("key")
-+);
-+
-+CREATE TABLE runtime_updates (
     "key" VARCHAR(128) NOT NULL,
     body JSON NOT NULL,
     PRIMARY KEY ("key")
++);
++
++CREATE TABLE runtime_updates (
++   runtime_id VARCHAR(128) NOT NULL,
++   event_id VARCHAR(128) NOT NULL,
++   sequence INTEGER NOT NULL,
++   digest VARCHAR(64) NOT NULL,
++   PRIMARY KEY (runtime_id, event_id),
++   CONSTRAINT uq_runtime_updates_sequence UNIQUE (runtime_id, sequence),
++   FOREIGN KEY(runtime_id) REFERENCES runtime_status ("key")
+ );
+
+ CREATE TABLE sessions (
 ```
 
 ## Schema
@@ -101,11 +117,16 @@ CREATE TABLE outbox (
     published_at DATETIME
 );
 
-CREATE TABLE runtime_commands (
+CREATE TABLE "runtime_commands" (
     command_id VARCHAR(128) NOT NULL,
     subject TEXT NOT NULL,
-    wire BLOB NOT NULL, status VARCHAR(16) DEFAULT 'pending' NOT NULL, acknowledgement BLOB,
-    PRIMARY KEY (command_id)
+    wire BLOB NOT NULL,
+    attempt_id VARCHAR(128) NOT NULL,
+    status VARCHAR(16) DEFAULT 'pending' NOT NULL,
+    acknowledgement BLOB,
+    PRIMARY KEY (command_id),
+    CONSTRAINT fk_runtime_commands_attempt_id_attempts FOREIGN KEY(attempt_id) REFERENCES attempts ("key"),
+    CONSTRAINT ck_runtime_commands_status CHECK (status IN ('pending', 'acknowledged', 'rejected', 'blocked'))
 );
 
 CREATE TABLE runtime_status (
@@ -115,9 +136,13 @@ CREATE TABLE runtime_status (
 );
 
 CREATE TABLE runtime_updates (
-    "key" VARCHAR(128) NOT NULL,
-    body JSON NOT NULL,
-    PRIMARY KEY ("key")
+    runtime_id VARCHAR(128) NOT NULL,
+    event_id VARCHAR(128) NOT NULL,
+    sequence INTEGER NOT NULL,
+    digest VARCHAR(64) NOT NULL,
+    PRIMARY KEY (runtime_id, event_id),
+    CONSTRAINT uq_runtime_updates_sequence UNIQUE (runtime_id, sequence),
+    FOREIGN KEY(runtime_id) REFERENCES runtime_status ("key")
 );
 
 CREATE TABLE sessions (

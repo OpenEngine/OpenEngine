@@ -17,7 +17,7 @@ from virtual_control_plane.application.transactions import (
     Collection, CommandIdConflict, Document, InvalidEvent, PendingEvent, RuntimeCommand,
 )
 from virtual_control_plane.jetstream import event_errors
-from virtual_control_plane.persistence.schema import documents, outbox, runtime_commands
+from virtual_control_plane.persistence.schema import documents, outbox, runtime_commands, runtime_updates
 
 
 # Enumerate workspace IDs by index seeks, rather than DISTINCT/GROUP BY scans.
@@ -77,8 +77,8 @@ def _identity(subject: str, command: Document) -> str:
     )
 
 
-# Accepted bindings and committed update identities are written once.
-IMMUTABLE = ("attempt_bindings", "runtime_updates")
+# Accepted bindings are written once.
+IMMUTABLE = ("attempt_bindings",)
 
 
 def _collection(collection: Collection) -> sa.Table:
@@ -149,8 +149,18 @@ class Transaction:
         ))
         return response
 
-    async def append_runtime_command(self, command_id: str, subject: str, wire: bytes) -> None:
-        await self._connection.execute(runtime_commands.insert().values(command_id=command_id, subject=subject, wire=wire))
+    async def append_runtime_command(self, command_id: str, attempt_id: str, subject: str, wire: bytes) -> None:
+        await self._connection.execute(runtime_commands.insert().values(
+            command_id=command_id, attempt_id=attempt_id, subject=subject, wire=wire))
+
+    async def runtime_update(self, runtime_id: str, event_id: str) -> str | None:
+        query = sa.select(runtime_updates.c.digest).where(
+            runtime_updates.c.runtime_id == runtime_id, runtime_updates.c.event_id == event_id)
+        return (await self._connection.execute(query)).scalar_one_or_none()
+
+    async def record_runtime_update(self, runtime_id: str, event_id: str, sequence: int, digest: str) -> None:
+        await self._connection.execute(runtime_updates.insert().values(
+            runtime_id=runtime_id, event_id=event_id, sequence=sequence, digest=digest))
 
     async def settle_runtime_command(self, command_id: str, status: str, acknowledgement: bytes) -> bool:
         if status not in ("acknowledged", "rejected", "blocked"):

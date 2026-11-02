@@ -41,19 +41,24 @@ erDiagram
         VARCHAR(128) command_id PK "not null"
         TEXT subject "not null"
         BLOB wire "not null"
+        VARCHAR(128) attempt_id FK "ADDED; not null"
         VARCHAR(16) status "ADDED; not null; default: 'pending'"
         BLOB acknowledgement "ADDED; nullable"
     }
     class runtime_commands changed
+    attempts ||--o{ runtime_commands : "attempt_id"
     runtime_status["runtime_status<br/>Execution readiness, capabilities, journal identity and update high-water mark of an owned runtime."] {
         VARCHAR(128) key PK "not null"
         JSON body "not null"
     }
-    runtime_updates["runtime_updates<br/>Committed internal runtime update identities and digests, for duplicate and conflict detection. (ADDED)"] {
-        VARCHAR(128) key PK "ADDED; not null"
-        JSON body "ADDED; not null"
+    runtime_updates["runtime_updates<br/>Committed internal runtime updates, for duplicate and conflict detection. (ADDED)"] {
+        VARCHAR(128) runtime_id PK,FK,UK "ADDED; not null"
+        VARCHAR(128) event_id PK "ADDED; not null"
+        INTEGER sequence UK "ADDED; not null"
+        VARCHAR(64) digest "ADDED; not null"
     }
     class runtime_updates added
+    runtime_status ||--o{ runtime_updates : "runtime_id"
     sessions["sessions<br/>Agent conversation snapshots, separate from workspace lifecycle."] {
         VARCHAR(128) key PK "not null"
         JSON body "not null"

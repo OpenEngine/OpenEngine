@@ -23,11 +23,10 @@ from openengine.contracts.runtime import digest, error, validate_wire_message
 
 from workspace_daemon.executor import ExecutorPort
 from workspace_daemon.initialization import RecoveryRefused, Refusal
-from workspace_daemon.store import JournalStore
+from workspace_daemon.store import TERMINAL, JournalStore
 
 log = logging.getLogger(__name__)
 
-TERMINAL = ("completed", "failed", "cancelled")
 INTERRUPTED = ("launching", "running")
 
 
@@ -72,16 +71,16 @@ class Journal:
     async def recover(self) -> list[dict[str, Any]]:
         """Fence interrupted work, then journal `runtime.ready`. Returns the evidence for each decision."""
         async with self.store.transaction() as tx:
-            meta = await tx.get("meta", "runtime")
+            meta = await tx.runtime()
             if meta is None:
                 if self.established:
                     raise RecoveryRefused(Refusal.EMPTY, target=self.binding)
-                meta = {"target": self.binding, "journal_id": identity("journal_"), "sequence": 0, "active_attempts": 0}
+                meta = {"target": self.binding, "journal_id": identity("journal_"), "sequence": 0}
             if meta["target"] != self.binding:
                 raise RecoveryRefused(Refusal.REBOUND, target=self.binding, journal_id=meta["journal_id"])
             meta["ready"] = False
-            await tx.put("meta", "runtime", meta)
-            attempts = await tx.all("attempts")
+            await tx.save_runtime(meta)
+            attempts = await tx.attempts()
         evidence = []
         for attempt in attempts:
             command = attempt["command"]
@@ -95,7 +94,7 @@ class Journal:
                 if executor is None or not await executor.fence(attempt):
                     raise RecoveryRefused(Refusal.UNFENCED, **item, decision="unresolved")
                 async with self.store.transaction() as tx:
-                    await self.finish(tx, await tx.get("attempts", item["attempt_id"]), "failed", {"error": {
+                    await self.finish(tx, await tx.attempt(item["attempt_id"]), "failed", {"error": {
                         "code": "PROVIDER_ERROR", "message": "Interrupted executor was fenced after daemon restart",
                         "retryable": False}, "reason": "executor_lost"}, "killed")
                 item["decision"] = "fenced_failed"
@@ -105,23 +104,23 @@ class Journal:
                 item["decision"] = "replay_only"
             evidence.append(item)
         async with self.store.transaction() as tx:
-            meta = await tx.get("meta", "runtime")
-            if meta.get("blocked"):
+            meta = await tx.runtime()
+            if meta["blocked"]:
                 evidence.append({"journal_id": meta["journal_id"], "decision": "blocked", **meta["blocked"]})
             sequence = await self.append(tx, "runtime.ready", {
                 "executors": sorted(self.executors), "max_concurrent_attempts": self.max_concurrent_attempts,
                 "progress_kinds": sorted({kind for e in self.executors.values() for kind in e.progress_kinds}),
                 "journal_id": meta["journal_id"]})
-            meta = await tx.get("meta", "runtime")
+            meta = await tx.runtime()
             meta["ready_sequence"] = sequence
-            await tx.put("meta", "runtime", meta)
+            await tx.save_runtime(meta)
         for item in evidence:
             log.info("recovery decision", extra={f"daemon.{key}": value for key, value in item.items()})
         return evidence
 
     async def append(self, tx, kind: str, payload: dict[str, Any], attempt: dict[str, Any] | None = None,
                      termination: str | None = None) -> int:
-        meta = await tx.get("meta", "runtime")
+        meta = await tx.runtime()
         meta["sequence"] += 1
         message = {"event_id": identity("rte_"), "kind": kind, "target": attempt["command"]["target"] if attempt else self.binding,
                    "boot_id": self.boot_id, "sequence": meta["sequence"], "occurred_at": now(), "payload": payload}
@@ -134,8 +133,9 @@ class Journal:
         wire = encode(message)
         if errors := validate_wire_message("update", wire, self.updates):
             raise UnsendableUpdate(errors)
-        await tx.append_update(meta["sequence"], message["event_id"], wire)
-        await tx.put("meta", "runtime", meta)
+        await tx.append_update(meta["sequence"], message["event_id"], wire,
+                               attempt and attempt["command"]["target"]["attempt_id"])
+        await tx.save_runtime(meta)
         return meta["sequence"]
 
     async def finish(self, tx, attempt: dict[str, Any], state: str, payload: dict[str, Any], termination: str) -> None:
@@ -143,15 +143,7 @@ class Journal:
             return
         attempt["state"] = state
         await self.append(tx, "attempt." + state, payload, attempt, termination)
-        meta = await tx.get("meta", "runtime")
-        meta["active_attempts"] -= 1
-        await tx.put("meta", "runtime", meta)
-        target = attempt["command"]["target"]
-        await tx.put("attempts", target["attempt_id"], attempt)
-        session = await tx.get("sessions", target["session_id"])
-        if session and session.get("active_attempt") == target["attempt_id"]:
-            session["active_attempt"] = None
-            await tx.put("sessions", target["session_id"], session)
+        await tx.save_attempt(attempt)  # leaving the active states frees its session and capacity
 
     async def execute(self, subject: str, command: dict[str, Any]) -> dict[str, Any]:
         response = {"command_id": command["command_id"], "target": command["target"], "status": "accepted"}
@@ -159,18 +151,18 @@ class Journal:
             return {**response, "status": "rejected", "error": detail}
         fingerprint = digest([subject, command])
         async with self.store.transaction() as tx:
-            if previous := await tx.get("commands", command["command_id"]):
+            if previous := await tx.receipt(command["command_id"]):
                 if previous["digest"] == fingerprint:
                     return previous["response"]
                 return {**response, "status": "rejected", "error": error("COMMAND_ID_CONFLICT", "command identity changed")}
-            meta = await tx.get("meta", "runtime")
-            if not meta.get("ready") or meta.get("blocked"):
+            meta = await tx.runtime()
+            if not meta["ready"] or meta["blocked"]:
                 return {**response, "status": "rejected", "error": error("UNAVAILABLE", "runtime readiness is not committed")}
             target, payload = command["target"], command["payload"]
-            session = await tx.get("sessions", target["session_id"])
+            session = await tx.session(target["session_id"])
             executor = self.executors.get(payload["agent"]["runner"])
             detail = None
-            if await tx.get("attempts", target["attempt_id"]):
+            if await tx.attempt(target["attempt_id"]):
                 detail = error("ATTEMPT_CONFLICT", "attempt is owned by another execute command")
             elif executor is None:
                 detail = error("UNSUPPORTED_EXECUTOR", "executor is not configured")
@@ -184,19 +176,18 @@ class Journal:
                     executor.validate(payload)
                 except (OSError, ValueError, RuntimeError):
                     detail = error("INVALID_ARGUMENT", "invalid or unavailable executor context")
-            if detail is None:
-                # A counter kept with each transition, so admission never scans finished attempts.
-                if meta["active_attempts"] >= self.max_concurrent_attempts:
-                    return {**response, "status": "rejected", "error": error("UNAVAILABLE", "runtime is at capacity")}
-                meta["active_attempts"] += 1
-                await tx.put("meta", "runtime", meta)
-                await tx.put("attempts", target["attempt_id"], {"command": command, "state": "recorded", "launch_count": 0,
-                                                                "attempt_sequence": 0, "last_event_sequence": 0})
-                await tx.put("sessions", target["session_id"], {"agent": payload["agent"], "active_attempt": target["attempt_id"]})
-            else:
+            # Counted through a partial index over active attempts only.
+            if detail is None and await tx.active_attempts() >= self.max_concurrent_attempts:
+                return {**response, "status": "rejected", "error": error("UNAVAILABLE", "runtime is at capacity")}
+            if detail is not None:
                 response.update(status="rejected", error=detail)
             # Accepted and terminal rejections are remembered; UNAVAILABLE never is.
-            await tx.put("commands", command["command_id"], {"digest": fingerprint, "response": response})
+            await tx.remember(command, fingerprint, response)
+            if detail is None:
+                if session is None:
+                    await tx.open_session(target["session_id"], command["command_id"])
+                await tx.save_attempt({"command": command, "state": "recorded", "launch_count": 0,
+                                       "attempt_sequence": 0, "last_event_sequence": 0})
         return response
 
     def _context(self, context: dict[str, Any]) -> None:
@@ -212,15 +203,15 @@ class Journal:
         if detail := mismatch(self.binding, subject, request, "inspect"):
             return {**response, "status": "error", "error": detail}
         async with self.store.read() as tx:
-            meta = await tx.get("meta", "runtime")
+            meta = await tx.runtime()
             snapshots = []
             for attempt_id in request["attempt_ids"]:
-                attempt = await tx.get("attempts", attempt_id)
+                attempt = await tx.attempt(attempt_id)
                 snapshot = {"attempt_id": attempt_id, "known": attempt is not None}
                 if attempt is not None:
                     snapshot.update(target=attempt["command"]["target"], execution=attempt["command"]["execution"],
                                     state=attempt["state"], last_event_sequence=attempt["last_event_sequence"])
                 snapshots.append(snapshot)
-        response["result"] = {"boot_id": self.boot_id, "ready": bool(meta.get("ready") and not meta.get("blocked")),
+        response["result"] = {"boot_id": self.boot_id, "ready": meta["ready"] and not meta["blocked"],
                               "last_event_sequence": meta["sequence"], "attempts": snapshots}
         return response

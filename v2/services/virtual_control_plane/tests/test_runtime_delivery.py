@@ -400,10 +400,10 @@ def test_an_unreachable_runtime_does_not_hold_up_other_runtimes(tmp_path):
         await journal.recover()
         await drain(UpdateOutbox(journal, local))
         dead = "oe.internal.v1.runtime.runtimes.rt_dead.execute"
-        async with store.database.connect() as connection:
-            await connection.execute(runtime_commands.insert(), [
-                {"command_id": f"rtc_dead_{n}", "subject": dead, "wire": b"{}"} for n in range(20)])
-            await connection.commit()
+        async with store.transaction() as tx:
+            for n in range(20):
+                await tx.put("attempts", f"attempt_dead_{n}", {})
+                await tx.append_runtime_command(f"rtc_dead_{n}", f"attempt_dead_{n}", dead, b"{}")
         reply = await execute(server, envelopes.command(payload(), command_id="cmd_healthy"))
 
         class Partitioned:
@@ -442,7 +442,7 @@ def test_ready_during_provisioning_is_retried_not_committed(tmp_path):
         assert not await outbox.run_once()
         assert await store.read("runtime_status", RUNTIME) is None
         async with journal.store.read() as tx:
-            meta = await tx.get("meta", "runtime")
+            meta = await tx.runtime()
             assert not meta.get("blocked") and await tx.oldest_pending() is not None
         await store.close()
         await journal.store.close()

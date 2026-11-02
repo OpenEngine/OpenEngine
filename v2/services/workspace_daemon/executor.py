@@ -87,7 +87,7 @@ class ExecutionWorker:
 
     async def run_once(self) -> int:
         async with self.journal.store.read() as tx:
-            recorded = [a["command"]["target"]["attempt_id"] for a in await tx.all("attempts") if a["state"] == "recorded"]
+            recorded = [a["command"]["target"]["attempt_id"] for a in await tx.attempts("recorded")]
         launched = 0
         for attempt_id in recorded:
             if attempt_id not in self.tasks:
@@ -99,11 +99,11 @@ class ExecutionWorker:
     async def _run(self, attempt_id: str) -> None:
         journal = self.journal
         async with journal.store.transaction() as tx:
-            attempt = await tx.get("attempts", attempt_id)
+            attempt = await tx.attempt(attempt_id)
             if attempt is None or attempt["state"] != "recorded":
                 return
             attempt.update(state="launching", launch_count=attempt["launch_count"] + 1)
-            await tx.put("attempts", attempt_id, attempt)
+            await tx.save_attempt(attempt)
         command = attempt["command"]
         executor = journal.executors[command["payload"]["agent"]["runner"]]
         try:
@@ -111,15 +111,15 @@ class ExecutionWorker:
         except Exception:
             log.exception("executor launch failed", extra={"daemon.attempt_id": attempt_id})
             async with journal.store.transaction() as tx:
-                await journal.finish(tx, await tx.get("attempts", attempt_id), "failed", {"error": {
+                await journal.finish(tx, await tx.attempt(attempt_id), "failed", {"error": {
                     "code": "PROVIDER_ERROR", "message": "Executor failed to launch", "retryable": False},
                     "reason": "launch_failed"}, "never_started")
             return
         async with journal.store.transaction() as tx:
-            attempt = await tx.get("attempts", attempt_id)
+            attempt = await tx.attempt(attempt_id)
             attempt.update(state="running", executor_handle=handle)
             await journal.append(tx, "attempt.started", {}, attempt)
-            await tx.put("attempts", attempt_id, attempt)
+            await tx.save_attempt(attempt)
         try:
             state, payload = await executor.wait(attempt_id, handle)
         except Exception:
@@ -127,7 +127,7 @@ class ExecutionWorker:
             state, payload = "failed", {"error": {"code": "PROVIDER_ERROR", "message": "Executor failed", "retryable": False},
                                         "reason": "executor_failed"}
         async with journal.store.transaction() as tx:
-            await journal.finish(tx, await tx.get("attempts", attempt_id), state, payload, "exited")
+            await journal.finish(tx, await tx.attempt(attempt_id), state, payload, "exited")
 
     def start(self) -> None:
         self._worker = asyncio.create_task(self._loop())

@@ -462,7 +462,9 @@ jittered backoff (250 ms to 10 s, `openengine.messaging.retry.Backoff`), also
 after a VCP restart. A reply is trusted only after `validate_wire_message` and
 `validate_exchange` match its identity and binding. Revision `cfed9cf520fd`
 adds `status` and the verified `acknowledgement` bytes beside the immutable
-`wire`; `settle_runtime_command` can change only those two columns, once.
+`wire`, and an `attempt_id` foreign key to `attempts`, backfilled from each
+accepted command's target; `settle_runtime_command` can change only `status`
+and the acknowledgement, once.
 
 | Daemon reply | Row status | Public effect |
 | -- | -- | -- |
@@ -474,7 +476,8 @@ adds `status` and the verified `acknowledgement` bytes beside the immutable
 `RuntimeUpdates.receive` handles `oe.internal.v1.vcp.runtimes.*.updates`
 (`RuntimeUpdateListener`, queue group `vcp-runtime`). In one transaction it
 fences the binding, deduplicates on a digest of the whole update keyed by
-runtime and event ID (`runtime_updates`, insert-only), requires the next
+runtime and event ID (`runtime_updates`: runtime ID → `runtime_status`, event ID,
+sequence unique per runtime, digest; insert-only), requires the next
 contiguous runtime sequence and attempt sequence, applies the projection and
 advances `runtime_status.sequence`; only then does it reply `committed`. A
 duplicate commits with no effect; changed content under a known event ID, an

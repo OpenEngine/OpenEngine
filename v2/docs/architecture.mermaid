@@ -106,7 +106,7 @@ flowchart LR
             class vcp_t_runtime_commands table
             vcp_t_runtime_status[("runtime_status<br/>Execution readiness, capabilities, journal identity and update high-water mark of an owned runtime.")]
             class vcp_t_runtime_status table
-            vcp_t_runtime_updates[("runtime_updates<br/>Committed internal runtime update identities and digests, for duplicate and conflict detection.")]
+            vcp_t_runtime_updates[("runtime_updates<br/>Committed internal runtime updates, for duplicate and conflict detection.")]
             class vcp_t_runtime_updates table
             vcp_t_sessions[("sessions<br/>Agent conversation snapshots, separate from workspace lifecycle.")]
             class vcp_t_sessions table
@@ -114,6 +114,8 @@ flowchart LR
             class vcp_t_workspace_runtimes table
             vcp_t_workspaces[("workspaces<br/>Workspace lifecycle projections, or preserved legacy prototype records.")]
             class vcp_t_workspaces table
+            vcp_t_attempts --- vcp_t_runtime_commands
+            vcp_t_runtime_status --- vcp_t_runtime_updates
         end
     end
 

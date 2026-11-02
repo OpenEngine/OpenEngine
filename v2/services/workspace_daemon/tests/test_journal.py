@@ -130,7 +130,35 @@ def test_capacity_counts_only_active_attempts(tmp_path):
         await asyncio.gather(*worker.tasks.values())
         assert (await journal.execute(EXECUTE, other))["status"] == "accepted"
         async with journal.store.read() as tx:
-            assert (await tx.get("meta", "runtime"))["active_attempts"] == 1
+            assert await tx.active_attempts() == 1
+        await journal.store.close()
+    asyncio.run(scenario())
+
+
+def test_journal_relations_and_one_active_attempt_per_session_are_enforced(tmp_path):
+    from sqlalchemy.exc import IntegrityError
+
+    async def scenario():
+        journal, _, _ = await setup(tmp_path)
+        assert (await journal.execute(EXECUTE, command()))["status"] == "accepted"
+        async with journal.store.read() as tx:
+            attempt = await tx.attempt("attempt_1")
+            assert (await tx.session("session_1"))["active_attempt"] == "attempt_1"
+        orphan = {**attempt, "command": command("attempt_x", "rtc_x", session="session_unknown", mode="continue")}
+        second = {**attempt, "command": command("attempt_2", "rtc_2", mode="continue")}
+
+        async def second_active(tx):  # its own remembered command, in a session that is still busy
+            await tx.remember(second["command"], "0" * 64, {"status": "accepted"})
+            await tx.save_attempt(second)
+        async def orphaned(tx):  # a remembered command whose session was never opened
+            await tx.remember(orphan["command"], "0" * 64, {"status": "accepted"})
+            await tx.save_attempt(orphan)
+        writes = [orphaned, second_active,
+                  lambda tx: tx.append_update(99, "rte_x", b"{}", "attempt_unknown")]
+        for write in writes:
+            with pytest.raises(IntegrityError):
+                async with journal.store.transaction() as tx:
+                    await write(tx)
         await journal.store.close()
     asyncio.run(scenario())
 
@@ -147,7 +175,7 @@ def test_stale_and_wrong_bindings_are_rejected_before_the_journal(tmp_path, monk
         wrong["target"]["workspace_id"] = "ws_other"
         replies = [await journal.execute(EXECUTE, stale), await journal.execute(EXECUTE, wrong)]
         async with journal.store.read() as tx:
-            journaled = await tx.all("attempts")
+            journaled = await tx.attempts()
         if validated:
             assert [r["error"]["code"] for r in replies] == ["STALE_RUNTIME", "IDENTITY_MISMATCH"]
             assert journaled == []
@@ -180,12 +208,12 @@ def test_restart_launches_recorded_work_once_and_never_relaunches_uncertain_work
         journal, vcp, outbox = await setup(tmp_path)
         await journal.execute(EXECUTE, command())
         async with journal.store.transaction() as tx:
-            attempt = await tx.get("attempts", "attempt_1")
+            attempt = await tx.attempt("attempt_1")
             if stage != "recorded":
                 attempt.update(state=stage, launch_count=1)
                 if stage == "running":
                     await journal.append(tx, "attempt.started", {}, attempt)
-                await tx.put("attempts", "attempt_1", attempt)
+                await tx.save_attempt(attempt)
         await journal.store.close()
         restarted = Journal(journal_store.JournalStore(journal_store.database(tmp_path / "journal")), BINDING_TARGET,
                             journal.root, {"fake": FakeExecutor(tmp_path / "effects")}, established=True)
@@ -198,7 +226,7 @@ def test_restart_launches_recorded_work_once_and_never_relaunches_uncertain_work
         outbox.journal = restarted
         await drain(outbox)
         async with restarted.store.read() as tx:
-            attempt = await tx.get("attempts", "attempt_1")
+            attempt = await tx.attempt("attempt_1")
         assert attempt["state"] == ("completed" if stage == "recorded" else "failed")
         assert attempt["launch_count"] == 1
         assert launches(tmp_path) == (["attempt_1"] if stage == "recorded" else [])
@@ -221,17 +249,17 @@ def test_unfenceable_interrupted_work_refuses_recovery(tmp_path):
         journal, _, _ = await setup(tmp_path)
         await journal.execute(EXECUTE, command())
         async with journal.store.transaction() as tx:
-            attempt = await tx.get("attempts", "attempt_1")
+            attempt = await tx.attempt("attempt_1")
             attempt.update(state="running", launch_count=1)
-            await tx.put("attempts", "attempt_1", attempt)
+            await tx.save_attempt(attempt)
         restarted = Journal(journal.store, BINDING_TARGET, journal.root, {"fake": Unfenceable()}, established=True)
         with pytest.raises(RecoveryRefused) as refused:
             await restarted.recover()
         assert refused.value.evidence["decision"] == "unresolved"
         assert refused.value.evidence["command_id"] == "rtc_1"
         async with journal.store.read() as tx:
-            assert (await tx.get("attempts", "attempt_1"))["state"] == "running"
-            assert not (await tx.get("meta", "runtime"))["ready"]
+            assert (await tx.attempt("attempt_1"))["state"] == "running"
+            assert not (await tx.runtime())["ready"]
         await journal.store.close()
     asyncio.run(scenario())
 
@@ -261,7 +289,7 @@ def test_gaps_replay_retained_updates_and_rejections_block(tmp_path):
         outbox.transport = type("Rejecting", (), {"send": staticmethod(reject)})()
         assert not await outbox.run_once()
         async with journal.store.read() as tx:
-            meta = await tx.get("meta", "runtime")
+            meta = await tx.runtime()
         assert meta["blocked"]["code"] == "STALE_RUNTIME" and not meta["ready"]
         assert (await journal.execute(EXECUTE, command("attempt_3", "rtc_3", mode="continue")))["error"]["code"] == "UNAVAILABLE"
         await journal.store.close()

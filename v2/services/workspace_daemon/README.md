@@ -33,7 +33,8 @@ subprocess: `agent.settings` may set `outcome` (`completed`/`failed`) and
    journal, or without its runtime record, is refused (exit 2); history is never
    recreated.
 4. Alembic (`migrations/`) creates or upgrades the runtime-local SQLite journal
-   (`workspace-daemon.sqlite3`). It is not a tenant service database.
+   (`workspace-daemon.sqlite3`). It is not a tenant service database. Its
+   tables are normalized and related by foreign keys (see "Journal schema").
 5. Recovery fences every `launching` or `running` attempt through its executor
    and records it failed with `executor_lost` (`killed`); it never launches it
    again. If an executor cannot confirm termination, start-up is refused with
@@ -44,6 +45,22 @@ subprocess: `agent.settings` may set `outcome` (`completed`/`failed`) and
    the runtime's own inbox prefix.
 
 The daemon accepts execute only after VCP commits its latest `runtime.ready`.
+
+## Journal schema
+
+| Table | Holds | Relations and constraints |
+| -- | -- | -- |
+| `journal_runtime` | the single binding (workspace, runtime, generation), `journal_id`, update high-water mark, readiness, blocked reason | one row (`id = 1`); `ready_sequence`, `blocked_sequence` → `journal_updates` |
+| `journal_commands` | each remembered execute command's exact bytes, digest, and reply status and error code/message | `status` is `accepted` or `rejected`; an error exactly when rejected |
+| `journal_sessions` | sessions this runtime owns | `command_id` → the opening command, which carries the agent |
+| `journal_attempts` | state, launch count, attempt sequence, last update sequence, executor handle | `session_id` → sessions, `command_id` → commands (unique); one unfinished attempt per session |
+| `journal_updates` | ordered update bytes as sent and whether VCP committed them | `attempt_id` → attempts for attempt updates |
+
+Nothing is stored twice: a reply is rebuilt from its command's target and its
+status columns, a session's agent is read from its opening command, and the
+active-attempt count and busy sessions come from a partial index over
+unfinished attempts. Protocol messages stay exact bytes, and the executor
+handle stays opaque JSON that only the executor port reads.
 
 ## Commands, execution and updates
 
