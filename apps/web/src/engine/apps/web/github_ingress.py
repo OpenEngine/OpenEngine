@@ -469,6 +469,8 @@ class GithubIngress:
         # what that reports from the next delivery on, like the rest of the server.
         self._configured = {repo.lower() for repo in (repository, *repositories) if repo}
         self._live_repositories = live_repositories
+        self._reported: Collection[str] | None = None
+        self._normalized: frozenset[str] = frozenset()
         self._authenticated_login = authenticated_login
         # Whether whoever sent a comment or assignment can write to its
         # repository. Asked before any handler sees it, so nothing -- a work
@@ -582,7 +584,13 @@ class GithubIngress:
         """
         if self._live_repositories is None:
             return frozenset(self._configured)
-        return frozenset(repo.lower() for repo in self._live_repositories() if repo)
+        reported = self._live_repositories()
+        # The reader hands back the same collection until the registry
+        # publishes a new snapshot, so normalize once per change, not per call.
+        if reported is not self._reported:
+            self._reported = reported
+            self._normalized = frozenset(repo.lower() for repo in reported if repo)
+        return self._normalized
 
     def _answers(self, repository: str) -> bool:
         """Whether `repository` is one this deployment is configured to answer."""

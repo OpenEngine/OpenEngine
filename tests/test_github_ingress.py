@@ -1267,3 +1267,24 @@ def test_a_startup_repository_disconnected_while_running_is_no_longer_answered(
         browser.portal.call(app.state.github_ingress.close)
     assert response.status_code == 200
     assert handled == []
+
+
+def test_a_disconnected_startup_repository_without_an_origin_is_no_longer_answered(
+    *, client, web_app, git_repo, tmp_path
+) -> None:
+    """The registry's name for the checkout, not its origin, withdraws it."""
+    from engine.runtime.repositories import RepositoryRegistry
+
+    bare = tmp_path / "web"
+    bare.mkdir()
+    api = git_repo(tmp_path / "api", origin="https://github.com/acme/api.git")
+    registry = RepositoryRegistry(
+        {"other/web": str(bare), "api": str(api)}, {"other/web": "disconnected"},
+    )
+    app, handled = _onboarded_app(web_app=web_app, registry=registry, static_repository="other/web")
+    body, headers = _other_web_delivery()
+    with client(app) as browser:
+        response = browser.post("/api/github/events", content=body, headers=headers)
+        browser.portal.call(app.state.github_ingress.close)
+    assert response.status_code == 200
+    assert handled == []

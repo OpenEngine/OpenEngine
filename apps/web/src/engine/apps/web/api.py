@@ -1199,13 +1199,27 @@ def _webhook_repositories(registry: RepositoryRegistry, startup: Collection[str]
     `oe repo add` publishes a new snapshot while the server runs, and a
     disconnected or removed checkout stops being answered with it. A startup
     repository the registry has no checkout for is kept, since nothing live
-    speaks for it.
+    speaks for it. A startup repository registered under that name as
+    disconnected or `webhooks = false` is withdrawn, whatever its origin.
     """
     snapshot = registry.snapshot
-    known = {project.lower() for project in snapshot.projects.values()}
+    known = {project.lower() for project in snapshot.projects.values()} | snapshot.webhook_withdrawn
     return frozenset(snapshot.webhook_repositories) | {
         repo.lower() for repo in startup if repo and repo.lower() not in known
     }
+
+
+def _webhook_reader(registry: RepositoryRegistry, startup: Collection[str]) -> Callable[[], frozenset[str]]:
+    """`_webhook_repositories`, recomputed only when the registry publishes a new snapshot."""
+    last: list[tuple[object, frozenset[str]]] = []
+
+    def read() -> frozenset[str]:
+        snapshot = registry.snapshot
+        if not last or last[0][0] is not snapshot:
+            last[:] = [(snapshot, _webhook_repositories(registry, startup))]
+        return last[0][1]
+
+    return read
 
 
 def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding lifecycle belongs here
@@ -4264,9 +4278,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 await github_refuse_comment(delivery)
         return may_write
 
-    webhook_repositories = functools.partial(
-        _webhook_repositories, repository_registry, (github_repository, *github_repositories)
-    )
+    webhook_repositories = _webhook_reader(repository_registry, (github_repository, *github_repositories))
 
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,

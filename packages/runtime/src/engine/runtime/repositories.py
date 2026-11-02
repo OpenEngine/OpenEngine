@@ -45,6 +45,7 @@ class RepositorySnapshot:
     login_repositories: tuple[str, ...]
     run_projects: Mapping[str, str]
     webhook_repositories: tuple[str, ...] = ()
+    webhook_withdrawn: frozenset[str] = frozenset()
 
 
 class RepositoryRegistry:
@@ -123,6 +124,10 @@ class RepositoryRegistry:
                 projects[n].lower() for n in repos
                 if n in projects and n not in self._webhook_excluded and modes.get(n) != "disconnected"
             )),
+            # Registered names that must not be answered, whatever the checkout's origin.
+            frozenset(
+                n.lower() for n in repos if n in self._webhook_excluded or modes.get(n) == "disconnected"
+            ),
         )
 
     @property
