@@ -19,7 +19,7 @@ import logging
 import re
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -446,6 +446,7 @@ class GithubIngress:
         webhook_secret: Callable[[], str] = lambda: "",
         repository: str = "",
         repositories: tuple[str, ...] = (),
+        live_repositories: Callable[[], Collection[str]] | None = None,
         handle: Callable[[GithubComment], Awaitable[None]] | None = None,
         handle_merge: Callable[[GithubMerge], Awaitable[None]] | None = None,
         handle_assignment: Callable[[GithubAssignment], Awaitable[None]] | None = None,
@@ -462,7 +463,12 @@ class GithubIngress:
         stall_warning_seconds: float = STALL_WARNING_SECONDS,
     ) -> None:
         self._webhook_secret = webhook_secret
-        self._repositories = {repo.lower() for repo in (repository, *repositories) if repo}
+        # What the deployment's configuration says it answers, frozen at
+        # construction, beside what the registry reports since: repositories
+        # are added and withdrawn while this process runs, and the webhook
+        # answers them from the next delivery on, like the rest of the server.
+        self._configured = {repo.lower() for repo in (repository, *repositories) if repo}
+        self._live_repositories = live_repositories
         self._authenticated_login = authenticated_login
         # Whether whoever sent a comment or assignment can write to its
         # repository. Asked before any handler sees it, so nothing -- a work
@@ -567,9 +573,19 @@ class GithubIngress:
             ) else 503
         )
 
+    def _repositories(self) -> frozenset[str]:
+        """The repositories this deployment answers right now.
+
+        The startup set plus what `live_repositories` reports, so a repository
+        onboarded while this process runs is answered without a restart, and
+        one no longer reported is not.
+        """
+        live = self._live_repositories() if self._live_repositories is not None else ()
+        return frozenset(self._configured | frozenset(repo.lower() for repo in live if repo))
+
     def _answers(self, repository: str) -> bool:
         """Whether `repository` is one this deployment is configured to answer."""
-        return repository.lower() in self._repositories
+        return repository.lower() in self._repositories()
 
     def accept(
         self, event: str, payload: Mapping[str, object], *, self_login: str = "",
@@ -583,8 +599,9 @@ class GithubIngress:
         """
         repository = payload.get("repository")
         name = repository.get("full_name") if isinstance(repository, dict) else None
-        if self._repositories and isinstance(name, str) and not self._answers(name):
-            log.info("ignored delivery from %s: this deployment answers %s", name, sorted(self._repositories))
+        repositories = self._repositories()
+        if repositories and isinstance(name, str) and not self._answers(name):
+            log.info("ignored delivery from %s: this deployment answers %s", name, sorted(repositories))
             return True
         if _asks_for_self_login(event, payload) and not self_login:
             log.warning(
@@ -673,7 +690,7 @@ class GithubIngress:
     ) -> bool:
         """Queue one read delivery, or say why it is being refused."""
         named = f"{describe(delivery)} (delivery {delivery_id or '-'})"
-        if not self._repositories:
+        if not self._repositories():
             log.warning(
                 "a GitHub %s was delivered but no target repository is configured", subject
             )
@@ -681,7 +698,7 @@ class GithubIngress:
         if not self._answers(delivery.repository):
             # A shared App secret authenticates deliveries from other repos too.
             # Ignore them before queueing or remembering their identities.
-            log.info("ignored %s: this deployment answers %s", named, sorted(self._repositories))
+            log.info("ignored %s: this deployment answers %s", named, sorted(self._repositories()))
             return True
         if not wired:
             log.warning(

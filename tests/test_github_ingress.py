@@ -1084,3 +1084,151 @@ def test_ci_nobody_waits_on_is_acknowledged(repository) -> None:
     assert len(woken) == (repository == "acme/api")
     # Nor does an unwired deployment refuse it.
     assert GithubIngress(repository="acme/api").accept("check_suite", payload)
+
+
+# --- repositories added while the ingress runs --------------------------------
+
+
+def test_a_repository_added_after_construction_is_answered_from_the_next_delivery() -> None:
+    """The registry is asked on every delivery, not read once at startup, so a
+    repository onboarded while the ingress runs is refused until it is added
+    and queued from the next delivery on -- no restart in between."""
+    from unittest.mock import AsyncMock
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    from starlette.testclient import TestClient
+
+    handled = []
+    live: dict[str, tuple[str, ...]] = {"repositories": ()}
+    lookup = AsyncMock(return_value="OpenEngineBot")
+    ingress = GithubIngress(
+        webhook_secret=lambda: WEBHOOK_SECRET, handle=_record(handled),
+        authenticated_login=lookup, live_repositories=lambda: live["repositories"],
+    )
+    app = Starlette(routes=[Route("/events", ingress.webhook, methods=["POST"])])
+    body = json.dumps(_issue_comment()).encode()
+    headers = dict(_signed(body), **{"x-github-event": "issue_comment"})
+    with TestClient(app) as client:
+        # Neither in the startup set nor reported yet: the delivery needs a
+        # self-login nothing could resolve, so it is refused for redelivery.
+        assert client.post("/events", content=body, headers=headers).status_code == 503
+        live["repositories"] = ("acme/api",)
+        assert client.post("/events", content=body, headers=headers).status_code == 200
+        client.portal.call(ingress.drain)
+        client.portal.call(ingress.close)
+    assert [c.comment_id for c in handled] == ["1"]
+    lookup.assert_awaited_once_with("acme/api")
+
+
+def test_a_ci_event_for_a_repository_added_later_wakes_its_step() -> None:
+    woken = []
+    live: dict[str, tuple[str, ...]] = {"repositories": ()}
+    ingress = GithubIngress(
+        handle_ci=lambda ci: woken.append(ci) or 1,
+        live_repositories=lambda: live["repositories"],
+    )
+    payload = {"action": "completed", "check_suite": {"head_sha": "abc"},
+               "repository": {"full_name": "acme/api"}}
+    # Settled while the repository is unknown: acknowledged, nothing woken.
+    assert ingress.accept("check_suite", payload)
+    assert woken == []
+    live["repositories"] = ("acme/api",)
+    assert ingress.accept("check_suite", payload)
+    assert [(ci.repository, ci.sha) for ci in woken] == [("acme/api", "abc")]
+
+
+def test_a_repository_no_longer_reported_is_no_longer_answered() -> None:
+    """Once the reader stops reporting a repository, its deliveries settle as
+    another repository's business rather than being queued."""
+
+    async def scenario():
+        handled = []
+        live: dict[str, tuple[str, ...]] = {"repositories": ("acme/api", "other/web")}
+        ingress = GithubIngress(
+            webhook_secret=lambda: WEBHOOK_SECRET, handle=_record(handled),
+            live_repositories=lambda: live["repositories"],
+        )
+        try:
+            assert ingress.accept("issue_comment", _issue_comment(comment_id=1), self_login="OpenEngineBot")
+            live["repositories"] = ("other/web",)
+            assert ingress.accept("issue_comment", _issue_comment(comment_id=2), self_login="OpenEngineBot")
+            await ingress.drain()
+            assert [c.comment_id for c in handled] == ["1"]
+        finally:
+            await ingress.close()
+
+    asyncio.run(scenario())
+
+
+def _onboarded_app(*, web_app, registry, static_repository: str = ""):
+    """The real web app around `registry`, wired to record what it answers."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from test_slack_work_orders import SIGNING_SECRET
+    from test_web_app import _session_with
+
+    runners = {"default": MagicMock()}
+    session = _session_with(runners)
+    source_control = MagicMock()
+    source_control.can_write_repository = AsyncMock(return_value=True)
+    source_control.authenticated_login = AsyncMock(return_value="OpenEngineBot")
+    object.__setattr__(session.capabilities, "source_control", source_control)
+    handled = []
+    app = web_app(
+        session, runners,
+        repos=registry,
+        github_repository=static_repository,
+        github_webhook_secret=lambda: SIGNING_SECRET,
+        github_comment_handler=_record(handled),
+    )
+    return app, handled
+
+
+def _other_web_delivery(comment_id: int = 1):
+    payload = _issue_comment(comment_id=comment_id)
+    payload["repository"]["full_name"] = "other/web"
+    body = json.dumps(payload).encode()
+    return body, dict(_signed(body), **{"x-github-event": "issue_comment"})
+
+
+def test_the_webhook_answers_a_repository_onboarded_while_the_server_runs(
+    *, client, web_app, git_repo, tmp_path
+) -> None:
+    """`oe repo add` publishes a new registry snapshot without a restart, so the
+    webhook answers the repository from the next delivery on, like the rest of
+    the server already does."""
+    from engine.runtime.repositories import RepositoryRegistry
+
+    checkout = git_repo(tmp_path / "web", origin="https://github.com/other/web.git")
+    registry = RepositoryRegistry()
+    app, handled = _onboarded_app(web_app=web_app, registry=registry)
+    body, headers = _other_web_delivery()
+    with client(app) as browser:
+        # The registry has not seen it: refused for redelivery.
+        assert browser.post("/api/github/events", content=body, headers=headers).status_code == 503
+        # Onboarded, the way `oe repo add` persists it.
+        registry.add("web", str(checkout))
+        assert browser.post("/api/github/events", content=body, headers=headers).status_code == 200
+        browser.portal.call(app.state.github_ingress.drain)
+        browser.portal.call(app.state.github_ingress.close)
+    assert [c.comment_id for c in handled] == ["1"]
+
+
+def test_the_webhook_stops_answering_a_checkout_set_to_disconnected(
+    *, client, web_app, git_repo, tmp_path
+) -> None:
+    """A disconnected run reaches nothing outside its checkout, so a delivery
+    for one settles as another repository's business rather than being
+    answered."""
+    from engine.runtime.repositories import RepositoryRegistry
+
+    checkout = git_repo(tmp_path / "web", origin="https://github.com/other/web.git")
+    registry = RepositoryRegistry()
+    registry.add("web", str(checkout), "disconnected")
+    app, handled = _onboarded_app(web_app=web_app, registry=registry, static_repository="acme/api")
+    body, headers = _other_web_delivery()
+    with client(app) as browser:
+        response = browser.post("/api/github/events", content=body, headers=headers)
+        browser.portal.call(app.state.github_ingress.close)
+    assert response.status_code == 200
+    assert handled == []

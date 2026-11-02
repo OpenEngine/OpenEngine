@@ -1192,6 +1192,27 @@ async def _ready_runner_choices(
     return available
 
 
+def _onboarded_repositories(registry: RepositoryRegistry) -> tuple[str, ...]:
+    """The GitHub repositories behind the registry's checkouts, now.
+
+    Asked of the registry on every delivery rather than read at startup:
+    `oe repo add` publishes a new snapshot while the server runs, and the
+    webhook answers that repository from the next delivery on. A checkout set
+    to disconnected is left out -- a run in it reaches nothing outside its
+    checkout, so its deliveries are not answered.
+    """
+    snapshot = registry.snapshot
+    disconnected = {
+        project
+        for path in snapshot.disconnected
+        if (project := snapshot.run_projects.get(str(path))) is not None
+    }
+    return tuple(
+        project for project in snapshot.login_repositories
+        if project.lower() not in disconnected
+    )
+
+
 def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding lifecycle belongs here
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
@@ -4252,6 +4273,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
         webhook_secret=github_webhook_secret,
         repository=github_repository,
         repositories=github_repositories,
+        live_repositories=lambda: _onboarded_repositories(repository_registry),
         authenticated_login=github_posting_login,
         may_act=github_sender_may_act,
         handle=github_comment_handler or github_concierge_turn,
@@ -4301,9 +4323,10 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             # Local readiness only: GitHub's webhook setup and delivery are
             # independent of whether Engine accepts this repository.
             configured=bool(
-                repository.lower() in {
-                    repo.lower() for repo in (github_repository, *github_repositories) if repo
-                }
+                repository.lower() in (
+                    {repo.lower() for repo in (github_repository, *github_repositories) if repo}
+                    | {repo.lower() for repo in _onboarded_repositories(repository_registry)}
+                )
                 and github_webhook_secret()
             ),
         ))
