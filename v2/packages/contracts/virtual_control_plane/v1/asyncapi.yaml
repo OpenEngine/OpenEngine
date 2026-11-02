@@ -61,8 +61,9 @@ info:
     `account` describes a 56-character NATS account public key.
 
     These are contract requirements. Account provisioning, registry persistence,
-    broker exports/imports and runtime subject rewriting are later work; this
-    document does not establish those boundaries in the current runtime.
+    broker exports/imports, runtime subject rewriting and per-attempt NATS
+    credentials are later work; this document does not establish those boundaries
+    in the current runtime.
 
     When VCP starts a task attempt it issues a NATS user credential for that
     attempt inside the tenant's account. Its claims name the workspace and the
