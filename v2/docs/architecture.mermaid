@@ -40,6 +40,8 @@ flowchart LR
         cxn_ingress[("stream cxn-ingress<br/>cxn.ingress.>")]
         class cxn_ingress stream
         subgraph cxn_db["database cxn"]
+            cxn_t_connection_routes[("connection_routes<br/>Global ownership route for authenticated provider webhooks.")]
+            class cxn_t_connection_routes table
             cxn_t_connections[("connections<br/>One per external account OpenEngine hears from: a GitHub App installation, a Slack workspace.")]
             class cxn_t_connections table
         end
