@@ -236,10 +236,12 @@ class DurableStore:
                 pages.extend(row["snapshot"] for row in rows.scalars())
         return sorted(pages, key=lambda s: (s["created_at"], s["session_id"]), reverse=True)[:limit]
 
-    async def pending_runtime_commands(self, limit: int) -> list[RuntimeCommand]:
+    async def pending_runtime_commands(self, limit: int, exclude: Iterable[str] = ()) -> list[RuntimeCommand]:
         table = runtime_commands
-        query = (sa.select(table.c.command_id, table.c.subject, table.c.wire)
-                 .where(table.c.status == "pending").order_by(sa.literal_column("rowid")).limit(limit))
+        query = sa.select(table.c.command_id, table.c.subject, table.c.wire).where(table.c.status == "pending")
+        if excluded := list(exclude):
+            query = query.where(table.c.command_id.not_in(excluded))
+        query = query.order_by(sa.literal_column("rowid")).limit(limit)
         async with self.database.connect() as connection:
             return [RuntimeCommand(**row) for row in (await connection.execute(query)).mappings()]
 

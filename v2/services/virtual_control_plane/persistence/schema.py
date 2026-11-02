@@ -77,7 +77,8 @@ runtime_commands = sa.Table(
     sa.Column("wire", sa.LargeBinary(), nullable=False),
     sa.Column("status", sa.String(16), nullable=False, server_default="pending"),
     sa.Column("acknowledgement", sa.LargeBinary(), nullable=True),
-    sa.Index("ix_runtime_commands_pending", "command_id", sqlite_where=sa.text("status = 'pending'")),
+    # Entries are (status, rowid): pending commands are read oldest first without a sort.
+    sa.Index("ix_runtime_commands_pending", "status", sqlite_where=sa.text("status = 'pending'")),
     comment="Immutable internal commands accepted atomically with attempts, and their delivery outcome.",
 )
 

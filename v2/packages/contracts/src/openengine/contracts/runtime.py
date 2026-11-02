@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from functools import cache
@@ -39,6 +40,21 @@ DEFINITIONS = {
         )
     },
 }
+
+
+# Runtime error codes a sender may retry unchanged. UNAVAILABLE keeps the shared
+# messaging default; EVENT_GAP asks the sender to replay from expected_sequence.
+RETRYABLE_CODES = frozenset({"UNAVAILABLE", "EVENT_GAP"})
+
+
+def error(code, message):
+    """A runtime error body; both sides derive `retryable` from one table."""
+    return {"code": code, "message": message, "retryable": code in RETRYABLE_CODES}
+
+
+def digest(value):
+    """sha256 of canonical JSON: the identity both sides use for receipt and update dedup."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 @cache

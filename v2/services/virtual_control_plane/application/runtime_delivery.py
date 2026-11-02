@@ -16,12 +16,11 @@ the runtime is placed: a subject names only the runtime ID.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
 from typing import Any
 
-from openengine.contracts.runtime import validate_exchange, validate_wire_message
+from openengine.contracts.runtime import digest, error, validate_exchange, validate_wire_message
 from openengine.messaging import ServiceError, envelopes
 from openengine.messaging.retry import Backoff
 
@@ -38,17 +37,13 @@ NOT_LAUNCHED = frozenset({"INVALID_ARGUMENT", "UNSUPPORTED_EXECUTOR", "SESSION_B
 STATES = {"attempt.started": "running", "attempt.completed": "completed", "attempt.failed": "failed"}
 
 
-def digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-
-
 class Rejected(Exception):
     def __init__(self, code: str, message: str, *, expected: int | None = None, quarantine: bool = False) -> None:
         super().__init__(f"{code}: {message}")
         self.code, self.message, self.expected, self.quarantine = code, message, expected, quarantine
 
     def error(self) -> dict[str, Any]:
-        return {"code": self.code, "message": self.message, "retryable": self.code in ("UNAVAILABLE", "EVENT_GAP")}
+        return error(self.code, self.message)
 
 
 def fence(runtime: dict | None, workspace: dict | None, target: dict) -> Rejected | None:
@@ -98,13 +93,15 @@ class RuntimeUpdates:
         if rejection := fence(runtime, workspace, target):
             raise rejection
         assert workspace is not None
-        if workspace["state"] != "ready":
-            raise Rejected("STALE_RUNTIME", "workspace is not ready")
         key = digest([target["runtime_id"], message["event_id"]])
         if previous := await tx.get("runtime_updates", key):
             if previous["digest"] != digest(message):
                 raise Rejected("EVENT_CONFLICT", "event ID was reused with different content", quarantine=True)
             return  # Duplicate delivery: committed without repeating any effect.
+        # The fenced runtime still owns its attempts whatever the workspace state,
+        # so their updates project; only a new readiness claim waits for `ready`.
+        if kind == "runtime.ready" and workspace["state"] != "ready":
+            raise Rejected("UNAVAILABLE", "workspace is not ready")
         status = await tx.get("runtime_status", target["runtime_id"]) or {}
         if status.get("quarantined"):
             raise Rejected("EVENT_CONFLICT", "runtime requires reconciliation")
@@ -172,20 +169,34 @@ class RuntimeCommands:
         self._worker: asyncio.Task | None = None
 
     async def run_once(self) -> int:
-        """Deliver due pending commands; return how many reached a durable outcome."""
+        """Deliver due pending commands; return how many reached a durable outcome.
+
+        Commands still backing off are left out of the batch, and each runtime's
+        commands go in order beside every other runtime's, so an unreachable
+        runtime neither fills the batch nor delays the others' sends.
+        """
+        runtimes: dict[str, list] = {}
+        for command in await self.store.pending_runtime_commands(self.batch, exclude=self.backoff.waiting()):
+            runtimes.setdefault(command.subject, []).append(command)
+        return sum(await asyncio.gather(*(self._deliver_all(commands) for commands in runtimes.values())))
+
+    async def _deliver_all(self, commands: list) -> int:
         settled = 0
-        for command in await self.store.pending_runtime_commands(self.batch):
-            if self.backoff.due(command.command_id) and await self._deliver(command):
-                settled += 1
+        for index, command in enumerate(commands):
+            try:
+                settled += await self._deliver(command)
+            except ServiceError:
+                # Unreachable: its later commands wait out the same backoff
+                # instead of each waiting for its own timeout.
+                for later in commands[index:]:
+                    self.backoff.failed(later.command_id)
+                break
         return settled
 
     async def _deliver(self, command) -> bool:
-        try:
-            reply = await self.transport.send(command.subject, command.wire)
-        except ServiceError:
-            # Lost request or reply: the outcome is unknown, so retry the same bytes.
-            self.backoff.failed(command.command_id)
-            return False
+        """Whether the command settled; raises ServiceError when the runtime did not answer."""
+        # A lost request or reply leaves the outcome unknown, so the same bytes are retried.
+        reply = await self.transport.send(command.subject, command.wire)
         request = json.loads(command.wire)
         errors = validate_wire_message("command_ack", reply, command.subject)
         ack = {} if errors else json.loads(reply)

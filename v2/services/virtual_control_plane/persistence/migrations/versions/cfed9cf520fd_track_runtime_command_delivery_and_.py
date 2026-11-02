@@ -22,7 +22,7 @@ def upgrade() -> None:
     with op.batch_alter_table("runtime_commands") as batch:
         batch.add_column(sa.Column("status", sa.String(16), nullable=False, server_default="pending"))
         batch.add_column(sa.Column("acknowledgement", sa.LargeBinary(), nullable=True))
-    op.create_index("ix_runtime_commands_pending", "runtime_commands", ["command_id"],
+    op.create_index("ix_runtime_commands_pending", "runtime_commands", ["status"],
                     sqlite_where=sa.text("status = 'pending'"))
     op.create_table("runtime_updates", sa.Column("key", sa.String(128), primary_key=True),
                     sa.Column("body", sa.JSON(), nullable=False))

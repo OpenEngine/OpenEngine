@@ -116,8 +116,8 @@ class PendingEvent:
 
 
 class RuntimeOutbox(Protocol):
-    async def pending_runtime_commands(self, limit: int) -> list[RuntimeCommand]:
-        """Undelivered internal commands, oldest first, with their exact accepted bytes."""
+    async def pending_runtime_commands(self, limit: int, exclude: Iterable[str] = ()) -> list[RuntimeCommand]:
+        """Undelivered internal commands except `exclude`, oldest first, with their exact accepted bytes."""
         ...
 
     def transaction(self) -> AbstractAsyncContextManager[Transaction]: ...

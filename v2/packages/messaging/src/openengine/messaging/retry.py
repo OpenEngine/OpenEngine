@@ -19,6 +19,11 @@ class Backoff:
     def due(self, key: str) -> bool:
         return self._pending.get(key, (0, 0.0))[1] <= time.monotonic()
 
+    def waiting(self) -> list[str]:
+        """Keys whose next attempt is not yet due."""
+        now = time.monotonic()
+        return [key for key, (_, at) in self._pending.items() if at > now]
+
     def delay(self, failures: int) -> float:
         """The longest wait after `failures` consecutive failures."""
         return min(self.maximum, self.initial * 2 ** min(failures - 1, 32))

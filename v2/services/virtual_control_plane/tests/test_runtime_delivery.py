@@ -366,6 +366,66 @@ def test_daemon_rejections_fail_unstarted_work_or_block_unresolved_ownership(tmp
     asyncio.run(scenario())
 
 
+def test_committed_updates_stay_committed_after_the_workspace_leaves_ready(tmp_path):
+    async def scenario():
+        root = workspace_root(tmp_path)
+        store, journal, _, _, _, updates, _ = await flow(tmp_path, HostContext(), {"path": str(root)}, root)
+        async with journal.store.read() as tx:
+            wires = [row.wire for row in (await tx._connection.execute(sa.select(journal_store.updates.c.wire)
+                                                                        .order_by(journal_store.updates.c.sequence)))]
+        async with store.transaction() as tx:
+            record = await tx.get("workspaces", WORKSPACE)
+            record["snapshot"]["state"] = "failed"  # the runtime binding is still current
+            await tx.put("workspaces", WORKSPACE, record)
+        for wire in wires:
+            assert json.loads(await updates.receive(UPDATES, wire))["status"] == "committed"  # re-sends, no refusal
+        ready = json.loads(wires[0])
+        ready.update(event_id="rte_ready_again", sequence=len(wires) + 1)
+        error = json.loads(await updates.receive(UPDATES, encode(ready)))["error"]
+        assert (error["code"], error["retryable"]) == ("UNAVAILABLE", True)  # waits instead of blocking the daemon
+        assert not (await store.read("runtime_status", RUNTIME)).get("quarantined")
+        await store.close()
+        await journal.store.close()
+    asyncio.run(scenario())
+
+
+def test_an_unreachable_runtime_does_not_hold_up_other_runtimes(tmp_path):
+    async def scenario():
+        root = workspace_root(tmp_path)
+        store, _ = await vcp_store(tmp_path, {"path": str(root)})
+        execution = Execution(Lifecycle(store, {}), HostContext(), enabled=True)
+        server = Server(None, "vcp", "nats://127.0.0.1:4222", commands=execution.commands())
+        journal = await daemon(tmp_path, root)
+        local = Local(journal, RuntimeUpdates(store, execution))
+        await journal.recover()
+        await drain(UpdateOutbox(journal, local))
+        dead = "oe.internal.v1.runtime.runtimes.rt_dead.execute"
+        async with store.database.connect() as connection:
+            await connection.execute(runtime_commands.insert(), [
+                {"command_id": f"rtc_dead_{n}", "subject": dead, "wire": b"{}"} for n in range(20)])
+            await connection.commit()
+        reply = await execute(server, envelopes.command(payload(), command_id="cmd_healthy"))
+
+        class Partitioned:
+            dead_sends = 0
+
+            async def send(self, subject, wire):
+                if subject == dead:
+                    self.dead_sends += 1
+                    raise Unavailable(subject, "no reply")
+                return await local.send(subject, wire)
+        transport = Partitioned()
+        dispatcher = RuntimeCommands(store, transport, execution, batch=16)
+        assert await dispatcher.run_once() == 0  # a full batch for the dead runtime, probed once
+        assert await dispatcher.run_once() == 1  # backing-off commands no longer fill the batch
+        assert transport.dead_sends == 2
+        row = next(row for row in await commands(store) if row["subject"] != dead)
+        assert row["status"] == "acknowledged" and json.loads(row["wire"])["target"]["attempt_id"] == reply["resource_id"]
+        await store.close()
+        await journal.store.close()
+    asyncio.run(scenario())
+
+
 def test_ready_during_provisioning_is_retried_not_committed(tmp_path):
     async def scenario():
         root = workspace_root(tmp_path)

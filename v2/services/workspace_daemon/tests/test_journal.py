@@ -119,6 +119,22 @@ def test_execute_is_journaled_once_and_launched_once(tmp_path):
     asyncio.run(scenario())
 
 
+def test_capacity_counts_only_active_attempts(tmp_path):
+    async def scenario():
+        journal, _, _ = await setup(tmp_path)
+        assert (await journal.execute(EXECUTE, command()))["status"] == "accepted"
+        other = command("attempt_2", "rtc_2", session="session_2")
+        assert (await journal.execute(EXECUTE, other))["error"]["code"] == "UNAVAILABLE"  # at capacity, not remembered
+        worker = ExecutionWorker(journal)
+        await worker.run_once()
+        await asyncio.gather(*worker.tasks.values())
+        assert (await journal.execute(EXECUTE, other))["status"] == "accepted"
+        async with journal.store.read() as tx:
+            assert (await tx.get("meta", "runtime"))["active_attempts"] == 1
+        await journal.store.close()
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("validated", [True, False])
 def test_stale_and_wrong_bindings_are_rejected_before_the_journal(tmp_path, monkeypatch, validated):
     """`validated=False` is the negative control: without the binding check a stale command is journaled."""

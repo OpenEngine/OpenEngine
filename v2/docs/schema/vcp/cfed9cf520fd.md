@@ -14,7 +14,7 @@ track runtime command delivery and updates
 
  CREATE INDEX ix_outbox_workspace_pending ON outbox (workspace_id, sequence) WHERE published_at IS NULL;
 +
-+CREATE INDEX ix_runtime_commands_pending ON runtime_commands (command_id) WHERE status = 'pending';
++CREATE INDEX ix_runtime_commands_pending ON runtime_commands (status) WHERE status = 'pending';
 
  CREATE INDEX ix_sessions_workspace_page ON sessions (json_extract(body, '$.snapshot.workspace_id'), json_extract(body, '$.snapshot.created_at'), key);
 
@@ -50,7 +50,7 @@ CREATE INDEX ix_outbox_pending ON outbox (sequence) WHERE published_at IS NULL;
 
 CREATE INDEX ix_outbox_workspace_pending ON outbox (workspace_id, sequence) WHERE published_at IS NULL;
 
-CREATE INDEX ix_runtime_commands_pending ON runtime_commands (command_id) WHERE status = 'pending';
+CREATE INDEX ix_runtime_commands_pending ON runtime_commands (status) WHERE status = 'pending';
 
 CREATE INDEX ix_sessions_workspace_page ON sessions (json_extract(body, '$.snapshot.workspace_id'), json_extract(body, '$.snapshot.created_at'), key);
 

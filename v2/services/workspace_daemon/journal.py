@@ -11,7 +11,6 @@ sequence before it is sent. Inspect reads without reserving the writer.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 from collections.abc import Mapping
@@ -20,7 +19,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from openengine.contracts.runtime import validate_wire_message
+from openengine.contracts.runtime import digest, error, validate_wire_message
 
 from workspace_daemon.executor import ExecutorPort
 from workspace_daemon.initialization import RecoveryRefused, Refusal
@@ -40,16 +39,8 @@ def now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
-def error(code: str, message: str) -> dict[str, Any]:
-    return {"code": code, "message": message, "retryable": code in ("UNAVAILABLE", "EVENT_GAP")}
-
-
 def encode(value: dict[str, Any]) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
-
-
-def digest(value: Any) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def mismatch(binding: Mapping[str, Any], subject: str, body: dict[str, Any], action: str) -> dict[str, Any] | None:
@@ -85,7 +76,7 @@ class Journal:
             if meta is None:
                 if self.established:
                     raise RecoveryRefused(Refusal.EMPTY, target=self.binding)
-                meta = {"target": self.binding, "journal_id": identity("journal_"), "sequence": 0}
+                meta = {"target": self.binding, "journal_id": identity("journal_"), "sequence": 0, "active_attempts": 0}
             if meta["target"] != self.binding:
                 raise RecoveryRefused(Refusal.REBOUND, target=self.binding, journal_id=meta["journal_id"])
             meta["ready"] = False
@@ -152,6 +143,9 @@ class Journal:
             return
         attempt["state"] = state
         await self.append(tx, "attempt." + state, payload, attempt, termination)
+        meta = await tx.get("meta", "runtime")
+        meta["active_attempts"] -= 1
+        await tx.put("meta", "runtime", meta)
         target = attempt["command"]["target"]
         await tx.put("attempts", target["attempt_id"], attempt)
         session = await tx.get("sessions", target["session_id"])
@@ -191,9 +185,11 @@ class Journal:
                 except (OSError, ValueError, RuntimeError):
                     detail = error("INVALID_ARGUMENT", "invalid or unavailable executor context")
             if detail is None:
-                active = sum(a["state"] not in TERMINAL for a in await tx.all("attempts"))
-                if active >= self.max_concurrent_attempts:
+                # A counter kept with each transition, so admission never scans finished attempts.
+                if meta["active_attempts"] >= self.max_concurrent_attempts:
                     return {**response, "status": "rejected", "error": error("UNAVAILABLE", "runtime is at capacity")}
+                meta["active_attempts"] += 1
+                await tx.put("meta", "runtime", meta)
                 await tx.put("attempts", target["attempt_id"], {"command": command, "state": "recorded", "launch_count": 0,
                                                                 "attempt_sequence": 0, "last_event_sequence": 0})
                 await tx.put("sessions", target["session_id"], {"agent": payload["agent"], "active_attempt": target["attempt_id"]})
