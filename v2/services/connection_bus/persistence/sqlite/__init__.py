@@ -18,10 +18,17 @@ def _connection(row: Any) -> Connection:
     return Connection(**{key: value for key, value in row._mapping.items() if key != "tenant_id"})
 
 
+class UnscopedConnections(TypeError):
+    """A connection store requires a verified tenant scope."""
+
+    def __init__(self) -> None:
+        super().__init__("connections require a tenant-scoped database")
+
+
 class SqliteConnections(DatabaseStore):
     def __init__(self, database: TenantDatabase) -> None:
         if not isinstance(database, TenantDatabase):
-            raise TypeError("connections require a tenant-scoped database")
+            raise UnscopedConnections()
         super().__init__(database)
         self.tenant = database.tenant
 

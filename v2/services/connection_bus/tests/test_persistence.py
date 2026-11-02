@@ -56,6 +56,17 @@ def test_postgres_store_is_a_stub() -> None:
         PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES)).scoped(LOCAL_TENANT)
 
 
+def test_connections_reject_an_unscoped_database(config: DatabaseConfig) -> None:
+    from connection_bus.persistence.sqlite import SqliteConnections, UnscopedConnections
+
+    database = PERSISTENCE.database(config)
+    try:
+        with pytest.raises(UnscopedConnections, match="connections require a tenant-scoped database"):
+            SqliteConnections(database)
+    finally:
+        asyncio.run(database.close())
+
+
 def test_two_tenant_crud_and_global_collision(config: DatabaseConfig) -> None:
     from openengine.persistence import new_tenant
 
