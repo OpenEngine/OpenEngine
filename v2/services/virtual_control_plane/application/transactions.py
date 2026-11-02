@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 Document = dict[str, Any]
-Collection = Literal["workspaces", "operations", "workspace_runtimes"]
+Collection = Literal["workspaces", "operations", "workspace_runtimes", "sessions", "attempts", "attempt_bindings", "runtime_status"]
 
 
 class CommandIdConflict(ValueError):
@@ -64,6 +64,10 @@ class Transaction(Protocol):
         """
         ...
 
+    async def append_runtime_command(self, command_id: str, subject: str, wire: bytes) -> None:
+        """Insert exact validated UTF-8 bytes once; never overwrite an accepted command."""
+        ...
+
     async def append_event(self, envelope: Document) -> None:
         """Queue an immutable public event envelope for publication after commit.
 
@@ -79,6 +83,8 @@ class UnitOfWork(Protocol):
     async def read(self, collection: Collection, key: str) -> Document | None: ...
 
     async def workspace_page(self, filters: Document, after: list[str] | None, limit: int) -> list[Document]: ...
+
+    async def session_page(self, filters: Document, after: list[str] | None, limit: int) -> list[Document]: ...
 
     def transaction(self) -> AbstractAsyncContextManager[Transaction]:
         """Serialize writers before reading; commit on success, roll back on any failure."""

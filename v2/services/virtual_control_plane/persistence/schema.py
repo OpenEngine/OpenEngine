@@ -12,6 +12,10 @@ DOCUMENT_COMMENTS = {
     "workspaces": "Workspace lifecycle projections, or preserved legacy prototype records.",
     "operations": "Accepted commands' progress and terminal state.",
     "workspace_runtimes": "Provider ownership, opaque locator, runtime identity and generation.",
+    "sessions": "Agent conversation snapshots, separate from workspace lifecycle.",
+    "attempts": "Task attempts and their execute operation identity.",
+    "attempt_bindings": "Immutable accepted execution identity and generation binding.",
+    "runtime_status": "Execution readiness and registered capabilities of an owned runtime.",
     "command_receipts": "Immutable command identity and original response for idempotent replay.",
 }
 documents = {
@@ -62,3 +66,17 @@ sa.Index("ix_workspaces_page", sa.literal_column("json_extract(body, '$.snapshot
 sa.Index("ix_workspaces_provider_page", sa.literal_column("json_extract(body, '$.snapshot.provider')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
 sa.Index("ix_workspaces_state_page", sa.literal_column("json_extract(body, '$.snapshot.state')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
 sa.Index("ix_workspaces_job_page", sa.literal_column("json_extract(body, '$.snapshot.labels.job_id')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
+
+# No publisher in this slice. Transport must send these exact bytes on every retry.
+runtime_commands = sa.Table(
+    "runtime_commands", metadata,
+    sa.Column("command_id", sa.String(128), primary_key=True),
+    sa.Column("subject", sa.Text(), nullable=False),
+    sa.Column("wire", sa.LargeBinary(), nullable=False),
+    comment="Immutable internal commands accepted atomically with attempts; delivery is disabled.",
+)
+
+for name, fields in (("ix_sessions_workspace_page", ["workspace_id", "created_at"]),
+                     ("ix_sessions_workspace_state_page", ["workspace_id", "state", "created_at"])):
+    sa.Index(name, *[sa.literal_column(f"json_extract(body, '$.snapshot.{field}')") for field in fields],
+             sa.literal_column("key"), _table=documents["sessions"])

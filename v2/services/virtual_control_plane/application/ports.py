@@ -195,3 +195,15 @@ class AllocationProvider(Protocol):
     def context(self, ownership: Ownership, locator: Locator, specification: dict[str, Any]) -> RuntimeContext:
         """Describe where work happens in this runtime; no provider call."""
         ...
+
+
+class ExecutionContextPort(Protocol):
+    async def prepare(self, workspace: dict[str, Any], runtime: dict[str, Any],
+                      payload: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Resolve an authorized filesystem root and runtime context from persisted state.
+
+        Adapters must validate runner configuration, model and task inputs against
+        operator policy before returning. No network effects or acceptance writes.
+        References are unsupported until an authorized artifact port exists.
+        """
+        ...

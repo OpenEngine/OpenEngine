@@ -43,6 +43,7 @@ from openengine.persistence import DatabaseConfig
 from openengine.telemetry import configure
 from sqlalchemy.exc import SQLAlchemyError
 
+from virtual_control_plane.application.execution import Execution
 from virtual_control_plane.application.lifecycle import Lifecycle
 from virtual_control_plane.application.ports import AllocationProvider
 from virtual_control_plane.application.outbox import OutboxPublisher
@@ -123,7 +124,7 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
                     extra={"server.listen": listener})
     lifecycle = Lifecycle(store, providers())
     log.info("providers configured", extra={"vcp.providers": sorted(lifecycle.providers)})
-    server = Server(connection, "vcp", listener, queries=lifecycle.queries(), commands=lifecycle.commands())
+    server = Server(connection, "vcp", listener, queries={**lifecycle.queries(), **Execution(lifecycle).queries()}, commands=lifecycle.commands())
     publisher = OutboxPublisher(store, JetStreamEvents(connection.jetstream()))
     health = None
     try:
