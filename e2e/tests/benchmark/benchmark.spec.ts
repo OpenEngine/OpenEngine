@@ -557,8 +557,9 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             expect(check, `engine-web --check finds write access to ${repo}:\n${check}`).toMatch(new RegExp(`github ${repo}: write access`, "i"))
           })
 
-          // The runs there were before the assignment: any other is one the assignment started.
-          const before = new Set((await listRuns(GRAPH)).map((run) => run.runId))
+          // The runs there were before the assignment: any other is one the assignment started. Every run, not the graph's:
+          // the daemon lists a run under its graph only when the CLI or a loop started it.
+          const before = new Set((await listRuns()).map((run) => run.runId))
           const assigned = await step(
             "Assign an issue to OpenEngine, and it picks it up and starts working on it. Here the issue is a new one for the calculator. `@me` is the account `gh` is signed in as, which is also the account OpenEngine uses. GitHub tells OpenEngine about the assignment through the webhook, so there is nothing to run.\n\n" +
               "```sh\ngh issue edit <issue number> --repo <your-account>/" + BENCH_REPO + " --add-assignee @me\ngh issue view <issue number> --repo <your-account>/" + BENCH_REPO + " --json assignees --jq '.assignees[].login'\n```",
@@ -576,7 +577,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           await step("[nodoc] The assignment starts a run, with nothing else asking for one", async () => {
             try {
               await expect
-                .poll(async () => (await listRuns(GRAPH)).some((run) => !before.has(run.runId)), { timeout: 5 * 60_000, intervals: [10_000] })
+                .poll(async () => (await listRuns()).some((run) => !before.has(run.runId)), { timeout: 5 * 60_000, intervals: [10_000] })
                 .toBe(true)
             } catch {
               // Why not, as far as GitHub and OpenEngine can say: GitHub's answer to the delivery, and what OpenEngine logged.
@@ -586,7 +587,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           })
 
           const fromAssignment = await step("[nodoc] The assigned issue's run is worked to the end", async () => {
-            const driven = await driveMilestone({ repo, milestone: milestone.title, graph: GRAPH, budget: BUDGET, until: "milestone-done", onProgress: (line) => console.log(`[assigned] ${line}`) })
+            const driven = await driveMilestone({ repo, milestone: milestone.title, budget: BUDGET, until: "milestone-done", onProgress: (line) => console.log(`[assigned] ${line}`) })
             // The driver sees the earlier runs again; only the new ones are this phase's.
             const runIds = new Set(driven.runs.map((run) => run.runId).filter((runId) => !before.has(runId)))
             return { runs: driven.runs.filter((run) => runIds.has(run.runId)), failures: driven.failures.filter((failure) => ![...before].some((runId) => failure.startsWith(`${runId}:`))) }
