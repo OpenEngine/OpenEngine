@@ -1,0 +1,34 @@
+name: duplication
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  duplication:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: current
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.before }}
+          path: base
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: current/tools/quality/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: current/tools/quality
+      - name: Full source comparison against intended base
+        working-directory: current
+        run: npm --prefix tools/quality run --silent gate -- ../base . > duplication-report.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: duplication-report
+          path: current/duplication-report.json

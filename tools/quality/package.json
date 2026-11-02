@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "scripts": {
+    "test": "node --test duplication.test.cjs",
+    "check": "node --max-old-space-size=4096 duplication.cjs",
+    "gate": "node gate.cjs"
+  },
+  "dependencies": {
+    "jscpd": "4.0.5",
+    "@jscpd/tokenizer": "4.0.1"
+  }
+}

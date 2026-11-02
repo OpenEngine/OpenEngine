@@ -44,7 +44,8 @@ fit together.
 ## Making a change
 
 1. Fork the repository and create a branch from `main`.
-2. Make the change, with tests. `uv run pytest` runs the Python suites; the
+2. Make the change, with tests. Run the [local quality gate](docs/duplication.md)
+   against a clean checkout of the intended base revision. `uv run pytest` runs the Python suites; the
    CI baselines for lint and types are described in
    [docs/ruff-baseline.md](docs/ruff-baseline.md) and
    [docs/pyright.md](docs/pyright.md).

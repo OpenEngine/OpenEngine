@@ -1,0 +1,37 @@
+{
+  "minTokens": 100,
+  "extensions": [
+    ".py",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".mjs",
+    ".cjs"
+  ],
+  "exclude": [
+    ".git",
+    ".venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".next",
+    ".astro",
+    "dist",
+    "build",
+    "coverage",
+    "htmlcov",
+    "playwright-report",
+    "test-results",
+    "fixtures",
+    "generated",
+    "vendor",
+    "vendored"
+  ],
+  "excludePaths": [
+    "tools/quality/duplication.test.cjs"
+  ],
+  "exceptions": []
+}
