@@ -283,8 +283,9 @@ def test_artifact_symlink_cannot_redirect_host_writes(tmp_path):
     root = tmp_path / "checkout"
     root.mkdir()
     (root / ".engine").symlink_to(tmp_path, target_is_directory=True)
-    with pytest.raises(ValueError, match="must not be symlinks"):
-        run_checks(root)
+    result = run_checks(root)
+    assert not result["passed"]
+    assert "must not be symlinks" in result["diagnostics"][0]["message"]
     assert not (tmp_path / "quality").exists()
 
 
@@ -308,3 +309,28 @@ def test_unparsed_failure_points_to_exact_log_and_repair(tmp_path):
     assert "from the target checkout" in feedback
     assert "two repair attempts" in feedback
     assert json.dumps(diagnostic["command"]) in feedback
+
+
+@pytest.mark.parametrize("conflict", [".engine", ".engine/quality"])
+def test_artifact_file_conflict_returns_repairable_failure(tmp_path, conflict):
+    path = tmp_path / conflict
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("preserve")
+    result = run_checks(tmp_path)
+    assert not result["passed"]
+    assert result["diagnostics"][0]["id"] == "artifacts"
+    assert "No checks ran" in result["diagnostics"][0]["message"]
+    assert path.read_text() == "preserve"
+
+
+def test_artifact_permission_failure_routes_to_repair(tmp_path, monkeypatch):
+    def denied(*args, **kwargs):
+        raise PermissionError()
+
+    monkeypatch.setattr(quality.tempfile, "mkdtemp", denied)
+    result = asyncio.run(QualityGate()({"workspace": str(tmp_path)}))
+    assert after_quality(result) == "implementation"
+    assert result["quality_failures"] == 1
+    assert "grant checkout write access" in result["quality_check"]["diagnostics"][0]["message"]
+    with pytest.raises(QualityRetriesExhausted):
+        asyncio.run(QualityGate()({"workspace": str(tmp_path), "quality_failures": 2}))

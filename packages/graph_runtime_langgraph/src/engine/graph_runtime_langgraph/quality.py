@@ -113,10 +113,19 @@ def run_checks(root: Path, cancelled: threading.Event | None = None) -> dict:
     root = root.resolve()
     cancelled = cancelled or threading.Event()
     reports = root / ".engine" / "quality"
-    if (root / ".engine").is_symlink() or reports.is_symlink():
-        _invalid("quality artifact directories must not be symlinks")
-    reports.mkdir(parents=True, exist_ok=True)
-    report = Path(tempfile.mkdtemp(dir=reports))
+    try:
+        if (root / ".engine").is_symlink() or reports.is_symlink():
+            _invalid("quality artifact directories must not be symlinks")
+        reports.mkdir(parents=True, exist_ok=True)
+        report = Path(tempfile.mkdtemp(dir=reports))
+    except (OSError, ValueError) as error:
+        # Do not follow unsafe paths or require working artifact storage to
+        # return a repairable failure to the implementor.
+        return dict(passed=False, report=str(reports), diagnostics=[dict(
+            id="artifacts", file=".engine/quality", line=1,
+            message=f"Cannot prepare quality reports: {error}. Replace conflicting files or symlinks with real directories and grant checkout write access. No checks ran and no report was saved.",
+            command="python scripts/quality.py",
+        )])
     diagnostics = []
     try:
         config = tomllib.loads((root / ".quality.toml").read_text())
