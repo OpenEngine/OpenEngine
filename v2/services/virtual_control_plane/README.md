@@ -374,3 +374,61 @@ producers append through the same port. The lifecycle handler appends creation a
 this same outbox. This keeps the single-host,
 single-writer constraint: there is no distributed publisher coordination, and
 published rows are retained indefinitely (no retention/GC).
+
+## Execution acceptance (delivery disabled)
+
+`application/execution.py` accepts execution only when explicitly constructed
+with `enabled=True` and an `ExecutionContextPort`. Production startup registers
+session get/list queries but no execute command route, context adapter or runtime
+registration handler. There is no environment flag to strand production work.
+Tests seed owned runtime readiness and use a deterministic context adapter; they
+do not demonstrate authenticated agent or model execution.
+
+Acceptance requires a ready workspace with matching running runtime ownership,
+a committed readiness record for that workspace/generation, a registered runner,
+and available advertised concurrency. The context port resolves persisted
+workspace state and validates operator policy for model, settings and task
+inputs. Before writing, the application checks the exact internal wire bytes
+against #1183's protocol, then verifies paths exist with the required types
+inside the authorized filesystem root, including symlink containment. References
+are rejected until an artifact authorization/storage port exists. Guest context
+validation will require an adapter at the runtime boundary before production
+execution can be enabled; no guest filesystem access is assumed here.
+
+Alembic revision `700f6cbb335e` adds sessions, attempts, immutable generation
+bindings, internal readiness records and a separate immutable binary command
+outbox. One writer transaction includes all acceptance records, the public
+receipt and the workspace's `active_attempt_ids`. Destroy uses the same writer
+reservation, so destroy and execute cannot both win admission. New sessions
+can run independently up to registered capacity; continuing an active, closed,
+foreign-workspace or stale-generation session is rejected. Continuation also
+requires identical agent configuration. Queries include starting attempts and
+return at most the latest 20 attempts per session, with filtered cursor paging.
+The current query implementation scans session documents; indexing/retention is
+left for scaling this disabled execution slice.
+
+Replay precedes deadline, version, readiness and enablement checks. It returns
+the exact accepted IDs even after restart or disabling execution; changed
+immutable inputs under the same command ID conflict. Internal command bytes
+are stored once and cannot be updated through the transaction port. The
+allocation worker explicitly selects apply/ensure/destroy and never claims a
+pending execute. No command outbox publisher is included.
+
+`Execution.transition` is a trusted application projection primitive exercised
+with deterministic fixtures, not a runtime update endpoint. It accepts only
+starting→running/failed and running→completed/failed. A runtime command
+acknowledgement has no task transition. Only running projects `task.started` and
+succeeds execute; a later task failure leaves that operation successful, idles
+the session and releases only the finished attempt. Failure before start fails
+execute. State, operation and public event outbox changes commit together.
+Before connecting this primitive to delivery, the owning slice must implement
+authentication, generation fencing, journal ordering/deduplication and confirmed
+termination evidence. Cancel, runtime transport/daemon, real executors and
+approval/artifact storage are excluded.
+
+Design/test evidence: #1045 at `891491c936e7078e8f10619566185d6150b942c7`;
+only acceptance and transition semantics were adapted to current main's
+transaction ports and merged #1284/#1183. Public schemas and #1043's single
+`openengine.cc/v1alpha1` resource API group are unchanged. Generated schema and
+architecture Mermaid sources accompany the revision; the schema documentation
+workflow renders SVGs.

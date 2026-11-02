@@ -17,7 +17,7 @@ from virtual_control_plane.application.transactions import (
     Collection, CommandIdConflict, Document, InvalidEvent, PendingEvent,
 )
 from virtual_control_plane.jetstream import event_errors
-from virtual_control_plane.persistence.schema import documents, outbox
+from virtual_control_plane.persistence.schema import documents, outbox, runtime_commands
 
 
 # Enumerate workspace IDs by index seeks, rather than DISTINCT/GROUP BY scans.
@@ -94,10 +94,15 @@ class Transaction:
 
     async def put(self, collection: Collection, key: str, value: Document) -> None:
         table = _collection(collection)
+        if collection == "attempt_bindings":
+            await self._connection.execute(table.insert().values(key=key, body=value))
+            return
         statement = insert(table).values(key=key, body=value)
         await self._connection.execute(statement.on_conflict_do_update(index_elements=["key"], set_={"body": value}))
 
     async def delete(self, collection: Collection, key: str) -> None:
+        if collection == "attempt_bindings":
+            raise KeyError(collection)
         table = _collection(collection)
         await self._connection.execute(table.delete().where(table.c.key == key))
 
@@ -112,7 +117,9 @@ class Transaction:
     async def pending_allocations(self, limit: int, after: str = "") -> list[Document]:
         table = documents["operations"]
         query = (sa.select(table.c.body)
-                 .where(sa.text("json_extract(body, '$.snapshot.status') IN ('pending', 'running')"), table.c.key > after)
+                 .where(sa.text("json_extract(body, '$.snapshot.status') IN ('pending', 'running')"),
+                        sa.text("json_extract(body, '$.snapshot.operation') IN ('workspaces.apply', 'workspaces.ensure', 'workspaces.destroy')"),
+                        table.c.key > after)
                  .order_by(table.c.key).limit(limit))
         return list((await self._connection.execute(query)).scalars())
 
@@ -137,6 +144,9 @@ class Transaction:
             key=command["command_id"], body={"identity": _identity(subject, command), "response": response},
         ))
         return response
+
+    async def append_runtime_command(self, command_id: str, subject: str, wire: bytes) -> None:
+        await self._connection.execute(runtime_commands.insert().values(command_id=command_id, subject=subject, wire=wire))
 
     async def append_event(self, envelope: Document) -> None:
         # Reject what could never be published before it can hold back its workspace.

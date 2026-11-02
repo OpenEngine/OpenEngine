@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 Document = dict[str, Any]
-Collection = Literal["workspaces", "operations", "workspace_runtimes"]
+Collection = Literal["workspaces", "operations", "workspace_runtimes", "sessions", "attempts", "attempt_bindings", "runtime_status"]
 
 
 class CommandIdConflict(ValueError):
@@ -62,6 +62,10 @@ class Transaction(Protocol):
         Retryable rejections are returned without retention. On replay the
         supplied response is ignored; the first response always wins.
         """
+        ...
+
+    async def append_runtime_command(self, command_id: str, subject: str, wire: bytes) -> None:
+        """Insert exact validated UTF-8 bytes once; never overwrite an accepted command."""
         ...
 
     async def append_event(self, envelope: Document) -> None:
