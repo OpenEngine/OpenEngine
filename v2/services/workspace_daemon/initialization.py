@@ -14,6 +14,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
+LOCK_FILE = ".daemon.lock"
+"""Held with an exclusive `flock` for the daemon's whole life; supervisors read liveness from it."""
 BINDING = "binding.json"
 PENDING = "initializing.json"
 

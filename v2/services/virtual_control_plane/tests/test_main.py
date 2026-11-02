@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -96,3 +97,24 @@ def test_providers_are_configured_from_the_environment_and_default_to_none() -> 
     assert (adapter.image, adapter.executable) == ("example.test/image:1", "/opt/smolvm/bin/smolvm")
     assert adapter.capabilities["tools"] == ["git", "terminal", "browser"]
     assert vcp.providers({vcp.SMOLVM_IMAGE_VARIABLE: "img"})["smolvm"].capabilities["tools"] == ["git", "terminal"]
+
+
+def test_the_worktree_provider_needs_a_root_and_explicit_daemon_credentials(tmp_path: Path) -> None:
+    from virtual_control_plane.providers.worktree import Worktree
+
+    root = {vcp.WORKTREE_VARIABLE: "1", vcp.STATE_DIR_VARIABLE: str(tmp_path)}
+    assert vcp.providers(root) == {}  # no broker credentials for its daemons: not registered
+
+    configured = vcp.providers({**root, vcp.RUNTIME_LOCAL_TEST_ACCOUNT_VARIABLE: "1", vcp.WORKTREE_TOOLS_VARIABLE: "terminal,",
+                                vcp.NATS_URL_VARIABLE: "nats://127.0.0.1:4333"})
+    [(name, adapter)] = configured.items()
+    assert name == "process" and isinstance(adapter, Worktree)
+    assert adapter.root == tmp_path.resolve() / "worktrees"
+    assert adapter.capabilities["isolation"] == "process" and adapter.capabilities["tools"] == ["terminal"]
+    assert adapter.daemon is not None and adapter.daemon.nats_url == "nats://127.0.0.1:4333"
+    assert not adapter.discard_changes and adapter.source_roots == ()
+    credentials = vcp.providers({**root, vcp.RUNTIME_CREDENTIALS_VARIABLE: "/run/oe/runtime.creds",
+                                 vcp.WORKTREE_DISCARD_VARIABLE: "1",
+                                 vcp.WORKTREE_SOURCE_ROOTS_VARIABLE: f"{tmp_path}/a{os.pathsep}{tmp_path}/b{os.pathsep}"})["process"]
+    assert credentials.daemon.credentials == Path("/run/oe/runtime.creds") and credentials.discard_changes
+    assert credentials.source_roots == (tmp_path.resolve() / "a", tmp_path.resolve() / "b")

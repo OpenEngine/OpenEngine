@@ -4,7 +4,9 @@ version = "0.0.0"
 description = "Manages the lifecycle of agents and the workspaces they work in."
 requires-python = ">=3.11"
 # openengine-contracts validates capabilities.get and the other VCP subjects it serves.
-dependencies = ["nats-py>=2.16.0", "openengine-contracts", "openengine-messaging", "openengine-persistence", "openengine-telemetry"]
+# The worktree adapter runs `python -m workspace_daemon` as a separate process, importing only its lock-file name.
+dependencies = ["nats-py>=2.16.0", "openengine-contracts", "openengine-messaging", "openengine-persistence", "openengine-telemetry",
+                "openengine-workspace-daemon"]
 
 [build-system]
 requires = ["hatchling"]
@@ -23,3 +25,4 @@ openengine-contracts = { workspace = true }
 openengine-messaging = { workspace = true }
 openengine-persistence = { workspace = true }
 openengine-telemetry = { workspace = true }
+openengine-workspace-daemon = { workspace = true }

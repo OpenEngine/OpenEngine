@@ -19,9 +19,14 @@ events for the next start.
 Workspace creation, `ensure` and lifecycle queries use durable receipts and a
 restartable operation worker. The smolvm adapter is registered only when
 `OE_VCP_SMOLVM_IMAGE` names a guest image (`OE_VCP_SMOLVM_TOOLS` and
-`OE_VCP_SMOLVM_EXECUTABLE` refine it); otherwise no provider is configured and
-readiness promises request handling, not compute or an executor. See the
-service README.
+`OE_VCP_SMOLVM_EXECUTABLE` refine it). The Git worktree (`process`) adapter is
+registered only when `OE_VCP_WORKTREE=1`, owning `worktrees/` inside the
+exclusively locked state directory and checking out only repositories beneath
+`OE_VCP_WORKTREE_SOURCE_ROOTS`, and the workspace daemons it supervises
+have broker credentials (`OE_VCP_RUNTIME_CREDENTIALS`, or the explicit
+test-only `OE_VCP_RUNTIME_LOCAL_TEST_ACCOUNT=1`); VCP then also commits those
+daemons' runtime updates. Otherwise no provider is configured and readiness promises
+request handling, not compute or an executor. See the service README.
 """
 
 from __future__ import annotations
@@ -47,11 +52,14 @@ from virtual_control_plane.application.execution import Execution
 from virtual_control_plane.application.lifecycle import Lifecycle
 from virtual_control_plane.application.ports import AllocationProvider
 from virtual_control_plane.application.outbox import OutboxPublisher
+from virtual_control_plane.application.runtime_delivery import RuntimeUpdates
 from virtual_control_plane.exclusion import AlreadyRunning, StateDirectory
 from virtual_control_plane.jetstream import JetStreamEvents
 from virtual_control_plane.persistence import PERSISTENCE
 from virtual_control_plane.persistence.durable import DurableStore
+from virtual_control_plane.providers import worktree
 from virtual_control_plane.providers.smolvm import DEFAULT_TOOLS, Smolvm
+from virtual_control_plane.runtime_nats import RuntimeUpdateListener
 
 NATS_URL_VARIABLE = "OE_NATS_URL"
 HEALTH_PORT_VARIABLE = "OE_VCP_HEALTH_PORT"
@@ -68,19 +76,41 @@ log = logging.getLogger("virtual_control_plane")
 SMOLVM_IMAGE_VARIABLE = "OE_VCP_SMOLVM_IMAGE"
 SMOLVM_TOOLS_VARIABLE = "OE_VCP_SMOLVM_TOOLS"
 SMOLVM_EXECUTABLE_VARIABLE = "OE_VCP_SMOLVM_EXECUTABLE"
+WORKTREE_VARIABLE = "OE_VCP_WORKTREE"
+WORKTREE_TOOLS_VARIABLE = "OE_VCP_WORKTREE_TOOLS"
+WORKTREE_DISCARD_VARIABLE = "OE_VCP_WORKTREE_DISCARD_CHANGES"
+WORKTREE_SOURCE_ROOTS_VARIABLE = "OE_VCP_WORKTREE_SOURCE_ROOTS"
+RUNTIME_CREDENTIALS_VARIABLE = "OE_VCP_RUNTIME_CREDENTIALS"
+RUNTIME_LOCAL_TEST_ACCOUNT_VARIABLE = "OE_VCP_RUNTIME_LOCAL_TEST_ACCOUNT"
 
 
 def providers(environment: Mapping[str, str] = os.environ) -> dict[str, AllocationProvider]:
     """The managed adapters this host is configured for.
 
-    smolvm is opt-in through its image; #1054's worktree adapter registers here
-    too once it exists. Without configuration capabilities.get is honest about
-    serving none, rather than advertising unimplemented isolation.
+    smolvm is opt-in through its image, the worktree adapter through
+    `OE_VCP_WORKTREE` and daemon credentials. Worktrees live inside the state
+    directory, whose lock makes this process their only owner. Without
+    configuration capabilities.get is honest about serving none, rather than
+    advertising unimplemented isolation.
     """
     configured: dict[str, AllocationProvider] = {}
     if image := environment.get(SMOLVM_IMAGE_VARIABLE):
         tools = [tool for tool in environment.get(SMOLVM_TOOLS_VARIABLE, ",".join(DEFAULT_TOOLS)).split(",") if tool]
         configured["smolvm"] = Smolvm(image, tools=tools, executable=environment.get(SMOLVM_EXECUTABLE_VARIABLE, "smolvm"))
+    if environment.get(WORKTREE_VARIABLE) == "1":
+        credentials = environment.get(RUNTIME_CREDENTIALS_VARIABLE)
+        local = environment.get(RUNTIME_LOCAL_TEST_ACCOUNT_VARIABLE) == "1"
+        if not credentials and not local:
+            log.error("worktree provider not registered: set %s, or %s=1 for tests",
+                      RUNTIME_CREDENTIALS_VARIABLE, RUNTIME_LOCAL_TEST_ACCOUNT_VARIABLE)
+        else:
+            daemon = worktree.HostDaemon(environment.get(NATS_URL_VARIABLE, "nats://127.0.0.1:4222"),
+                                         credentials=Path(credentials) if credentials else None, local_test_account=local)
+            tools = [tool for tool in environment.get(WORKTREE_TOOLS_VARIABLE, ",".join(worktree.DEFAULT_TOOLS)).split(",") if tool]
+            configured[worktree.PROVIDER] = worktree.Worktree(
+                _state_directory(environment) / "worktrees", tools=tools, daemon=daemon,
+                source_roots=[root for root in environment.get(WORKTREE_SOURCE_ROOTS_VARIABLE, "").split(os.pathsep) if root],
+                discard_changes=environment.get(WORKTREE_DISCARD_VARIABLE) == "1")
     return configured
 
 
@@ -124,11 +154,18 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
                     extra={"server.listen": listener})
     lifecycle = Lifecycle(store, providers())
     log.info("providers configured", extra={"vcp.providers": sorted(lifecycle.providers)})
-    server = Server(connection, "vcp", listener, queries={**lifecycle.queries(), **Execution(lifecycle).queries()}, commands=lifecycle.commands())
+    execution = Execution(lifecycle)
+    server = Server(connection, "vcp", listener, queries={**lifecycle.queries(), **execution.queries()}, commands=lifecycle.commands())
     publisher = OutboxPublisher(store, JetStreamEvents(connection.jetstream()))
+    # Supervised host daemons register (`runtime.ready`) over the internal protocol;
+    # no execute route is served, so nothing is delivered to them yet (#1055).
+    updates = (RuntimeUpdateListener(connection, RuntimeUpdates(store, execution))
+               if worktree.PROVIDER in lifecycle.providers else None)
     health = None
     try:
         await server.start()
+        if updates is not None:
+            await updates.start()
         publisher.start()
         lifecycle.start()
         health = await asyncio.start_server(
@@ -154,6 +191,8 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
             try:
                 # Broker I/O must stop before the connection closes; pending events survive.
                 await lifecycle.close()
+                if updates is not None:
+                    await updates.close()
                 await publisher.close(OUTBOX_CLOSE_SECONDS)
                 await server.close()
             finally:
@@ -172,8 +211,8 @@ async def _serve_store(nats_url: str, health_port: int, ready_file: Path | None,
         await store.close()
 
 
-def _state_directory() -> Path:
-    directory = os.environ.get(STATE_DIR_VARIABLE)
+def _state_directory(environment: Mapping[str, str] = os.environ) -> Path:
+    directory = environment.get(STATE_DIR_VARIABLE)
     return Path(directory) if directory else Path.cwd() / ".openengine" / "vcp"
 
 

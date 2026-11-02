@@ -39,12 +39,11 @@ from openengine.persistence.migrations import current_revision
 
 from workspace_daemon import store as journal_store
 from workspace_daemon.executor import ExecutionWorker, FakeExecutor
-from workspace_daemon.initialization import Initialization, RecoveryRefused, Refusal, locations
+from workspace_daemon.initialization import LOCK_FILE, Initialization, RecoveryRefused, Refusal, locations
 from workspace_daemon.journal import Journal, encode
 from workspace_daemon.outbox import UpdateOutbox
 
 EXIT_OK, EXIT_FAILED, EXIT_REFUSED = 0, 1, 2
-LOCK_FILE = ".daemon.lock"
 REQUEST_TIMEOUT_SECONDS = 5.0
 TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 

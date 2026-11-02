@@ -26,13 +26,13 @@ import signal
 import tarfile
 from collections.abc import Mapping, Sequence
 from pathlib import PurePosixPath
-from typing import Any, NoReturn
+from typing import Any
 
-from openengine.messaging import ErrorCode, ServiceError
 from openengine.messaging.errors import invalid_argument
 
 from virtual_control_plane.application.ports import Ownership, OwnershipMismatch, RuntimeContext
 from virtual_control_plane.persistence.store import Locator
+from virtual_control_plane.providers.errors import terminal, unavailable
 
 PROVIDER = "smolvm"
 GUEST_ROOT = "/workspace"
@@ -62,16 +62,6 @@ def machine_name(ownership: Ownership) -> str:
 def _labels(ownership: Ownership) -> dict[str, str]:
     return {"oe.workspace": ownership.workspace_id, "oe.runtime": ownership.runtime_id,
             "oe.generation": str(ownership.generation)}
-
-
-def _unavailable(message: str, **details: Any) -> NoReturn:
-    """Transient: the lifecycle retries the same ownership with capped backoff."""
-    raise ServiceError(ErrorCode.UNAVAILABLE, message, retryable=True, details=details or None)
-
-
-def _terminal(message: str, **details: Any) -> NoReturn:
-    """Final for this operation; ownership is retained for explicit cleanup."""
-    raise ServiceError(ErrorCode.PROVIDER_ERROR, message, retryable=False, details=details or None)
 
 
 def _guest_path(path: str) -> str:
@@ -127,10 +117,10 @@ class Smolvm:
     async def ensure(self, ownership: Ownership, locator: Locator, specification: dict[str, Any]) -> Locator:
         name = machine_name(ownership)
         if locator and locator.get("machine") not in (None, name):
-            _terminal(f"locator names machine {locator['machine']!r}, not the owned {name!r}", machine=name)
+            terminal(f"locator names machine {locator['machine']!r}, not the owned {name!r}", machine=name)
         if await self._owned(ownership) is None:
             # Never reprovision silently: the workspace's data would be gone.
-            _terminal(f"owned machine {name!r} no longer exists", machine=name)
+            terminal(f"owned machine {name!r} no longer exists", machine=name)
         await self._start(name)
         await self._prepare(name, ownership, specification["spec"])
         return self._locator(ownership)
@@ -138,12 +128,12 @@ class Smolvm:
     async def destroy(self, ownership: Ownership, locator: Locator | None) -> None:
         name = machine_name(ownership)
         if locator and locator.get("machine") not in (None, name):
-            _terminal("locator does not name the owned machine", machine=name)
+            terminal("locator does not name the owned machine", machine=name)
         if await self._owned(ownership, destroying=True) is None:
             return
         await self._run("machine", "delete", "--name", name, "--force")
         if await self._owned(ownership, destroying=True) is not None:
-            _unavailable("owned machine still exists after deletion", machine=name)
+            unavailable("owned machine still exists after deletion", machine=name)
 
     def context(self, ownership: Ownership, locator: Locator, specification: dict[str, Any]) -> RuntimeContext:
         context = specification["spec"].get("context", {})
@@ -181,14 +171,14 @@ class Smolvm:
         try:
             machines = json.loads(output)
         except ValueError:
-            _unavailable("smolvm machine ls returned unreadable output")
+            unavailable("smolvm machine ls returned unreadable output")
         if not destroying:
             return machines if isinstance(machines, list) else []
         if not isinstance(machines, list):
-            _unavailable("smolvm machine ls returned an invalid inventory")
+            unavailable("smolvm machine ls returned an invalid inventory")
         for machine in machines:
             if not isinstance(machine, dict) or not machine.get("name"):
-                _unavailable("smolvm machine ls returned an invalid inventory")
+                unavailable("smolvm machine ls returned an invalid inventory")
         return machines
 
     async def _owned(self, ownership: Ownership, *, destroying: bool = False) -> dict[str, Any] | None:
@@ -251,9 +241,9 @@ class Smolvm:
         output, _, code = await self._exec(name, "sh", "-c", script, "sh", *dict.fromkeys(required), check=False)
         if code == MISSING_TOOL_EXIT:
             tool = output.decode(errors="replace").strip()
-            _terminal(f"image {self.image!r} lacks required tool {tool!r}", tool=tool, image=self.image)
+            terminal(f"image {self.image!r} lacks required tool {tool!r}", tool=tool, image=self.image)
         if code:
-            _unavailable(f"smolvm machine exec exited with {code}", command="exec")
+            unavailable(f"smolvm machine exec exited with {code}", command="exec")
 
     @staticmethod
     def _context_archive(context: dict[str, Any]) -> bytes | None:
@@ -301,12 +291,12 @@ class Smolvm:
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=True,
             )
         except OSError as error:
-            _terminal(f"cannot execute {self.executable!r}: {error.strerror or error}", executable=self.executable)
+            terminal(f"cannot execute {self.executable!r}: {error.strerror or error}", executable=self.executable)
         try:
             async with asyncio.timeout(self.command_timeout):
                 output, errors = await process.communicate()
         except TimeoutError:
-            _unavailable(f"smolvm {subcommand} timed out after {self.command_timeout:g}s", command=subcommand)
+            unavailable(f"smolvm {subcommand} timed out after {self.command_timeout:g}s", command=subcommand)
         finally:
             if process.returncode is None:
                 try:
@@ -319,5 +309,5 @@ class Smolvm:
             # public errors and log them only for local debugging.
             log.debug("smolvm %s exited with %d: %s", subcommand, process.returncode,
                       errors.decode(errors="replace")[:500])
-            _unavailable(f"smolvm {subcommand} exited with {process.returncode}", command=subcommand)
+            unavailable(f"smolvm {subcommand} exited with {process.returncode}", command=subcommand)
         return output, errors, process.returncode or 0
