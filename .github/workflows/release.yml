@@ -39,8 +39,20 @@ jobs:
       tag: ${{ steps.release.outputs.tag_name }}
       sha: ${{ steps.release.outputs.sha }}
     steps:
+      # Open the release PR as the bot app when it is configured. A release PR
+      # opened with GITHUB_TOKEN belongs to github-actions[bot], and GitHub holds
+      # every workflow run on it until a maintainer approves each one.
+      - name: Mint a bot token
+        id: bot
+        if: vars.BOT_APP_ID != ''
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.BOT_APP_ID }}
+          private-key: ${{ secrets.BOT_APP_PRIVATE_KEY }}
       - uses: googleapis/release-please-action@v5
         id: release
+        with:
+          token: ${{ steps.bot.outputs.token || github.token }}
 
   bundle:
     needs: release-please
@@ -165,7 +177,8 @@ jobs:
         with:
           name: release-bundle
           path: dist
-      # GITHUB_TOKEN-created tags do not trigger another workflow. Upload here.
+      # Upload here: a tag cut with GITHUB_TOKEN triggers no workflow, and one
+      # cut with the bot token only triggers the release gate.
       - name: Attach application assets to the release
         env:
           GH_TOKEN: ${{ github.token }}

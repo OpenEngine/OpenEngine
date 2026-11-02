@@ -12,8 +12,19 @@ most recent scheduled `ACP compatibility` run on the default branch must be
 green and no more than eight days old. Merging the release PR creates a `v<version>` GitHub release and builds
 its exact commit. The same bundle build runs on pull requests. Enable “Allow
 GitHub Actions to create and approve pull requests” in repository settings.
-The default GitHub token does not trigger CI on bot-created release PRs; run the
-`tests` workflow manually on the release PR branch before merging it.
+
+GitHub holds every workflow run that `github-actions[bot]` triggers on a pull
+request until a maintainer approves it. A release PR opened with the default
+token, and a schema or diagram commit that the documentation workflows push to
+a PR branch with it, therefore run no checks on their own. To let them run,
+the `release`, `architecture documentation`, and `v2 schema documentation`
+workflows act as a GitHub App when one is configured: create an app owned by
+the organization with repository permissions Contents (read and write), Pull
+requests (read and write), and Issues (read and write), install it on this
+repository, and set the repository variable `BOT_APP_ID` to its App ID and the
+repository secret `BOT_APP_PRIVATE_KEY` to a private key generated for it.
+Without them the workflows fall back to the default token, and a maintainer
+approves each held run from the pull request's checks tab.
 
 Each release attaches `openengine-<version>.tar.gz` and `release-manifest.json`.
 The archive contains all first-party wheels (including migrations and the
