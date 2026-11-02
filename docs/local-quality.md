@@ -1,23 +1,17 @@
 # Local repository quality gate
 
-Run `python scripts/quality.py` with Python 3.11+ on Linux with Bubblewrap installed
-(`sudo apt-get install bubblewrap` on Ubuntu) from the target checkout
-(activate `.venv` first). This is also the
-command used by CI. Install the development environment once with
-`uv sync --locked --all-packages`; subsequent gate runs use `uv run --offline
---no-sync`, so disconnected runs need no forge or package download. A missing
-installed tool fails the gate. Checks run inside a Bubblewrap namespace with no
-network or host processes, read-only system/interpreter/tool inputs, and write
-access only to the checkout and a disposable temporary directory. The environment
-is explicitly constructed; host credentials and environment variables are not
-inherited. User namespaces must be enabled. On Ubuntu runners, CI sets
-`kernel.apparmor_restrict_unprivileged_userns=0` so Bubblewrap can configure its
-isolated network; a local administrator must likewise permit Bubblewrap user
-namespaces if AppArmor denies them. Unsupported hosts (including macOS)
-and unavailable or denied sandbox creation fail closed; use a Linux checkout or
-VM for these runs. There is no unrestricted execution fallback. Timeout and graph
-cancellation kill the check process group and its isolated process namespace
-before repair can begin. CI status remains an additional gate.
+Run `python scripts/quality.py` with Python 3.11+ from the target checkout
+(activate `.venv` first), on macOS or Linux. This is also the command used by CI.
+Install the development environment once with `uv sync --locked --all-packages`;
+subsequent gate runs use `uv run --offline --no-sync`, so disconnected runs need
+no forge or package download. A missing installed tool fails the gate.
+
+Checks inherit the implementor's environment and permissions, including filesystem
+and network access. The gate adds no separate sandbox; workflow-wide isolation
+will be provided by the forthcoming sandbox implementation. Use trusted repository
+checks and pinned development tools. Timeout and graph cancellation kill the check
+process group before repair begins; processes that deliberately detach from that
+group are outside this cleanup guarantee. CI status remains an additional gate.
 
 `.quality.toml` belongs to the target repository and is read anew after every
 implementation or repair. Commit it and its rules so future tasks inherit them.

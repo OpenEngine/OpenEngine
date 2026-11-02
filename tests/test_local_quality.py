@@ -1,7 +1,6 @@
 """The local gate is fail closed and repairs before review without a model."""
 import asyncio
 import json
-import os
 import time
 from pathlib import Path
 import sys
@@ -11,16 +10,8 @@ from langgraph.graph import END, START, StateGraph
 
 from engine.graph_runtime_langgraph import State
 from engine.graph_runtime_langgraph.components.quality import QualityGate, QualityRetriesExhausted, after_quality
-from engine.graph_runtime_langgraph.quality import run_checks, _diagnostics, _execution
+from engine.graph_runtime_langgraph.quality import run_checks, _diagnostics
 from engine.graph_runtime_langgraph import quality
-
-
-@pytest.fixture(autouse=True)
-def execution_boundary(request, monkeypatch):
-    """Unit-test orchestration separately from the Linux sandbox integration."""
-    if request.node.name.startswith("test_sandbox_"):
-        return
-    monkeypatch.setattr(quality, "_execution", lambda command, root, temporary: (command, {"PATH": os.defpath}))
 
 
 def configure(root, command, files=None):
@@ -212,71 +203,19 @@ def test_large_failure_output_is_bounded(tmp_path):
     assert all(d["file"] == "scan.py" and d["line"] == 7 for d in diagnostics)
 
 
-def test_sandbox_missing_fails_closed(tmp_path, monkeypatch):
-    configure(tmp_path, [sys.executable, "-c", "open('executed','w').close()"])
-    monkeypatch.setattr(quality.shutil, "which", lambda *args, **kwargs: None)
-    monkeypatch.setattr(quality.sys, "platform", "linux")
-    result = run_checks(tmp_path)
-    assert not result["passed"]
-    assert "sandbox unavailable" in result["diagnostics"][0]["message"]
-    assert not (tmp_path / "executed").exists()
-
-
-def test_sandbox_permissions_are_explicit(tmp_path, monkeypatch):
-    monkeypatch.setenv("QUALITY_HOST_SECRET", "hidden")
-    monkeypatch.setattr(quality.sys, "platform", "linux")
-    monkeypatch.setattr(quality.shutil, "which", lambda name, **kwargs: "/usr/bin/" + name)
-    argv, environment = _execution(["python3", "scan.py"], tmp_path, tmp_path / "temporary")
-    assert argv[0] == "/usr/bin/bwrap"
-    assert "--unshare-all" in argv and "--die-with-parent" in argv
-    assert "QUALITY_HOST_SECRET" not in environment
-    assert environment["HOME"] == str(tmp_path / "temporary")
-    assert "--ro-bind" in argv
-
-
-@pytest.mark.skipif(sys.platform != "linux", reason="Quality sandbox requires Linux with bubblewrap")
-def test_sandbox_blocks_host_access(tmp_path, monkeypatch):
-    monkeypatch.setenv("QUALITY_HOST_SECRET", "hidden")
-    outside = tmp_path / "host-secret"
-    outside.write_text("secret")
+def test_checks_inherit_implementor_environment_and_host_access(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUALITY_HOST_VALUE", "inherited")
+    outside = tmp_path / "host-file"
+    outside.write_text("before")
     root = tmp_path / "checkout"
     root.mkdir()
-    code = f"""import os,socket
-from pathlib import Path
-assert 'QUALITY_HOST_SECRET' not in os.environ
-# Require an existing file: 'w' could create a sandbox-local file in the
-# parent directory bubblewrap creates for the checkout mount.
-for mode in ('r', 'r+'):
-    try:
-        open({str(outside)!r}, mode)
-    except OSError:
-        pass
-    else:
-        raise AssertionError('host access allowed')
-s = socket.socket()
-try:
-    s.connect(('1.1.1.1', 80))
-except OSError:
-    pass
-else:
-    raise AssertionError('network allowed')
-try:
-    Path('.engine/injected').write_text('bad')
-except OSError:
-    pass
-else:
-    raise AssertionError('artifact writes allowed')
-Path('checked').write_text('ok')
-import subprocess,sys
-subprocess.Popen([sys.executable, '-c', "import time; time.sleep(0.3); open('detached','w').close()"], start_new_session=True)
-"""
+    code = ("import os; from pathlib import Path; "
+            "assert os.environ['QUALITY_HOST_VALUE'] == 'inherited'; "
+            f"Path({str(outside)!r}).write_text('after'); "
+            "assert Path.cwd() == Path(" + repr(str(root)) + ")")
     configure(root, [sys.executable, "-c", code])
-    result = run_checks(root)
-    assert result["passed"], {**result, "output": (Path(result["report"]) / "example.log").read_text()}
-    assert (root / "checked").read_text() == "ok"
-    assert outside.read_text() == "secret"
-    time.sleep(0.5)
-    assert not (root / "detached").exists()
+    assert run_checks(root)["passed"]
+    assert outside.read_text() == "after"
 
 
 def test_artifact_symlink_cannot_redirect_host_writes(tmp_path):
