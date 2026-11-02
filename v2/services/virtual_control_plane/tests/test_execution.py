@@ -2,6 +2,7 @@
 import asyncio
 import json
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 import sqlalchemy as sa
@@ -232,7 +233,7 @@ def test_sessions_parallel_continuation_pagination_and_transitions(tmp_path):
 def test_destroy_and_execute_share_atomic_admission(tmp_path, first):
     async def scenario():
         _, store, lifecycle, service = await setup(tmp_path)
-        destroy = request("cmd_destroy", {"retention": "delete_all"}, "destroy")
+        destroy = request("cmd_destroy", {"retention": {"artifacts": "delete", "checkpoints": "delete"}}, "destroy")
         if first == "execute":
             execute_reply = await service.execute(request())
             destroy_reply = await lifecycle.destroy(destroy)
@@ -242,6 +243,22 @@ def test_destroy_and_execute_share_atomic_admission(tmp_path, first):
         else:
             execute_reply, destroy_reply = await asyncio.gather(service.execute(request()), lifecycle.destroy(destroy))
         assert sorted([execute_reply["status"], destroy_reply["status"]]) == ["accepted", "rejected"]
+        if first == "execute":
+            assert execute_reply["status"] == "accepted"
+        elif first == "destroy":
+            assert destroy_reply["status"] == "accepted"
+        workspace = await store.read("workspaces", "ws_test")
+        if execute_reply["status"] == "accepted":
+            assert destroy_reply["error"]["code"] == "INVALID_STATE"
+            assert workspace["snapshot"]["state"] == "ready"
+            assert workspace["snapshot"]["active_attempt_ids"] == [execute_reply["resource_id"]]
+            assert not workspace.get("active_operation_id")
+        else:
+            assert execute_reply["error"]["code"] == "UNAVAILABLE"
+            assert workspace["snapshot"]["state"] == "destroying"
+            assert workspace["snapshot"]["active_attempt_ids"] == []
+            assert workspace["active_operation_id"] == destroy_reply["operation_id"]
+            assert await commands(store) == []
         await store.close()
     asyncio.run(scenario())
 
@@ -340,4 +357,68 @@ def test_session_pages_use_indexes_without_writer_reservation(tmp_path):
         assert [s["session_id"] for s in page["items"]] == ["session_0298", "session_0297"]
         await store.close()
 
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("change", ["destroy", "runtime", "ownership", "readiness", "capacity", "session", "unrelated"])
+def test_preparation_releases_writer_and_revalidates(tmp_path, change):
+    async def scenario():
+        _, store, lifecycle, service = await setup(tmp_path)
+        req = request()
+        if change == "session":
+            reply = await service.execute(req)
+            async with store.transaction() as tx:
+                await service.transition(tx, reply["resource_id"], "running")
+                await service.transition(tx, reply["resource_id"], "completed", result={})
+            session = (await service.list(query()))["items"][0]
+            req = request("cmd_continue", payload={**req.body["payload"],
+                          "session": {"mode": "continue", "session_id": session["session_id"]}})
+        entered, release = asyncio.Event(), asyncio.Event()
+        prepare = service.context.prepare
+        async def slow(*args):
+            entered.set()
+            await release.wait()
+            return await prepare(*args)
+        service.context.prepare = slow
+        task = asyncio.create_task(service.execute(req))
+        await asyncio.wait_for(entered.wait(), 2)
+        try:
+            if change in ("destroy", "unrelated"):
+                destroy = request("cmd_destroy", {"retention": {"artifacts": "delete", "checkpoints": "delete"}}, "destroy")
+                if change == "unrelated":
+                    async with store.transaction() as tx:
+                        other = deepcopy(await tx.get("workspaces", "ws_test"))
+                        other["snapshot"]["workspace_id"] = "ws_other"
+                        await tx.put("workspaces", "ws_other", other)
+                    destroy.parameters["workspace_id"] = "ws_other"
+                    destroy = replace(destroy, subject=destroy.subject.replace("ws_test", "ws_other"))
+                assert (await asyncio.wait_for(lifecycle.destroy(destroy), 2))["status"] == "accepted"
+            else:
+                async with store.transaction() as tx:
+                    collection, key = {
+                        "runtime": ("workspace_runtimes", "ws_test"),
+                        "ownership": ("workspace_runtimes", "ws_test"),
+                        "readiness": ("runtime_status", "rt_test"),
+                        "capacity": ("runtime_status", "rt_test"),
+                        "session": ("sessions", req.body["payload"]["session"].get("session_id", "")),
+                    }[change]
+                    value = await tx.get(collection, key)
+                    if change == "ownership":
+                        value["runtime_id"] = "rt_replaced"
+                    elif change == "runtime":
+                        value["locator"] = {"path": "changed"}
+                    elif change == "readiness":
+                        value["ready"] = False
+                    elif change == "capacity":
+                        value["max_concurrent_attempts"] = 0
+                    else:
+                        value["snapshot"]["state"] = "active"
+                    await tx.put(collection, key, value)
+        finally:
+            release.set()
+        reply = await task
+        assert reply["status"] == ("accepted" if change == "unrelated" else "rejected")
+        if change != "unrelated":
+            assert reply["error"]["code"] == ("INVALID_STATE" if change in ("session", "ownership") else "UNAVAILABLE")
+        await store.close()
     asyncio.run(scenario())

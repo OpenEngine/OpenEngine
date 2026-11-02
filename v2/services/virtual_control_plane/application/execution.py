@@ -19,6 +19,7 @@ from openengine.messaging.errors import invalid_argument
 
 from virtual_control_plane.application.lifecycle import Lifecycle, SCHEMAS, accepted, identity, new_operation, now
 from virtual_control_plane.application.ports import ExecutionContextPort
+from virtual_control_plane.application.transactions import CommandIdConflict
 
 
 class InvalidTransition(ValueError):
@@ -40,9 +41,31 @@ class Execution:
                     ("workspaces.{workspace_id}.sessions.list", self.list, "list_sessions_query")]}
 
     async def execute(self, request: Request):
-        return await self.lifecycle._command(request, self._accept)
+        prepared = None
+        failure = None
+        try:
+            # A short preflight reservation checks replay before invoking adapters.
+            # Never await context preparation while holding the writer.
+            async with self.store.transaction() as tx:
+                if original := await tx.replay(request.subject, request.body):
+                    return original
+                _, record, _, runtime, _ = await self._admit(tx, request)
+            root, context = await self.context.prepare(
+                deepcopy(record), deepcopy(runtime), deepcopy(request.body["payload"]))
+            self._paths(root, context)
+            prepared = (record, runtime, context)
+        except (ServiceError, CommandIdConflict) as error:
+            failure = error
 
-    async def _accept(self, tx, request):
+        async def accept(tx, current):
+            if failure is not None:
+                raise failure
+            return await self._accept(tx, current, prepared)
+
+        # Replay is checked again, including if another retry won during prepare.
+        return await self.lifecycle._command(request, accept)
+
+    async def _admit(self, tx, request):
         body = request.body
         self.lifecycle._validate(body, f"{SCHEMAS}/commands.schema.json#/$defs/execute_command")
         if not self.enabled or self.context is None:
@@ -85,7 +108,17 @@ class Execution:
                                             "current_state": session["state"], "allowed_states": ["idle"]})
             if session["agent"] != payload["agent"]:
                 raise invalid_argument([("agent", "continuation requires the same agent configuration")])
-        root, context = await self.context.prepare(deepcopy(record), deepcopy(runtime), deepcopy(payload))
+        return workspace_id, record, workspace, runtime, session
+
+    async def _accept(self, tx, request, prepared):
+        workspace_id, record, workspace, runtime, session = await self._admit(tx, request)
+        previous, owned_runtime, context = prepared
+        # Preparation belongs to this exact persisted context and owned runtime.
+        # Active attempts/session/capacity are independently rechecked by _admit.
+        if record["specification"] != previous["specification"] or runtime != owned_runtime:
+            raise ServiceError(ErrorCode.UNAVAILABLE, "execution context changed during preparation")
+        body, payload, timestamp = request.body, request.body["payload"], now()
+        selection = payload["session"]
         attempt_id, command_id = identity("attempt_"), identity("rtc_")
         binding = {"workspace_id": workspace_id, "runtime_id": runtime["runtime_id"],
                    "runtime_generation": runtime["generation"], "session_id": session["session_id"], "attempt_id": attempt_id}
@@ -101,7 +134,6 @@ class Execution:
         wire = envelopes.encode(message)
         if errors := validate_wire_message("execute", wire, subject):
             raise invalid_argument([("context", "; ".join(errors))])
-        self._paths(root, context)
         attempt = {key: binding[key] for key in ("workspace_id", "session_id", "attempt_id", "runtime_generation")}
         attempt.update(state="starting", instruction=payload["task"]["instruction"])
         session.update(state="active", updated_at=timestamp, attempts=[attempt, *session["attempts"]][:20])

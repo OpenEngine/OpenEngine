@@ -404,8 +404,8 @@ can run independently up to registered capacity; continuing an active, closed,
 foreign-workspace or stale-generation session is rejected. Continuation also
 requires identical agent configuration. Queries include starting attempts and
 return at most the latest 20 attempts per session, with filtered cursor paging.
-The current query implementation scans session documents; indexing/retention is
-left for scaling this disabled execution slice.
+Session queries use read-only SQL pages with workspace/state indexes; retention
+remains future work.
 
 Replay precedes deadline, version, readiness and enablement checks. It returns
 the exact accepted IDs even after restart or disabling execution; changed
@@ -432,3 +432,7 @@ transaction ports and merged #1284/#1183. Public schemas and #1043's single
 `openengine.cc/v1alpha1` resource API group are unchanged. Generated schema and
 architecture Mermaid sources accompany the revision; the schema documentation
 workflow renders SVGs.
+
+Context preparation and path checks run outside the writer transaction. Acceptance
+rechecks ownership, readiness, session state and capacity, and rejects a changed
+specification or runtime binding before persisting any acceptance records.
