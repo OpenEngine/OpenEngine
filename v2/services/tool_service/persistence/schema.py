@@ -1,6 +1,6 @@
 """The tool service's tables. Migrations must keep the database in step with these.
 
-Resources are keyed by `uid`, never by name: a Tool or ToolGrant deleted and
+Within a tenant, resources are keyed by `uid`, never by name: a Tool or ToolGrant deleted and
 created again under the same name is a new row, so nothing granted to the old
 one carries over.
 """
@@ -10,13 +10,14 @@ from __future__ import annotations
 import sqlalchemy as sa
 
 from openengine.persistence import UtcDateTime
+from openengine.persistence.tenancy import tenant_table
 
 metadata = sa.MetaData()
 
 NAME = 63
 """Namespaces, names and uids are one NATS subject token of at most 63 characters."""
 
-tools = sa.Table(
+tools = tenant_table(
     "tools",
     metadata,
     sa.Column("uid", sa.String(NAME), primary_key=True),
@@ -36,7 +37,7 @@ tools = sa.Table(
     comment="An invocable capability bound to one connection, as last applied.",
 )
 
-tool_grants = sa.Table(
+tool_grants = tenant_table(
     "tool_grants",
     metadata,
     sa.Column("uid", sa.String(NAME), primary_key=True),
@@ -61,7 +62,7 @@ tool_grants = sa.Table(
     "a grant whose tool has since been replaced denies every call.",
 )
 
-tool_invocations = sa.Table(
+tool_invocations = tenant_table(
     "tool_invocations",
     metadata,
     sa.Column("uid", sa.String(NAME), primary_key=True),
@@ -92,7 +93,7 @@ tool_invocations = sa.Table(
     "Tool cannot change accepted work; grant_refs names the grants that allowed it, checked again before every dispatch.",
 )
 
-tool_invocation_attempts = sa.Table(
+tool_invocation_attempts = tenant_table(
     "tool_invocation_attempts",
     metadata,
     sa.Column(
@@ -110,7 +111,7 @@ tool_invocation_attempts = sa.Table(
     "attempt; outcome stays null while an attempt runs or when an interrupted one could not be reconciled.",
 )
 
-policies = sa.Table(
+policies = tenant_table(
     "policies",
     metadata,
     sa.Column("uid", sa.String(NAME), primary_key=True),
