@@ -7,7 +7,7 @@ import { issues } from "../../fixtures/calculator/issues.ts"
 import { milestone } from "../../fixtures/calculator/milestone.ts"
 import { driveMilestone, type Budget } from "../../support/driver.ts"
 import { show, step } from "../../support/show.ts"
-import { expectDisplay, key, press } from "../../support/verifier.ts"
+import { changelogNames, expectDisplay, key, makesRelease, press, README_COVERS, SEMVER_TAG } from "../../support/verifier.ts"
 import { launchQuickTunnel } from "../../support/quick-tunnel.ts"
 import { benchmarkCategory } from "../docCategories"
 
@@ -602,6 +602,38 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           await page.goto(url)
           await press(page, "77C")
           await expectDisplay(page, "0")
+        })
+      })
+
+      test("Verify the docs and releases", { tag: ["@verify"] }, async () => {
+        const repo = `${await whoami()}/${BENCH_REPO}`
+        const raw = (path: string) => gh("api", "-H", "Accept: application/vnd.github.raw", `repos/${repo}/${path}`)
+
+        await step("The README says how to run, test and deploy the calculator", async () => {
+          const readme = await raw("readme")
+          for (const [subject, words] of Object.entries(README_COVERS)) {
+            expect(readme, `the README says how to ${subject} the calculator`).toMatch(words)
+          }
+        })
+
+        await step("The changelog lists every merged change that makes a release", async () => {
+          const merged: { number: number; title: string }[] = JSON.parse(
+            await gh("pr", "list", "--repo", repo, "--state", "merged", "--limit", "200", "--json", "number,title"),
+          )
+          const releasing = merged.filter(({ title }) => makesRelease(title))
+          expect(releasing, "a merged pull request makes a release").not.toHaveLength(0)
+          // The release workflow commits the changelog a minute or so after the last merge, so wait for it to catch up.
+          await expect(async () => {
+            const changelog = await raw("contents/CHANGELOG.md")
+            const missing = releasing.filter(({ number }) => !changelogNames(changelog, number))
+            expect(missing.map(({ number, title }) => `#${number} ${title}`), "merged changes CHANGELOG.md leaves out").toEqual([])
+          }).toPass({ timeout: 10 * 60_000, intervals: [20_000] })
+        })
+
+        await step("The latest release has a semver tag and an entry in the changelog", async () => {
+          const tag = (await gh("api", `repos/${repo}/releases/latest`, "--jq", ".tag_name")).trim()
+          expect(tag, "the latest release's tag").toMatch(SEMVER_TAG)
+          expect(await raw("contents/CHANGELOG.md"), `CHANGELOG.md has an entry for ${tag}`).toContain(tag.replace(/^v/, ""))
         })
       })
     },
