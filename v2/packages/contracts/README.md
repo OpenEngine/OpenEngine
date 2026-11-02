@@ -128,7 +128,7 @@ change together:
 | Subject namespace | `v1` in `oe.v1.…` | The wire API generation | a breaking change; `oe.v2` is served alongside `oe.v1` until callers move |
 | Contract directory | `{service}/v1/`, `common/v1/` | The files that define that generation | with the subject namespace: `oe.v2` lives in `{service}/v2/` |
 | Resource apiVersion | `apiVersion: openengine.cc/v1alpha1` on every kind | One API group, `openengine.cc`, for every service's resources, at the subject namespace's version plus a stability suffix | the `v1` part with the subject namespace; the suffix as `v1` matures: `v1alpha1`, `v1alpha2`, …, `v1beta1`, then `v1` once stable |
-| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.3`, GE's `1.0.0-draft.7`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
+| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.4`, tools' `1.0.0-draft.5`, GE's `1.0.0-draft.8`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
 | AsyncAPI format | `asyncapi: 3.1.0` in each document | The specification the documents are written in | the documents move to a newer AsyncAPI specification |
 
 The resource apiVersion is defined once, as `api_version` in
@@ -172,6 +172,10 @@ ends with the tokens its subject has after the last ID: the whole name
 (`….{job_id}.job.created`) or its fact (`….{invocation_id}.blocked-auth`).
 
 ### Tenants
+
+Each NATS account must isolate its tenant's subjects, reply inboxes and
+JetStream from other tenants. This is a contract requirement; account
+provisioning and enforcement are outside this contract change.
 
 A tenant is a NATS account. Its `tenant_id` is a lower-case UUIDv7, never
 the nil UUID; its `account` is the account's public key (`A` and 55 base32

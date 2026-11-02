@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:tool-service
 info:
   title: OpenEngine Tool Service (tools)
-  version: 1.0.0-draft.4
+  version: 1.0.0-draft.5
   description: |
     The Tool Service keeps the tools agents may call, who may call them, and a
     durable record of every call. This document describes the NATS interface
@@ -137,6 +137,10 @@ info:
     through `oe.v1.tools.invocations.get`, which checks the reader may see them.
 
     ## Identity
+    Each NATS account must isolate its tenant's subjects, reply inboxes and
+    JetStream from other tenants. This is a contract requirement; account
+    provisioning and enforcement are outside this contract change.
+
     A tenant is a NATS account. A request's tenant is the account the
     caller's connection belongs to, never a payload field, and the acting
     identity within it comes from that authenticated connection (or a

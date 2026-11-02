@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:virtual-control-plane
 info:
   title: OpenEngine Virtual Control Plane (vcp)
-  version: 1.0.0-draft.3
+  version: 1.0.0-draft.4
   description: |
     The Virtual Control Plane manages workspaces (where agents work), the
     compute runtimes behind them, and the agent sessions and task attempts
@@ -44,6 +44,10 @@ info:
     (`UNAVAILABLE`) are not.
 
     ## Identity
+    Each NATS account must isolate its tenant's subjects, reply inboxes and
+    JetStream from other tenants. This is a contract requirement; account
+    provisioning and enforcement are outside this contract change.
+
     A tenant is a NATS account. A request's tenant is the account the
     caller's connection belongs to, never a payload field, and the acting
     identity within it comes from that authenticated connection (or a

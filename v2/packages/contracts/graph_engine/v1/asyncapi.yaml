@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:graph-engine
 info:
   title: OpenEngine Graph Engine (ge)
-  version: 1.0.0-draft.7
+  version: 1.0.0-draft.8
   description: |
     The Graph Engine decides which steps of a graph run and when. This document
     describes the NATS interface **GE serves**: the commands and queries it
@@ -47,6 +47,10 @@ info:
     (`UNAVAILABLE`) are not.
 
     ## Identity
+    Each NATS account must isolate its tenant's subjects, reply inboxes and
+    JetStream from other tenants. This is a contract requirement; account
+    provisioning and enforcement are outside this contract change.
+
     A tenant is a NATS account. A request's tenant is the account the
     caller's connection belongs to, never a payload field, and the acting
     identity within it comes from that authenticated connection (or a

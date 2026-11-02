@@ -371,6 +371,17 @@ def test_a_graph_snapshot_without_a_project_is_valid(name: str, graph: tuple[Any
 # Tenancy: a tenant is a NATS account, named by the connection and never by a subject or payload.
 
 
+@pytest.mark.parametrize("service", [None, *SERVICES])
+def test_tenant_account_isolation_is_a_contract_requirement(service: str | None) -> None:
+    if service is None:
+        text = (CONTRACTS / "README.md").read_text().split("### Tenants\n", 1)[1].split("## Messages", 1)[0]
+    else:
+        text = load_contract(service).document["info"]["description"].split("## Identity\n", 1)[1].split("## ", 1)[0]
+    text = " ".join(text.split())
+    assert "Each NATS account must isolate its tenant's subjects, reply inboxes and JetStream from other tenants." in text
+    assert "This is a contract requirement; account provisioning and enforcement are outside this contract change." in text
+
+
 def test_rejects_an_account_token_in_a_tenant_facing_address() -> None:
     contract = load_contract("connection_bus")
     document = copy.deepcopy(contract.document)
