@@ -88,7 +88,7 @@ def _too_deep(text):
     return False
 
 
-def _timestamp_key(value):
+def timestamp_key(value):
     """Order schema-validated UTC timestamps without losing nanoseconds."""
     seconds, _, fraction = value.removesuffix("Z").partition(".")
     return seconds, fraction.ljust(9, "0")
@@ -152,9 +152,9 @@ def validate_message(definition, payload, subject):
             for key in ("workspace_id", "attempt_id"):
                 if progress["artifact"].get(key) != payload["target"][key]:
                     errors.append(f"Artifact {key} differs from attempt binding")
-        if progress["kind"] == "usage" and _timestamp_key(
+        if progress["kind"] == "usage" and timestamp_key(
             progress["period_start"]
-        ) > _timestamp_key(progress["period_end"]):
+        ) > timestamp_key(progress["period_end"]):
             errors.append("Usage period ends before it starts")
     if (
         definition == "update_ack"

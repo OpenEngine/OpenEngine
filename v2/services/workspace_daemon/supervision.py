@@ -58,6 +58,14 @@ def _protected(path: Path, uid: int) -> None:
         raise SupervisionUnavailable(Unsupervised.WRITABLE, str(path))
 
 
+def _launcher(uid: int) -> Path:
+    """The resolved launcher. Root executes it before dropping privileges, so no directory above it may be writable."""
+    launcher = LAUNCHER.resolve(strict=True)
+    for path in (launcher, *launcher.parents):
+        _protected(path, uid)
+    return launcher
+
+
 class CgroupSupervisor:
     def __init__(self, root: Path, *, uid: int, gid: int, home: Path, protected: tuple[Path, ...] = (),
                  fence_seconds: float = 10.0) -> None:
@@ -69,7 +77,8 @@ class CgroupSupervisor:
         self.uid, self.gid, self.fence_seconds = uid, gid, fence_seconds
         if not (self.root / "cgroup.controllers").is_file() or self.root.stat().st_uid != 0:
             raise SupervisionUnavailable(Unsupervised.CGROUP, str(self.root))
-        for path in (self.root, LAUNCHER, *protected):
+        self.launcher = _launcher(uid)
+        for path in (self.root, *protected):
             _protected(path, uid)
         self.boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
 
@@ -91,7 +100,7 @@ class CgroupSupervisor:
         if not (group / "cgroup.kill").exists():
             group.rmdir()
             raise SupervisionUnavailable(Unsupervised.KILL)
-        return [sys.executable, "-I", str(LAUNCHER), str(group), str(self.uid), str(self.gid), str(self.home), *argv]
+        return [sys.executable, "-I", str(self.launcher), str(group), str(self.uid), str(self.gid), str(self.home), *argv]
 
     async def fence(self, handle: Any) -> bool:
         """True once the launch's whole process tree is empty and its cgroup removed."""

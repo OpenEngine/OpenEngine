@@ -12,10 +12,9 @@ import base64
 import binascii
 import json
 from copy import deepcopy
-from datetime import datetime
 from pathlib import Path
 
-from openengine.contracts.runtime import validate_wire_message
+from openengine.contracts.runtime import timestamp_key, validate_wire_message
 from openengine.messaging import ErrorCode, Request, Route, ServiceError, envelopes
 from openengine.messaging.errors import invalid_argument
 
@@ -213,9 +212,10 @@ class Execution:
             event = {"event_type": "conversation.message", "resources": {**resources, "message_id": payload["message_id"]},
                      "payload": {"role": payload["role"], "text": payload["text"], "sequence": sequence}}
         elif payload["kind"] == "usage":
-            start, end = (datetime.fromisoformat(payload[key].replace("Z", "+00:00")) for key in ("period_start", "period_end"))
+            # Compared as strings so the contract's nanoseconds are not truncated to microseconds.
+            start, end = (timestamp_key(payload[key]) for key in ("period_start", "period_end"))
             previous = record.get("usage_period_end")
-            if end < start or (previous and start < datetime.fromisoformat(previous.replace("Z", "+00:00"))):
+            if end < start or (previous and start < timestamp_key(previous)):
                 raise InvalidTransition()
             total = attempt.setdefault("usage", {"input_tokens": 0, "output_tokens": 0})
             for key, value in payload["usage"].items():

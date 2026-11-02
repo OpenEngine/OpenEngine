@@ -134,8 +134,10 @@ class CodexExecutor:
                                                  "retryable": False}, "reason": "executor_failed"}, "killed")
         try:
             started = now()
-            result = await client.prompt(prompt, update, self.prompt_timeout)
-            await flush(1)
+            try:
+                result = await client.prompt(prompt, update, self.prompt_timeout)
+            finally:
+                await flush(1)  # text the agent already streamed is kept even if the turn then fails
             usage = result.get("usage") or {}
             if all(type(usage.get(key)) is int and usage[key] >= 0 for key in ("inputTokens", "outputTokens")):
                 await progress({"kind": "usage", "period_start": started, "period_end": now(), "usage": {

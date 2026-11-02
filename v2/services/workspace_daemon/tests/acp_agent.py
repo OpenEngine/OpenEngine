@@ -4,7 +4,8 @@
 
 Every received frame is appended to LOG as JSON; known session IDs persist
 beside it, so a restarted agent can load them. MODE selects one behavior:
-`normal`, `no_resume`, `no_read_only`, `exit` (crash mid-prompt), `hang` (never
+`normal`, `no_resume`, `no_read_only`, `exit` (crash mid-prompt), `partial_exit`
+(crash after streaming some text), `hang` (never
 answers the prompt), `stop_reading` (stops reading stdin after set_mode),
 `flood` (many chunks), `child` (leaves a grandchild running).
 """
@@ -70,6 +71,9 @@ while True:
     elif method == "session/prompt":
         session_id = params["sessionId"]
         if mode == "exit":
+            sys.exit(3)
+        if mode == "partial_exit":
+            chunk(session_id, "Partial answer")
             sys.exit(3)
         if mode == "hang":
             time.sleep(3600)

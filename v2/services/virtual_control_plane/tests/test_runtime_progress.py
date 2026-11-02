@@ -95,7 +95,7 @@ def test_conversation_and_usage_project_atomically_once_and_continue_the_convers
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("second", ["overlapping_usage", "artifact"])
+@pytest.mark.parametrize("second", ["overlapping_usage", "nanosecond_overlap", "artifact"])
 def test_overlapping_usage_and_unregistered_progress_are_conflicts(tmp_path, second):
     async def scenario():
         store, server, journal, updates, dispatcher, outbox, worker = await setup(tmp_path)
@@ -103,8 +103,10 @@ def test_overlapping_usage_and_unregistered_progress_are_conflicts(tmp_path, sec
         await drain(dispatcher)
         artifact = {"artifact_id": "artifact_forged", "workspace_id": "ws_flow", "kind": "file", "name": "report.md",
                     "size_bytes": 1, "uri": "file:///tmp/report.md", "created_at": "2026-01-01T00:00:00Z"}
+        # Overlaps by one nanosecond: lost if the timestamps were truncated to microseconds.
+        start = "2026-01-01T00:10:00.000000001Z" if second == "nanosecond_overlap" else "2026-01-01T00:05:00Z"
         later = {"kind": "artifact", "artifact": {**artifact, "attempt_id": reply["resource_id"]}} if second == "artifact" else {
-            "kind": "usage", "period_start": "2026-01-01T00:05:00Z", "period_end": "2026-01-01T00:20:00Z",
+            "kind": "usage", "period_start": start, "period_end": "2026-01-01T00:20:00Z",
             "usage": {"input_tokens": 1, "output_tokens": 1}}
         # Bypasses the daemon's own checks, as a faulty or forged runtime would.
         async with journal.store.transaction() as tx:
@@ -112,7 +114,7 @@ def test_overlapping_usage_and_unregistered_progress_are_conflicts(tmp_path, sec
             attempt.update(state="running", launch_count=1)
             await journal.append(tx, "attempt.started", {}, attempt)
             await journal.append(tx, "attempt.progress", {"kind": "usage", "period_start": "2026-01-01T00:00:00Z",
-                                                          "period_end": "2026-01-01T00:10:00Z",
+                                                          "period_end": "2026-01-01T00:10:00.000000002Z",
                                                           "usage": {"input_tokens": 1, "output_tokens": 1}}, attempt)
             await journal.append(tx, "attempt.progress", later, attempt)
             await tx.save_attempt(attempt)

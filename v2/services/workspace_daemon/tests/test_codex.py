@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from workspace_daemon import store as journal_store
+from workspace_daemon import supervision
 from workspace_daemon.__main__ import executors, main, parser
 from workspace_daemon.codex import CHUNK, CodexExecutor
 from workspace_daemon.context import read_instruction
@@ -169,7 +170,7 @@ def test_unsupported_model_or_mode_fails_launch_without_prompting(tmp_path, mode
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("mode", ["stop_reading", "hang", "exit"])
+@pytest.mark.parametrize("mode", ["stop_reading", "hang", "exit", "partial_exit"])
 def test_blocked_io_and_crashes_fail_only_after_the_tree_is_fenced(tmp_path, mode):
     async def scenario():
         fence = GroupFence()
@@ -180,8 +181,22 @@ def test_blocked_io_and_crashes_fail_only_after_the_tree_is_fenced(tmp_path, mod
         failed = updates(vcp, "attempt.failed")[0]
         assert (failed["payload"]["reason"], failed["termination"]) == ("executor_failed", "killed")
         assert len(fence.fenced) == 1 and all(p.returncode is not None for p in fence.processes.values())
+        # Text streamed before the crash is still journaled.
+        texts = [u["payload"]["text"] for u in updates(vcp, "attempt.progress")]
+        assert texts == (["Partial answer"] if mode == "partial_exit" else [])
         await journal.store.close()
     asyncio.run(scenario())
+
+
+def test_launcher_directories_must_not_be_writable_by_the_agent(tmp_path, monkeypatch):
+    unsafe = tmp_path / "unsafe"
+    unsafe.mkdir()
+    (unsafe / "launch.py").write_text("")
+    unsafe.chmod(0o777)  # the agent could replace a root-owned launcher here
+    monkeypatch.setattr(supervision, "LAUNCHER", unsafe / "launch.py")
+    with pytest.raises(SupervisionUnavailable) as refused:
+        supervision._launcher(os.getuid() + 1)
+    assert refused.value.args[1] == str(unsafe.resolve())
 
 
 def test_unexpected_wait_errors_fail_the_fenced_attempt_rather_than_lose_it(tmp_path, monkeypatch):

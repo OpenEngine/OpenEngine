@@ -125,7 +125,8 @@ operator-configured adapter behind the same executor port as `fake`:
 - Every prompt read and write shares a deadline (`--prompt-timeout-seconds`,
   default 3600), so an adapter that stops reading or answering fails the
   attempt. The whole process tree is fenced before any terminal update,
-  including after `end_turn`. Any other error during the turn fails the fenced
+  including after `end_turn`; text streamed before a failed turn is still
+  journaled. Any other error during the turn fails the fenced
   attempt as `executor_failed`.
 
 `supervision.py` is the only supervisor the installed daemon has. The daemon
@@ -138,8 +139,8 @@ removes the cgroup, so a launcher that had not joined can never join later; a
 handle from an earlier boot is already fenced. A timeout returns unconfirmed
 and the attempt stays owned. Start-up refuses the codex executor (exit 1) off
 Linux, without root, without a delegated cgroup root, or if the agent account
-owns or can write the cgroup root, launcher, journal directory, workspace
-root, the resolved `--codex-acp` adapter or any directory above it.
+owns or can write the cgroup root, journal directory, workspace root, the
+resolved launcher or `--codex-acp` adapter, or any directory above either.
 
 Where OS enforcement stops: those checks cover only the paths themselves, not
 the trees beneath them, ACLs or the journal database file. Read-only execution
