@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:graph-engine
 info:
   title: OpenEngine Graph Engine (ge)
-  version: 1.0.0-draft.7
+  version: 1.0.0-draft.8
   description: |
     The Graph Engine decides which steps of a graph run and when. This document
     describes the NATS interface **GE serves**: the commands and queries it
@@ -48,12 +48,24 @@ info:
 
     ## Identity
     A tenant is a NATS account. A request's tenant is the account the
-    caller's connection belongs to, never a payload field, and the acting
+    caller's authenticated connection belongs to, never a payload field, and the acting
     identity within it comes from that authenticated connection (or a
     verified delegation). The tenancy registry maps each account's public
     key (the shared `account` type) to its `tenant_id`, a UUIDv7.
     `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
     (`local_tenant`).
+
+    Account isolation covers subjects, reply inboxes and JetStream. Identical
+    subject or inbox names in different accounts refer to separate traffic.
+    Streams, consumers and stored messages belong to their account. A payload's
+    project, namespace or actor cannot select a tenant or grant access to another
+    account. Tenant-facing subjects remain unchanged.
+    The shared `tenant_id` accepts only a lower-case canonical non-nil UUIDv7;
+    `account` describes a 56-character NATS account public key.
+
+    These are contract requirements. Account provisioning, registry persistence,
+    broker exports/imports and runtime subject rewriting are later work; this
+    document does not establish those boundaries in the current runtime.
 
     Under `oe up`, GE runs in **local-operator mode**: every request is in
     LOCAL_TENANT, and NATS listens only on loopback, so whoever reaches it is

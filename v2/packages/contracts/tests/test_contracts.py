@@ -434,3 +434,38 @@ def test_account_accepts_an_account_public_key() -> None:
 )
 def test_account_rejects(value: str) -> None:
     assert not type_accepts("account", value)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+@pytest.mark.parametrize("service", SERVICES)
+def test_node_rejects_a_mutated_account_address(service: str, tmp_path: Path) -> None:
+    tooling = CONTRACTS / "tooling"
+    if not (tooling / "node_modules").exists():
+        pytest.skip("run `npm ci` in packages/contracts/tooling first")
+    # Preserve relative schema references without modifying the checkout.
+    contracts = tmp_path / "contracts"
+    shutil.copytree(
+        CONTRACTS, contracts,
+        ignore=shutil.ignore_patterns("node_modules", "__pycache__", "reference.html"),
+    )
+    (contracts / "tooling" / "node_modules").symlink_to(tooling / "node_modules", target_is_directory=True)
+    path = contracts / service / "v1" / "asyncapi.yaml"
+    document = yaml.safe_load(path.read_text())
+    channel = next(channel for channel in document["channels"].values() if channel.get("address"))
+    address = channel["address"]
+    channel["address"] = address.replace("oe.v1.", "oe.v1.{account}.", 1)
+    assert channel["address"] != address
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    result = subprocess.run(
+        ["node", str(contracts / "tooling" / "validate.mjs"), service],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"{service}: error account-token:" in result.stdout
+    assert f"{service}: invalid" in result.stdout
+
+
+@pytest.mark.parametrize("name", ["tenant_id", "account"])
+@pytest.mark.parametrize("value", [None, True, 42, [], {}])
+def test_tenant_identity_types_reject_non_strings(name: str, value: Any) -> None:
+    assert not type_accepts(name, value)
