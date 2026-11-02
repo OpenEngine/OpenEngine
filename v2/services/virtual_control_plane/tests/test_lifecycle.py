@@ -848,3 +848,23 @@ def test_destroy_completion_rollback_keeps_ownership_for_restart(tmp_path):
         assert len(await store.pending_events(100)) == 3
         await store.close()
     asyncio.run(scenario())
+
+
+def test_fresh_apply_is_rejected_for_a_destroyed_workspace_but_the_original_replays(tmp_path):
+    async def scenario():
+        store, provider = storage(tmp_path), FakeProvider()
+        lifecycle = Lifecycle(store, {"process": provider})
+        original = _request(APPLY, envelopes.command({"workspace": DOCUMENT}))
+        created = await lifecycle.apply(original)
+        workspace_id = created["resource_id"]
+        await lifecycle.reconcile()
+        await lifecycle.destroy(_destroy(workspace_id))
+        await lifecycle.reconcile()
+        assert (await _snapshot(store, "workspaces", workspace_id))["state"] == "destroyed" and not provider.allocations
+        fresh = await lifecycle.apply(_request(APPLY, envelopes.command({"workspace": DOCUMENT})))
+        assert fresh["status"] == "rejected" and fresh["error"]["code"] == "INVALID_STATE"
+        assert fresh["error"]["details"]["current_state"] == "destroyed"
+        assert created == await lifecycle.apply(original)
+        assert (await _snapshot(store, "workspaces", workspace_id))["state"] == "destroyed" and not provider.allocations
+        await store.close()
+    asyncio.run(scenario())

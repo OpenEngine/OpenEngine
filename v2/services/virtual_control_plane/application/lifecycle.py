@@ -145,6 +145,12 @@ class Lifecycle:
         if expected is not None and expected != existing["snapshot"]["version"]:
             raise ServiceError(ErrorCode.VERSION_CONFLICT, "workspace version changed",
                                details={"expected_version": expected, "actual_version": existing["snapshot"]["version"]})
+        if existing and existing["snapshot"]["state"] == "destroyed":
+            # The original apply replays from its receipt; a fresh one must not
+            # report that creation for a tombstone with no compute behind it.
+            raise ServiceError(ErrorCode.INVALID_STATE, "workspace has been destroyed",
+                               details={"resource_type": "workspace", "resource_id": existing["snapshot"]["workspace_id"],
+                                        "current_state": "destroyed", "allowed_states": []})
         provider = self.providers.get(spec["provider"])
         if provider is None:
             raise ServiceError(ErrorCode.UNSUPPORTED_CAPABILITY, "provider is not configured",
