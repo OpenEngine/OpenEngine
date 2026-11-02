@@ -295,7 +295,7 @@ def test_accepted_binding_and_command_cannot_be_overwritten(tmp_path):
         wire = (await commands(store))[0]
         with pytest.raises(IntegrityError):
             async with store.transaction() as tx:
-                await tx.append_runtime_command(wire["command_id"], wire["subject"], b'{}')
+                await tx.append_runtime_command(wire["command_id"], reply["resource_id"], wire["subject"], b'{}')
         with pytest.raises(IntegrityError):
             async with store.transaction() as tx:
                 await tx.put("attempt_bindings", reply["resource_id"], {})

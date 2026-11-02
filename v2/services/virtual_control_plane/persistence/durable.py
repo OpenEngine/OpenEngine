@@ -14,10 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 from openengine.persistence import Backend, BackendNotImplemented, Database
 
 from virtual_control_plane.application.transactions import (
-    Collection, CommandIdConflict, Document, InvalidEvent, PendingEvent,
+    Collection, CommandIdConflict, Document, InvalidEvent, PendingEvent, RuntimeCommand,
 )
 from virtual_control_plane.jetstream import event_errors
-from virtual_control_plane.persistence.schema import documents, outbox, runtime_commands
+from virtual_control_plane.persistence.schema import documents, outbox, runtime_commands, runtime_updates
 
 
 # Enumerate workspace IDs by index seeks, rather than DISTINCT/GROUP BY scans.
@@ -77,6 +77,10 @@ def _identity(subject: str, command: Document) -> str:
     )
 
 
+# Accepted bindings are written once.
+IMMUTABLE = ("attempt_bindings",)
+
+
 def _collection(collection: Collection) -> sa.Table:
     # Receipts cannot be overwritten through the document API, even by untyped callers.
     if collection == "command_receipts":
@@ -94,14 +98,14 @@ class Transaction:
 
     async def put(self, collection: Collection, key: str, value: Document) -> None:
         table = _collection(collection)
-        if collection == "attempt_bindings":
+        if collection in IMMUTABLE:
             await self._connection.execute(table.insert().values(key=key, body=value))
             return
         statement = insert(table).values(key=key, body=value)
         await self._connection.execute(statement.on_conflict_do_update(index_elements=["key"], set_={"body": value}))
 
     async def delete(self, collection: Collection, key: str) -> None:
-        if collection == "attempt_bindings":
+        if collection in IMMUTABLE:
             raise KeyError(collection)
         table = _collection(collection)
         await self._connection.execute(table.delete().where(table.c.key == key))
@@ -145,8 +149,27 @@ class Transaction:
         ))
         return response
 
-    async def append_runtime_command(self, command_id: str, subject: str, wire: bytes) -> None:
-        await self._connection.execute(runtime_commands.insert().values(command_id=command_id, subject=subject, wire=wire))
+    async def append_runtime_command(self, command_id: str, attempt_id: str, subject: str, wire: bytes) -> None:
+        await self._connection.execute(runtime_commands.insert().values(
+            command_id=command_id, attempt_id=attempt_id, subject=subject, wire=wire))
+
+    async def runtime_update(self, runtime_id: str, event_id: str) -> str | None:
+        query = sa.select(runtime_updates.c.digest).where(
+            runtime_updates.c.runtime_id == runtime_id, runtime_updates.c.event_id == event_id)
+        return (await self._connection.execute(query)).scalar_one_or_none()
+
+    async def record_runtime_update(self, runtime_id: str, event_id: str, sequence: int, digest: str) -> None:
+        await self._connection.execute(runtime_updates.insert().values(
+            runtime_id=runtime_id, event_id=event_id, sequence=sequence, digest=digest))
+
+    async def settle_runtime_command(self, command_id: str, status: str, acknowledgement: bytes) -> bool:
+        if status not in ("acknowledged", "rejected", "blocked"):
+            raise ValueError(status)
+        result = await self._connection.execute(
+            runtime_commands.update()
+            .where(runtime_commands.c.command_id == command_id, runtime_commands.c.status == "pending")
+            .values(status=status, acknowledgement=acknowledgement))
+        return result.rowcount == 1
 
     async def append_event(self, envelope: Document) -> None:
         # Reject what could never be published before it can hold back its workspace.
@@ -222,6 +245,15 @@ class DurableStore:
                 rows = await connection.execute(query.columns(body=sa.JSON), {**values, "state": state})
                 pages.extend(row["snapshot"] for row in rows.scalars())
         return sorted(pages, key=lambda s: (s["created_at"], s["session_id"]), reverse=True)[:limit]
+
+    async def pending_runtime_commands(self, limit: int, exclude: Iterable[str] = ()) -> list[RuntimeCommand]:
+        table = runtime_commands
+        query = sa.select(table.c.command_id, table.c.subject, table.c.wire).where(table.c.status == "pending")
+        if excluded := list(exclude):
+            query = query.where(table.c.command_id.not_in(excluded))
+        query = query.order_by(sa.literal_column("rowid")).limit(limit)
+        async with self.database.connect() as connection:
+            return [RuntimeCommand(**row) for row in (await connection.execute(query)).mappings()]
 
     async def pending_events(self, limit: int, exclude: Iterable[str] = ()) -> list[PendingEvent]:
         if excluded := list(exclude):

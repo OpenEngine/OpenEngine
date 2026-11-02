@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
 Document = dict[str, Any]
-Collection = Literal["workspaces", "operations", "workspace_runtimes", "sessions", "attempts", "attempt_bindings", "runtime_status"]
+Collection = Literal["workspaces", "operations", "workspace_runtimes", "sessions", "attempts", "attempt_bindings",
+                     "runtime_status"]
 
 
 class CommandIdConflict(ValueError):
@@ -64,8 +65,24 @@ class Transaction(Protocol):
         """
         ...
 
-    async def append_runtime_command(self, command_id: str, subject: str, wire: bytes) -> None:
+    async def append_runtime_command(self, command_id: str, attempt_id: str, subject: str, wire: bytes) -> None:
         """Insert exact validated UTF-8 bytes once; never overwrite an accepted command."""
+        ...
+
+    async def runtime_update(self, runtime_id: str, event_id: str) -> str | None:
+        """The content digest of a committed runtime update, if any."""
+        ...
+
+    async def record_runtime_update(self, runtime_id: str, event_id: str, sequence: int, digest: str) -> None:
+        """Insert-only: a committed update's identity, sequence and content digest."""
+        ...
+
+    async def settle_runtime_command(self, command_id: str, status: str, acknowledgement: bytes) -> bool:
+        """Record a pending command's outcome and the exact verified reply bytes.
+
+        `status` is `acknowledged`, `rejected` or `blocked`. Never changes the
+        command's subject or wire. False when the command is no longer pending.
+        """
         ...
 
     async def append_event(self, envelope: Document) -> None:
@@ -92,11 +109,26 @@ class UnitOfWork(Protocol):
 
 
 @dataclass(frozen=True)
+class RuntimeCommand:
+    command_id: str
+    subject: str
+    wire: bytes
+
+
+@dataclass(frozen=True)
 class PendingEvent:
     sequence: int
     workspace_id: str
     event_id: str
     envelope: Document
+
+
+class RuntimeOutbox(Protocol):
+    async def pending_runtime_commands(self, limit: int, exclude: Iterable[str] = ()) -> list[RuntimeCommand]:
+        """Undelivered internal commands except `exclude`, oldest first, with their exact accepted bytes."""
+        ...
+
+    def transaction(self) -> AbstractAsyncContextManager[Transaction]: ...
 
 
 class Outbox(Protocol):

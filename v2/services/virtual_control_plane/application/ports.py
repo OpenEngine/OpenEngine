@@ -75,8 +75,9 @@ class WorkspaceProviderPort(Protocol):
 class ExecutionContext:
     """What a runtime supervisor needs to start work in a workspace.
 
-    A placeholder shape for #1055/#1118/#1119; nothing in this slice
-    implements a `RuntimeSupervisorPort` against it.
+    A placeholder shape for #1055/#1119; nothing implements a
+    `RuntimeSupervisorPort` against it yet. #1118's delivery needs neither:
+    it reaches a separately supervised daemon through `RuntimeTransport`.
     """
 
     workspace_id: str
@@ -90,6 +91,18 @@ class RuntimeSupervisorPort(Protocol):
     async def start(self, context: ExecutionContext) -> None: ...
 
     async def stop(self, context: ExecutionContext) -> None: ...
+
+
+class RuntimeTransport(Protocol):
+    """Sends one internal runtime request's exact bytes and returns the reply's exact bytes.
+
+    The subject names only the runtime ID: no VM ID, guest address or path, so
+    a daemon inside smolvm and one beside a worktree are reached identically.
+    Raise a retryable `ServiceError` when the outcome is unknown; the caller
+    retries the same bytes. A reply is not trusted until the caller validates it.
+    """
+
+    async def send(self, subject: str, wire: bytes) -> bytes: ...
 
 
 class EventPublisher(Protocol):

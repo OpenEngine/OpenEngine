@@ -30,7 +30,8 @@ client = Client(nats_connection, principal=request.principal, tenancy=Mode.SHARE
 | -- | -- |
 | `envelopes` | builds commands and queries and checks bodies against contract schemas |
 | `errors` | `ServiceError` for `error.schema.json`, with `retryable` kept as sent; `Unavailable` |
-| `client` | the bounded, retrying requester |
+| `client` | the bounded, retrying requester; `send` for envelope-free internal protocols |
+| `retry` | `Backoff`, per-key capped jittered retry spacing for durable delivery workers |
 | `server` | the subscription adapter, the `Authorizer` port and `LocalOperator` |
 | `tenancy` | `Principal`, the `Dedicated` and `Shared` modes, the `AccountResolver` port and its cache |
 
@@ -80,6 +81,14 @@ says where to act; it grants nothing by itself, so an authorizer decides from
 the actor's verified identity. `LocalOperator` allows every project to the
 loopback operator and returns the tenant the server derived, LOCAL_TENANT in
 the dedicated mode `oe up` runs.
+
+`Client.send(subject, data)` serves internal protocols that keep their own
+envelopes and durable acknowledgements, such as the workspace-runtime
+protocol. It sends the caller's exact bytes to the exact subject, unchanged on
+every attempt, and returns the reply's bytes undecoded: no command ID, causal
+hop or tenancy readdressing is added, and the reply's meaning stays with the
+caller's protocol. Its bounded attempts do not replace a durable outbox; such
+callers use `attempts=1` and retry stored bytes with `retry.Backoff`.
 
 The client raises `Unavailable` (`UNAVAILABLE`, retryable) when nothing
 serves a subject or when no reply arrives after the last attempt, and

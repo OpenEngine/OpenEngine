@@ -14,6 +14,7 @@ members = [
     "openengine-telemetry",
     "openengine-tool-service",
     "openengine-virtual-control-plane",
+    "openengine-workspace-daemon",
 ]
 
 [manifest.dependency-groups]
@@ -28,6 +29,7 @@ dev = [
     { name = "openengine-telemetry", editable = "packages/telemetry" },
     { name = "openengine-tool-service", editable = "services/tool_service" },
     { name = "openengine-virtual-control-plane", editable = "services/virtual_control_plane" },
+    { name = "openengine-workspace-daemon", editable = "services/workspace_daemon" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
@@ -599,6 +601,25 @@ requires-dist = [
     { name = "openengine-messaging", editable = "packages/messaging" },
     { name = "openengine-persistence", editable = "packages/persistence" },
     { name = "openengine-telemetry", editable = "packages/telemetry" },
+]
+
+[[package]]
+name = "openengine-workspace-daemon"
+version = "0.0.0"
+source = { editable = "services/workspace_daemon" }
+dependencies = [
+    { name = "nats-py" },
+    { name = "openengine-contracts" },
+    { name = "openengine-messaging" },
+    { name = "openengine-persistence" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "nats-py", specifier = ">=2.16.0" },
+    { name = "openengine-contracts", editable = "packages/contracts" },
+    { name = "openengine-messaging", editable = "packages/messaging" },
+    { name = "openengine-persistence", editable = "packages/persistence" },
 ]
 
 [[package]]

@@ -15,7 +15,7 @@ DOCUMENT_COMMENTS = {
     "sessions": "Agent conversation snapshots, separate from workspace lifecycle.",
     "attempts": "Task attempts and their execute operation identity.",
     "attempt_bindings": "Immutable accepted execution identity and generation binding.",
-    "runtime_status": "Execution readiness and registered capabilities of an owned runtime.",
+    "runtime_status": "Execution readiness, capabilities, journal identity and update high-water mark of an owned runtime.",
     "command_receipts": "Immutable command identity and original response for idempotent replay.",
 }
 documents = {
@@ -67,13 +67,33 @@ sa.Index("ix_workspaces_provider_page", sa.literal_column("json_extract(body, '$
 sa.Index("ix_workspaces_state_page", sa.literal_column("json_extract(body, '$.snapshot.state')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
 sa.Index("ix_workspaces_job_page", sa.literal_column("json_extract(body, '$.snapshot.labels.job_id')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
 
-# No publisher in this slice. Transport must send these exact bytes on every retry.
+# The dispatcher sends these exact bytes on every retry. Only `status` and the
+# daemon's verified acknowledgement bytes change after insertion.
 runtime_commands = sa.Table(
     "runtime_commands", metadata,
     sa.Column("command_id", sa.String(128), primary_key=True),
     sa.Column("subject", sa.Text(), nullable=False),
+    sa.Column("attempt_id", sa.String(128), nullable=False),
     sa.Column("wire", sa.LargeBinary(), nullable=False),
-    comment="Immutable internal commands accepted atomically with attempts; delivery is disabled.",
+    sa.Column("status", sa.String(16), nullable=False, server_default="pending"),
+    sa.Column("acknowledgement", sa.LargeBinary(), nullable=True),
+    sa.CheckConstraint("status IN ('pending', 'acknowledged', 'rejected', 'blocked')", name="ck_runtime_commands_status"),
+    sa.ForeignKeyConstraint(["attempt_id"], ["attempts.key"], name="fk_runtime_commands_attempt_id_attempts"),
+    # Entries are (status, rowid): pending commands are read oldest first without a sort.
+    sa.Index("ix_runtime_commands_pending", "status", sqlite_where=sa.text("status = 'pending'")),
+    comment="Immutable internal commands accepted atomically with attempts, and their delivery outcome.",
+)
+
+# One row per committed internal update: identity, place in the runtime's order
+# and a digest of its content, so a duplicate is recognized and a reuse is not.
+runtime_updates = sa.Table(
+    "runtime_updates", metadata,
+    sa.Column("runtime_id", sa.String(128), sa.ForeignKey("runtime_status.key"), primary_key=True),
+    sa.Column("event_id", sa.String(128), primary_key=True),
+    sa.Column("sequence", sa.Integer(), nullable=False),
+    sa.Column("digest", sa.String(64), nullable=False),
+    sa.UniqueConstraint("runtime_id", "sequence", name="uq_runtime_updates_sequence"),
+    comment="Committed internal runtime updates, for duplicate and conflict detection.",
 )
 
 for name, fields in (("ix_sessions_workspace_page", ["workspace_id", "created_at"]),

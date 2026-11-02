@@ -269,7 +269,7 @@ def test_upgrade_preserves_legacy_rows_without_adopting_them(tmp_path: Path) -> 
     try:
         assert set(inspect(engine).get_table_names()) == {
             "alembic_version", "workspaces", "workspace_runtimes", "operations", "command_receipts", "outbox",
-            "sessions", "attempts", "attempt_bindings", "runtime_status", "runtime_commands",
+            "sessions", "attempts", "attempt_bindings", "runtime_status", "runtime_commands", "runtime_updates",
         }
     finally:
         engine.dispose()
@@ -321,3 +321,45 @@ def test_upgrade_preserves_legacy_rows_without_adopting_them(tmp_path: Path) -> 
         engine.dispose()
     PERSISTENCE.upgrade(config)
     assert PERSISTENCE.drift(metadata, config) == []
+
+
+def test_runtime_delivery_tables_enforce_their_relations(tmp_path: Path) -> None:
+    """Commands name a stored attempt and updates a registered runtime; the upgrade backfills accepted commands."""
+    import sqlalchemy as sa
+    from sqlalchemy.exc import IntegrityError
+
+    config = DatabaseConfig(sqlite_directory=tmp_path)
+    PERSISTENCE.upgrade(config, "9b7f1ac760d9")
+    database = PERSISTENCE.database(config)
+    engine = database.migration_engine()
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql("INSERT INTO attempts (key, body) VALUES ('attempt_1', '{}')")
+            connection.exec_driver_sql(
+                "INSERT INTO runtime_commands (command_id, subject, wire) VALUES ('rtc_1', 's', ?)",
+                (b'{"target":{"attempt_id":"attempt_1"}}',))
+    finally:
+        engine.dispose()
+    PERSISTENCE.upgrade(config)
+
+    async def scenario() -> None:
+        store = DurableStore(PERSISTENCE.database(config))
+        async with store.database.connect() as connection:
+            row = (await connection.execute(sa.text("SELECT attempt_id, status FROM runtime_commands"))).one()
+        assert tuple(row) == ("attempt_1", "pending")
+        for write in (lambda tx: tx.append_runtime_command("rtc_2", "attempt_unknown", "s", b"{}"),
+                      lambda tx: tx.record_runtime_update("rt_unknown", "rte_1", 1, "0" * 64)):
+            with pytest.raises(IntegrityError):
+                async with store.transaction() as tx:
+                    await write(tx)
+        async with store.transaction() as tx:
+            await tx.put("runtime_status", "rt_1", {})
+            await tx.record_runtime_update("rt_1", "rte_1", 1, "0" * 64)
+        with pytest.raises(IntegrityError):  # one update per runtime sequence
+            async with store.transaction() as tx:
+                await tx.record_runtime_update("rt_1", "rte_2", 1, "1" * 64)
+        async with store.transaction() as tx:
+            assert await tx.runtime_update("rt_1", "rte_1") == "0" * 64
+            assert await tx.runtime_update("rt_1", "rte_2") is None
+        await store.close()
+    asyncio.run(scenario())

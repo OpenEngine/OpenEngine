@@ -15,6 +15,13 @@ import carries into the service; in shared mode it is inside the service
 account, so it addresses `oe.v1.{account}.{svc}.…` itself with the
 principal's account key. Span names use the template `oe.v1.{account}.…`,
 never the key.
+
+`send` is the envelope-free form for internal protocols with their own
+durable acknowledgements: it publishes caller-supplied bytes to the exact
+subject, unchanged on every attempt, and returns the reply's bytes undecoded.
+It adds no command ID or causal hop and never interprets the reply, so a
+persisted body and its acknowledgement keep their protocol's meaning. Its
+bounded retries do not replace a durable outbox.
 """
 
 from __future__ import annotations
@@ -89,8 +96,21 @@ class Client:
             raise _error(subject, reply)
         return reply
 
+    async def send(self, subject: str, data: bytes, *, name: str | None = None) -> bytes:
+        """The reply's exact bytes to `data`, sent unchanged to `subject` on each attempt.
+
+        Not readdressed for tenancy. `name` is the span name, for subjects whose tokens are identities.
+        """
+        return await self._exchange(subject, subject, name or subject, data)
+
     async def _request(self, subject: str, body: bytes) -> dict[str, Any]:
         destination, name = self.address(subject)
+        reply = envelopes.decode(await self._exchange(subject, destination, name, body))
+        if not isinstance(reply, dict):
+            raise ServiceError("INTERNAL", f"{subject} replied with {type(reply).__name__}, not an object")
+        return reply
+
+    async def _exchange(self, subject: str, destination: str, name: str, body: bytes) -> bytes:
         for attempt in range(1, self.attempts + 1):
             try:
                 with sending(destination, name=name) as headers:
@@ -102,10 +122,7 @@ class Client:
             except NatsTimeoutError:
                 log.warning("no reply in time", extra={"messaging.destination.name": subject, "attempt": attempt})
                 continue
-            reply = envelopes.decode(message.data)
-            if not isinstance(reply, dict):
-                raise ServiceError("INTERNAL", f"{subject} replied with {type(reply).__name__}, not an object")
-            return reply
+            return message.data
         raise Unavailable(subject, f"no reply after {self.attempts} attempts of {self.timeout:g}s")
 
 

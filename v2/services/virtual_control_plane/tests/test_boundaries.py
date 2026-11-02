@@ -13,7 +13,7 @@ import ast
 from pathlib import Path
 
 BANNED = {"nats", "sqlalchemy", "smolvm", "fcntl"}
-BANNED_PACKAGES = ("virtual_control_plane.providers",)
+BANNED_PACKAGES = ("virtual_control_plane.providers", "workspace_daemon")
 APPLICATION = Path(__file__).parents[1] / "application"
 
 
@@ -51,3 +51,11 @@ def test_the_smolvm_adapter_keeps_its_guest_layout_and_cli_to_itself() -> None:
 
     for detail in ("/workspace", "machine exec", "oe-vcp-", "--cpus", "microvm"):
         assert detail not in sources, detail
+
+
+def test_runtime_delivery_never_reads_placement_metadata() -> None:
+    """Delivery, journal identity, sequencing and projection use the runtime ID only, for every placement."""
+    source = (APPLICATION / "runtime_delivery.py").read_text()
+
+    for detail in ("locator", "vm_id", "guest", "path", "provider"):
+        assert detail not in source, detail

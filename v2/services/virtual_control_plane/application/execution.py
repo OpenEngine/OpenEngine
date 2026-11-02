@@ -1,9 +1,10 @@
-"""Opt-in durable acceptance. No runtime transport or production enable switch.
+"""Opt-in durable acceptance. No production enable switch.
 
 Trusted context adapters validate executor configuration and resolve persisted
 workspace context. The application validates wire structure and filesystem paths
-before its first acceptance write. Runtime readiness is committed by a future
-registration handler; this slice seeds it only in deterministic tests.
+before its first acceptance write. Runtime readiness is committed by the
+daemon's `runtime.ready` update (`runtime_delivery.py`), which also delivers the
+accepted command bytes and projects ordered updates through `transition`.
 """
 from __future__ import annotations
 
@@ -146,7 +147,7 @@ class Execution:
         await tx.put("attempt_bindings", attempt_id, {**binding, "execution": message["execution"], "session_mode": selection["mode"]})
         await tx.put("operations", operation["operation_id"], {"snapshot": operation, "causal_path": body["causal_path"]})
         await tx.put("workspaces", workspace_id, record)
-        await tx.append_runtime_command(command_id, subject, wire)
+        await tx.append_runtime_command(command_id, attempt_id, subject, wire)
         return accepted(body, operation["operation_id"], attempt_id)
 
     @staticmethod
@@ -193,10 +194,9 @@ class Execution:
     async def transition(self, tx, attempt_id, state, *, error=None, result=None):
         """Trusted projection primitive, not a runtime message handler.
 
-        A future delivery adapter must authenticate, fence, order and deduplicate
-        updates before invoking this in its update transaction. An acknowledgement
-        has no transition: only attempt.started projects task.started and succeeds
-        execute. This slice deliberately exposes no runtime subscription.
+        `RuntimeUpdates` fences, orders and deduplicates updates before invoking
+        this in its update transaction. An acknowledgement has no transition:
+        only attempt.started projects task.started and succeeds execute.
         """
         record = await tx.get("attempts", attempt_id)
         if record is None:

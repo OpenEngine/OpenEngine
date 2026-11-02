@@ -39,13 +39,13 @@ erDiagram
         DATETIME published_at "nullable"
     }
     class outbox changed
-    runtime_commands["runtime_commands<br/>Immutable internal commands accepted atomically with attempts; delivery is disabled. (ADDED)"] {
+    runtime_commands["runtime_commands<br/>Immutable internal commands accepted atomically with attempts, and their delivery outcome. (ADDED)"] {
         VARCHAR(128) command_id PK "ADDED; not null"
         TEXT subject "ADDED; not null"
         BLOB wire "ADDED; not null"
     }
     class runtime_commands added
-    runtime_status["runtime_status<br/>Execution readiness and registered capabilities of an owned runtime. (ADDED)"] {
+    runtime_status["runtime_status<br/>Execution readiness, capabilities, journal identity and update high-water mark of an owned runtime. (ADDED)"] {
         VARCHAR(128) key PK "ADDED; not null"
         JSON body "ADDED; not null"
     }

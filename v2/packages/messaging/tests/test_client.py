@@ -112,3 +112,20 @@ def test_a_connection_lost_while_waiting_reports_unavailable() -> None:
 
     assert raised.value.code is ErrorCode.UNAVAILABLE
     assert len(nats.sent) == 2
+
+
+def test_send_resends_exact_bytes_and_returns_the_reply_undecoded() -> None:
+    internal = "oe.internal.v1.runtime.runtimes.rt_1.execute"
+    wire = b'{"command_id":"rtc_1", "kept": "as stored"}'
+    nats = ScriptedNats([NatsTimeoutError(), {"status": "accepted"}])
+
+    reply = asyncio.run(Client(nats, timeout=0.25, attempts=2).send(internal, wire))
+
+    assert reply == b'{"status": "accepted"}'
+    assert [(subject, payload) for subject, payload, _ in nats.sent] == [(internal, wire)] * 2
+
+
+def test_send_reports_loss_as_unavailable_without_decoding() -> None:
+    for outcome in (NoRespondersError(), NatsTimeoutError()):
+        with pytest.raises(Unavailable):
+            asyncio.run(Client(ScriptedNats([outcome]), timeout=0.25, attempts=1).send("oe.internal.v1.x", b"\xff"))
