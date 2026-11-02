@@ -47,6 +47,7 @@ from openengine.messaging import Authorizer, ErrorCode, LocalOperator, Request, 
 from openengine.messaging.errors import invalid_argument
 from openengine.persistence import OpenPersistence, parse_tenant
 
+from graph_engine.repositories import discover
 from graph_engine.persistence.store import (
     DEFAULT_PROJECT,
     Command,
@@ -184,10 +185,13 @@ class Registry:
         return self.store.scoped(parse_tenant(request.principal.tenant_id))
 
     def commands(self) -> dict[str, Route]:
-        return {"graphs.apply": Route(self.apply, receipts=True)}
+        return {"graphs.apply": Route(self.apply, receipts=True),
+                "repositories.add": Route(self.add_repository, receipts=True)}
 
     def queries(self) -> dict[str, Route]:
         return {
+            "repositories.list": Route(self.list_repositories, f"{SCHEMAS}/repositories.schema.json#/$defs/query"),
+            "repositories.get": Route(self.get_repository, f"{SCHEMAS}/repositories.schema.json#/$defs/query"),
             "graphs.list": Route(self.list, f"{SCHEMAS}/queries.schema.json#/$defs/list_graphs_query"),
             "graphs.{graph_id}.get": Route(self.get, f"{SCHEMAS}/queries.schema.json#/$defs/get_graph_query"),
             "operations.{operation_id}.get": Route(self.operation, f"{SCHEMAS}/queries.schema.json#/$defs/get_operation_query"),
@@ -302,3 +306,46 @@ class Registry:
             )
         self.authorizer.authorize_project(request, operation.project)
         return {"operation": _snapshot(operation)}
+
+    async def add_repository(self, request: Request) -> dict[str, Any]:
+        command = _command(request)
+        self.authorizer.authorize_project(request, command.project)
+        try:
+            if (receipt := await self._store(request).repository_receipt(command)) is not None:
+                if receipt["status"] == "rejected":
+                    raise ServiceError.from_dict(receipt["error"])
+                return receipt
+            try:
+                envelopes.check(envelopes.COMMAND, request.body)
+                envelopes.check(f"{SCHEMAS}/repositories.schema.json#/$defs/add", request.body)
+                if "expected_version" in request.body:
+                    raise invalid_argument([("expected_version", "repository registration does not support versions")])
+                payload = request.body["payload"]
+                # Discovery belongs to GE on the host that owns this local path.
+                checkout = await discover(payload["checkout"], payload["base_ref"])
+                repository = {"project": command.project, "checkout": checkout,
+                              "base_ref": payload["base_ref"], "workspace_policy": payload["workspace_policy"],
+                              "trusted": payload.get("trusted")}
+                deadline = datetime.fromisoformat(request.body["deadline_at"]) if "deadline_at" in request.body else None
+                return await self._store(request).register_repository(command, repository, deadline)
+            except DeadlineExceeded as late:
+                return await self._reject(request, command, ServiceError(
+                    ErrorCode.DEADLINE_EXCEEDED, str(late),
+                    details={"deadline_at": request.body["deadline_at"], "received_at": _timestamp(late.received)}))
+            except ServiceError as error:
+                return await self._reject(request, command, error)
+        except CommandIdConflict as conflict:
+            raise ServiceError(ErrorCode.COMMAND_ID_CONFLICT, str(conflict),
+                               details={"command_id": conflict.command_id, "original_subject": conflict.subject}) from None
+
+    async def list_repositories(self, request: Request) -> dict[str, Any]:
+        project = request.body["params"].get("project", DEFAULT_PROJECT)
+        self.authorizer.authorize_project(request, project)
+        return {"items": await self._store(request).repositories(project)}
+
+    async def get_repository(self, request: Request) -> dict[str, Any]:
+        result = await self.list_repositories(request)
+        if not result["items"]:
+            raise ServiceError(ErrorCode.NOT_FOUND, "no repository registered for this project",
+                               details={"resource_type": "repository", "resource_id": request.body["params"].get("project", DEFAULT_PROJECT)})
+        return {"repository": result["items"][0]}

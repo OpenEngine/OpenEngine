@@ -11,6 +11,7 @@
           "properties": {
             "operation": {
               "enum": [
+                "repositories.add",
                 "graphs.apply",
                 "graphs.run",
                 "jobs.submit",
@@ -26,6 +27,13 @@
               ]
             }
           }
+        },
+        {
+          "if": { "properties": { "operation": { "const": "repositories.add" } } },
+          "then": { "properties": { "result": {
+            "type": "object", "additionalProperties": false, "required": ["repository"],
+            "properties": { "repository": { "$ref": "repositories.schema.json#/$defs/repository" } }
+          } } }
         },
         {
           "if": { "properties": { "operation": { "const": "graphs.apply" } } },

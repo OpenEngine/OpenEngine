@@ -1,0 +1,9 @@
+{
+  "message": "GetRepositoryQuery",
+  "subject": "oe.v1.ge.query.repositories.get",
+  "payload": {
+    "params": {
+      "project": "alpha"
+    }
+  }
+}

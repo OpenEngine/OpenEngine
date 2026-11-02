@@ -26,6 +26,9 @@ REQUEST_SUBJECTS = {
         "oe.v1.cxn.query.connections.{connection_id}.get",
     },
     "graph_engine": {
+        "oe.v1.ge.control.repositories.add",
+        "oe.v1.ge.query.repositories.list",
+        "oe.v1.ge.query.repositories.get",
         "oe.v1.ge.control.graphs.apply",
         "oe.v1.ge.control.graphs.{graph_id}.run",
         "oe.v1.ge.control.jobs.submit",

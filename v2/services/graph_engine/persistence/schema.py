@@ -62,3 +62,13 @@ command_receipts = tenant_table(
     sa.Column("created_at", UtcDateTime(), nullable=False),
     comment="The reply to every command GE accepted or rejected for good, so a retry with its command ID in its project gets the same one.",
 )
+
+repositories = tenant_table(
+    "repositories", metadata,
+    sa.Column("project", sa.String(64), primary_key=True),
+    sa.Column("checkout", sa.Text, nullable=False),
+    sa.Column("base_ref", sa.String(256), nullable=False),
+    sa.Column("workspace_policy", sa.String(32), nullable=False),
+    sa.Column("trusted", sa.Boolean, nullable=True),
+    comment="One explicitly registered local checkout and execution defaults per project.",
+)

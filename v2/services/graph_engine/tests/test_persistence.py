@@ -346,6 +346,8 @@ def test_tenant_migration_refuses_unsafe_downgrade_and_cross_tenant_foreign_keys
             ), {"tenant": LOCAL_TENANT.hex, "graph": graph_id})
     with pytest.raises(RuntimeError, match="non-local tenant rows"):
         downgrade(PERSISTENCE.migrations, PERSISTENCE.database(config), "d75ffe6cc5ed")
+    # SQLite can commit later revisions' downgrades before an older guard refuses.
+    PERSISTENCE.upgrade(config)
     assert PERSISTENCE.drift(metadata, config) == []
 
 

@@ -45,9 +45,9 @@ flowchart LR
         end
     end
     subgraph ge["Graph Engine (ge)"]
-        ge_control["NATS control<br/><b>oe.v1.ge.control.</b><br/>graphs.apply<br/>graphs.{graph_id}.run<br/>jobs.submit<br/>jobs.{job_id}.steer<br/>jobs.{job_id}.pause<br/>jobs.{job_id}.resume<br/>jobs.{job_id}.cancel<br/>approvals.{approval_id}.decide<br/>loops.apply<br/>loops.{loop_id}.pause<br/>loops.{loop_id}.resume<br/>loops.{loop_id}.remove"]
+        ge_control["NATS control<br/><b>oe.v1.ge.control.</b><br/>repositories.add<br/>graphs.apply<br/>graphs.{graph_id}.run<br/>jobs.submit<br/>jobs.{job_id}.steer<br/>jobs.{job_id}.pause<br/>jobs.{job_id}.resume<br/>jobs.{job_id}.cancel<br/>approvals.{approval_id}.decide<br/>loops.apply<br/>loops.{loop_id}.pause<br/>loops.{loop_id}.resume<br/>loops.{loop_id}.remove"]
         class ge_control subjects
-        ge_query["NATS query<br/><b>oe.v1.ge.query.</b><br/>graphs.list<br/>graphs.{graph_id}.get<br/>jobs.list<br/>jobs.{job_id}.get<br/>jobs.{job_id}.executions.list<br/>jobs.{job_id}.workspaces.list<br/>jobs.{job_id}.approvals.list<br/>executions.{execution_id}.get<br/>executions.{execution_id}.steps.list<br/>loops.list<br/>loops.{loop_id}.get<br/>operations.{operation_id}.get"]
+        ge_query["NATS query<br/><b>oe.v1.ge.query.</b><br/>repositories.list<br/>repositories.get<br/>graphs.list<br/>graphs.{graph_id}.get<br/>jobs.list<br/>jobs.{job_id}.get<br/>jobs.{job_id}.executions.list<br/>jobs.{job_id}.workspaces.list<br/>jobs.{job_id}.approvals.list<br/>executions.{execution_id}.get<br/>executions.{execution_id}.steps.list<br/>loops.list<br/>loops.{loop_id}.get<br/>operations.{operation_id}.get"]
         class ge_query subjects
         ge_events["NATS events → stream ge-events<br/><b>oe.v1.ge.events.</b><br/>jobs.{job_id}.job.created<br/>jobs.{job_id}.job.completed<br/>jobs.{job_id}.job.failed<br/>jobs.{job_id}.job.cancelled<br/>jobs.{job_id}.execution.started<br/>jobs.{job_id}.execution.progressed<br/>jobs.{job_id}.execution.awaiting_approval<br/>jobs.{job_id}.execution.paused<br/>jobs.{job_id}.execution.resumed<br/>jobs.{job_id}.execution.completed<br/>jobs.{job_id}.execution.failed<br/>jobs.{job_id}.execution.cancelled<br/>jobs.{job_id}.approval.requested<br/>jobs.{job_id}.approval.resolved<br/>loops.{loop_id}.loop.applied<br/>loops.{loop_id}.loop.paused<br/>loops.{loop_id}.loop.resumed<br/>loops.{loop_id}.loop.removed"]
         class ge_events subjects
@@ -60,6 +60,8 @@ flowchart LR
             class ge_t_graphs table
             ge_t_operations[("operations<br/>The durable record of each accepted command's progress, which operations.{operation_id}.get reads.")]
             class ge_t_operations table
+            ge_t_repositories[("repositories<br/>One explicitly registered local checkout and execution defaults per project.")]
+            class ge_t_repositories table
             ge_t_graphs --- ge_t_graph_revisions
         end
     end

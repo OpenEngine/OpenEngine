@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import argparse
 
-from openengine.cli.commands import down, graph, logs, migrate, status, up
+from openengine.cli.commands import down, graph, logs, migrate, status, up, repo
 
-COMMANDS = (up, down, status, logs, migrate, graph)
+COMMANDS = (up, down, status, logs, migrate, graph, repo)
 
 
 def add_parsers(commands: argparse._SubParsersAction) -> None:
