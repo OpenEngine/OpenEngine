@@ -15,7 +15,8 @@ DOCUMENT_COMMENTS = {
     "sessions": "Agent conversation snapshots, separate from workspace lifecycle.",
     "attempts": "Task attempts and their execute operation identity.",
     "attempt_bindings": "Immutable accepted execution identity and generation binding.",
-    "runtime_status": "Execution readiness and registered capabilities of an owned runtime.",
+    "runtime_status": "Execution readiness, capabilities, journal identity and update high-water mark of an owned runtime.",
+    "runtime_updates": "Committed internal runtime update identities and digests, for duplicate and conflict detection.",
     "command_receipts": "Immutable command identity and original response for idempotent replay.",
 }
 documents = {
@@ -67,13 +68,17 @@ sa.Index("ix_workspaces_provider_page", sa.literal_column("json_extract(body, '$
 sa.Index("ix_workspaces_state_page", sa.literal_column("json_extract(body, '$.snapshot.state')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
 sa.Index("ix_workspaces_job_page", sa.literal_column("json_extract(body, '$.snapshot.labels.job_id')"), sa.literal_column("json_extract(body, '$.snapshot.created_at')"), sa.literal_column('key'), sqlite_where=sa.text("json_type(body, '$.snapshot') = 'object'"), _table=documents["workspaces"])
 
-# No publisher in this slice. Transport must send these exact bytes on every retry.
+# The dispatcher sends these exact bytes on every retry. Only `status` and the
+# daemon's verified acknowledgement bytes change after insertion.
 runtime_commands = sa.Table(
     "runtime_commands", metadata,
     sa.Column("command_id", sa.String(128), primary_key=True),
     sa.Column("subject", sa.Text(), nullable=False),
     sa.Column("wire", sa.LargeBinary(), nullable=False),
-    comment="Immutable internal commands accepted atomically with attempts; delivery is disabled.",
+    sa.Column("status", sa.String(16), nullable=False, server_default="pending"),
+    sa.Column("acknowledgement", sa.LargeBinary(), nullable=True),
+    sa.Index("ix_runtime_commands_pending", "command_id", sqlite_where=sa.text("status = 'pending'")),
+    comment="Immutable internal commands accepted atomically with attempts, and their delivery outcome.",
 )
 
 for name, fields in (("ix_sessions_workspace_page", ["workspace_id", "created_at"]),

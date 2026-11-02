@@ -1,6 +1,6 @@
 # V2 is its own uv workspace, separate from V1's at the repository root.
 [tool.uv.workspace]
-members = ["apps/cli", "apps/supervisor", "packages/contracts", "packages/messaging", "packages/persistence", "packages/telemetry", "services/connection_bus", "services/graph_engine", "services/tool_service", "services/virtual_control_plane"]
+members = ["apps/cli", "apps/supervisor", "packages/contracts", "packages/messaging", "packages/persistence", "packages/telemetry", "services/connection_bus", "services/graph_engine", "services/tool_service", "services/virtual_control_plane", "services/workspace_daemon"]
 
 [dependency-groups]
 dev = [
@@ -13,6 +13,7 @@ dev = [
     "openengine-telemetry",
     "openengine-tool-service",
     "openengine-virtual-control-plane",
+    "openengine-workspace-daemon",
     "pytest>=8.0",
     "jsonschema>=4.23",
     "pyyaml>=6.0",
@@ -28,6 +29,7 @@ openengine-connection-bus = { workspace = true }
 openengine-graph-engine = { workspace = true }
 openengine-tool-service = { workspace = true }
 openengine-virtual-control-plane = { workspace = true }
+openengine-workspace-daemon = { workspace = true }
 
 [tool.pytest.ini_options]
 testpaths = [
@@ -40,6 +42,7 @@ testpaths = [
     "services/graph_engine/tests",
     "services/tool_service/tests",
     "services/virtual_control_plane/tests",
+    "services/workspace_daemon/tests",
     "packages/contracts/tests",
     "integration_tests",
 ]

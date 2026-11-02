@@ -102,10 +102,12 @@ flowchart LR
             class vcp_t_operations table
             vcp_t_outbox[("outbox<br/>Immutable public event envelopes awaiting or recording JetStream publication.")]
             class vcp_t_outbox table
-            vcp_t_runtime_commands[("runtime_commands<br/>Immutable internal commands accepted atomically with attempts; delivery is disabled.")]
+            vcp_t_runtime_commands[("runtime_commands<br/>Immutable internal commands accepted atomically with attempts, and their delivery outcome.")]
             class vcp_t_runtime_commands table
-            vcp_t_runtime_status[("runtime_status<br/>Execution readiness and registered capabilities of an owned runtime.")]
+            vcp_t_runtime_status[("runtime_status<br/>Execution readiness, capabilities, journal identity and update high-water mark of an owned runtime.")]
             class vcp_t_runtime_status table
+            vcp_t_runtime_updates[("runtime_updates<br/>Committed internal runtime update identities and digests, for duplicate and conflict detection.")]
+            class vcp_t_runtime_updates table
             vcp_t_sessions[("sessions<br/>Agent conversation snapshots, separate from workspace lifecycle.")]
             class vcp_t_sessions table
             vcp_t_workspace_runtimes[("workspace_runtimes<br/>Provider ownership, opaque locator, runtime identity and generation.")]

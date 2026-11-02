@@ -232,7 +232,10 @@ and leaves compute and ownership alone; it never initiates destruction.
 - `RuntimeSupervisorPort` and `ExecutionContext` -- starting and fencing the
   agent process/session inside an already-provisioned workspace, kept apart
   from provisioning so a worktree never needs a VM to exist. #1055 (host
-  fencing) and #1118 (durable fake workspace daemon delivery) implement it.
+  fencing) implements it.
+- `RuntimeTransport` -- sends one internal runtime request's exact bytes to
+  the daemon its subject names by runtime ID only, and returns the reply bytes.
+  `runtime_nats.py` implements it over Core NATS; see "Runtime delivery".
 - `UnitOfWork` / `Transaction` (`application/transactions.py`) -- the
   transactional document, command-receipt and event-outbox port implemented
   by `persistence/durable.py` for SQLite. `ports.py` re-exports `UnitOfWork`.
@@ -375,7 +378,7 @@ this same outbox. This keeps the single-host,
 single-writer constraint: there is no distributed publisher coordination, and
 published rows are retained indefinitely (no retention/GC).
 
-## Execution acceptance (delivery disabled)
+## Execution acceptance
 
 `application/execution.py` accepts execution only when explicitly constructed
 with `enabled=True` and an `ExecutionContextPort`. Production startup registers
@@ -412,7 +415,7 @@ the exact accepted IDs even after restart or disabling execution; changed
 immutable inputs under the same command ID conflict. Internal command bytes
 are stored once and cannot be updated through the transaction port. The
 allocation worker explicitly selects apply/ensure/destroy and never claims a
-pending execute. No command outbox publisher is included.
+pending execute. `RuntimeCommands` (below) delivers the stored bytes.
 
 `Execution.transition` is a trusted application projection primitive exercised
 with deterministic fixtures, not a runtime update endpoint. It accepts only
@@ -436,3 +439,79 @@ workflow renders SVGs.
 Context preparation and path checks run outside the writer transaction. Acceptance
 rechecks ownership, readiness, session state and capacity, and rejects a changed
 specification or runtime binding before persisting any acceptance records.
+
+## Runtime delivery (#1118)
+
+`application/runtime_delivery.py` connects accepted execution to a separately
+supervised workspace daemon (`../workspace_daemon`) over the internal
+workspace-runtime protocol. Nothing here is a public route: internal subjects
+never reach the shared `Server`/`Authorizer`, and a guest connection never
+relaxes `LocalOperator`. Public execute is still authorized by the shared
+Server before acceptance writes anything, so a denied request creates no
+session, attempt or command bytes, and nothing reaches a daemon. Internal
+messages are instead checked against VCP's own ownership registry
+(`workspace_runtimes` and the workspace snapshot): an unowned runtime is
+`IDENTITY_MISMATCH` and a retired or unprovisioned generation `STALE_RUNTIME`,
+before any deduplication state is read.
+
+`RuntimeCommands` reads pending `runtime_commands` rows and sends each row's
+exact accepted bytes through `RuntimeTransport` (`NatsRuntimeTransport`, the
+shared client's envelope-free `Client.send` with one 5-second attempt). A lost
+request or reply leaves the row pending; it is resent unchanged with capped,
+jittered backoff (250 ms to 10 s, `openengine.messaging.retry.Backoff`), also
+after a VCP restart. A reply is trusted only after `validate_wire_message` and
+`validate_exchange` match its identity and binding. Revision `cfed9cf520fd`
+adds `status` and the verified `acknowledgement` bytes beside the immutable
+`wire`; `settle_runtime_command` can change only those two columns, once.
+
+| Daemon reply | Row status | Public effect |
+| -- | -- | -- |
+| `accepted` (durable ownership) | `acknowledged` | none; the attempt stays `starting` |
+| `UNAVAILABLE` (not ready or at capacity) | pending | retried unchanged |
+| `INVALID_ARGUMENT`, `UNSUPPORTED_EXECUTOR`, `SESSION_BUSY` | `rejected` | attempt and execute fail; session and active attempt released |
+| `STALE_RUNTIME`, `IDENTITY_MISMATCH`, `COMMAND_ID_CONFLICT`, `ATTEMPT_CONFLICT` | `blocked` | none: not evidence that no executor exists, so the attempt stays active for reconciliation |
+
+`RuntimeUpdates.receive` handles `oe.internal.v1.vcp.runtimes.*.updates`
+(`RuntimeUpdateListener`, queue group `vcp-runtime`). In one transaction it
+fences the binding, deduplicates on a digest of the whole update keyed by
+runtime and event ID (`runtime_updates`, insert-only), requires the next
+contiguous runtime sequence and attempt sequence, applies the projection and
+advances `runtime_status.sequence`; only then does it reply `committed`. A
+duplicate commits with no effect; changed content under a known event ID, an
+occupied sequence, a non-contiguous attempt sequence, an invalid transition or
+an unsupported kind is `EVENT_CONFLICT` and quarantines the runtime (`ready`
+false); a gap is `EVENT_GAP` with `expected_sequence`. Any storage failure rolls
+the whole update back and sends no reply, so the daemon retries it. A
+`runtime.ready` registers executors, concurrency and the stable `journal_id`
+(a different journal is `IDENTITY_MISMATCH`), and is retryable `UNAVAILABLE`
+while the owned workspace is still provisioning. Admission already requires
+committed readiness for the current generation.
+
+| Update | Projection (through `Execution.transition`) |
+| -- | -- |
+| `attempt.started` | attempt running; execute succeeds; `task.started` |
+| `attempt.completed` | attempt completed, session idle, attempt released; `task.completed` |
+| `attempt.failed` | attempt failed, session idle, attempt released; `task.failed`; execute fails only if never started |
+
+Progress, cancellation and steering updates are rejected as `EVENT_CONFLICT`:
+the fake daemon advertises no progress kinds and sends none. `inspect` asks the
+daemon for read-only snapshots and its journal high-water mark.
+
+Delivery, journal identity, sequencing and projection never read a locator,
+VM ID, guest address or path (`tests/test_boundaries.py`); placement adapters
+resolve the context root through `ExecutionContextPort` before acceptance.
+Production startup still registers no execute route, delivery worker or update
+listener: that needs a placement's context adapter and daemon bootstrap (#1122
+smolvm, #1054/#1055 worktree) and runtime-scoped broker credentials. Tests
+assemble the same components the service will.
+
+`tests/test_runtime_delivery.py` runs in process (identical encoding, replay
+and projection for worktree- and VM-shaped context doubles; lost command and
+update acknowledgements; gaps, duplicates, conflicts, stale and wrong bindings
+with a negative control that removes the fence; rollback; daemon rejections;
+readiness during provisioning) and against `python -m workspace_daemon` as a
+host subprocess over a real `nats-server` (completion, task failure, inspect
+during execution, VCP restart before delivery and during execution, daemon
+SIGKILL mid-task, execute replay, a denied public request and forged internal
+messages). Delivery is at least once; there is no exactly-once transport. An
+interrupted launch is never rerun.
