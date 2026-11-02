@@ -242,16 +242,18 @@ def test_launcher_directories_must_not_be_writable_by_the_agent(tmp_path, monkey
     assert refused.value.args[1] == str(unsafe.resolve())
 
 
-def test_unexpected_wait_errors_fail_the_fenced_attempt_rather_than_lose_it(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["flood", "normal"])  # fails mid-turn, or only at the final flush after end_turn
+def test_unexpected_wait_errors_fail_the_fenced_attempt_rather_than_lose_it(tmp_path, monkeypatch, mode):
     async def scenario():
         fence = GroupFence()
-        journal, vcp, outbox = await setup(tmp_path, codex(tmp_path, "flood", fence))
+        journal, vcp, outbox = await setup(tmp_path, codex(tmp_path, mode, fence))
 
         async def broken(attempt_id, value):
             raise ValueError(value)  # for example a journal or encoding error
         monkeypatch.setattr(journal, "progress", broken)
         await run(journal, task())
         await drain(outbox)
+        assert not updates(vcp, "attempt.completed")
         failed = updates(vcp, "attempt.failed")[0]
         assert (failed["payload"]["reason"], failed["termination"]) == ("executor_failed", "killed")
         assert len(fence.fenced) == 1 and all(p.returncode is not None for p in fence.processes.values())

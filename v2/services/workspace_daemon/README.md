@@ -128,7 +128,8 @@ operator-configured adapter behind the same executor port as `fake`:
   including after `end_turn`. Only then are the turn's remaining text (also
   after a failed turn) and its usage journaled, so waiting for outbox capacity
   never keeps the agent alive past its deadline; a cancelled wait fences and
-  skips that journaling. Any other error during the turn fails the fenced
+  skips that journaling. If that journaling fails the attempt fails
+  (`executor_failed`) rather than completing with output or usage missing. Any other error during the turn fails the fenced
   attempt as `executor_failed`.
 
 `supervision.py` is the only supervisor the installed daemon has. The daemon

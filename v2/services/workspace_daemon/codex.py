@@ -159,7 +159,10 @@ class CodexExecutor:
             if reported is not None:
                 await progress(reported)
         except Exception:
+            # Never report success with conversation output or usage permanently missing.
             log.exception("final ACP progress was not journaled", extra={"daemon.attempt_id": attempt_id})
+            return ("failed", {"error": {"code": "PROVIDER_ERROR", "message": "Agent progress was not journaled",
+                                         "retryable": False}, "reason": "executor_failed"}, "killed")
         return outcome
 
     async def fence(self, attempt: dict[str, Any]) -> bool:
