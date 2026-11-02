@@ -371,13 +371,16 @@ def test_a_graph_snapshot_without_a_project_is_valid(name: str, graph: tuple[Any
 # Tenancy: a tenant is a NATS account, named by the connection and never by a subject or payload.
 
 
-def test_rejects_an_account_token_in_a_tenant_facing_address() -> None:
-    contract = load_contract("connection_bus")
+@pytest.mark.parametrize("service", SERVICES)
+@pytest.mark.parametrize("address", ["oe.v1.{account}.svc.query.get", "{account}.oe.v1.svc", "oe.v1.svc.{account}"])
+def test_rejects_an_account_token_in_a_tenant_facing_address(service: str, address: str) -> None:
+    contract = load_contract(service)
     document = copy.deepcopy(contract.document)
-    document["channels"]["connectionsApply"]["address"] = "oe.v1.{account}.cxn.control.connections.apply"
+    name = next(iter(document["channels"]))
+    document["channels"][name]["address"] = address
     problems = validate.check(dataclasses.replace(contract, document=document))
     assert [problem for problem in problems if "{account}" in problem] == [
-        "connection_bus: channel connectionsApply address 'oe.v1.{account}.cxn.control.connections.apply' "
+        f"{service}: channel {name} address {address!r} "
         "contains {account}; a tenant's account comes from its connection, not its subject"
     ]
 
@@ -434,3 +437,55 @@ def test_account_accepts_an_account_public_key() -> None:
 )
 def test_account_rejects(value: str) -> None:
     assert not type_accepts("account", value)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+@pytest.mark.parametrize("service", SERVICES)
+def test_asyncapi_parser_rejects_account_token_in_tenant_address(tmp_path: Path, service: str) -> None:
+    tooling = CONTRACTS / "tooling"
+    if not (tooling / "node_modules").exists():
+        pytest.skip("run `npm ci` in packages/contracts/tooling first")
+    # Exercise the real entry point in an isolated contract tree; the source
+    # documents and installed parser remain unchanged.
+    isolated = tmp_path / "contracts"
+    shutil.copytree(CONTRACTS, isolated, ignore=shutil.ignore_patterns("node_modules", "reference.html", "__pycache__"))
+    (isolated / "tooling" / "node_modules").symlink_to(tooling / "node_modules", target_is_directory=True)
+    path = isolated / service / "v1" / "asyncapi.yaml"
+    document = yaml.safe_load(path.read_text())
+    name, channel = next((name, channel) for name, channel in document["channels"].items() if channel.get("address"))
+    channel["address"] = channel["address"].replace("oe.v1.", "oe.v1.{account}.", 1)
+    channel.setdefault("parameters", {})["account"] = {"description": "Untrusted caller-supplied account"}
+    path.write_text(yaml.safe_dump(document, sort_keys=False))
+    result = subprocess.run(["node", "validate.mjs", service], cwd=isolated / "tooling", capture_output=True, text=True)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"{service}: error account-token: channel {name}" in result.stdout
+    assert f"{service}: invalid" in result.stdout
+
+
+@pytest.mark.parametrize("service", SERVICES)
+@pytest.mark.parametrize("field", ["tenant", "tenant_id", "account"])
+def test_tenant_identity_cannot_be_selected_by_request_payload(service: str, field: str) -> None:
+    # Real request examples exercise each service's closed payload schema,
+    # rather than a synthetic schema that could drift from its wire contract.
+    requests = []
+    for path in sorted(load_contract(service).examples.glob("*.json")):
+        case = json.loads(path.read_text())
+        if "command_id" in case.get("payload", {}):
+            requests.append(case)
+    assert requests, service
+    request = requests[0]
+    assert errors_for(service, request) == []
+    request["payload"]["payload"][field] = ACCOUNT_KEY if field == "account" else "0192f1c4-7a3e-7c2d-9b1f-3e4a5b6c7d8e"
+    problems = errors_for(service, request)
+    assert any(field in problem and "Additional properties" in problem for problem in problems), problems
+
+
+@pytest.mark.parametrize("variant", ["8", "9", "a", "b"])
+def test_tenant_id_accepts_all_rfc_uuid_variants(variant: str) -> None:
+    assert type_accepts("tenant_id", f"0192f1c4-7a3e-7c2d-{variant}b1f-3e4a5b6c7d8e")
+
+
+@pytest.mark.parametrize("variant", ["0", "7", "c", "f"])
+def test_tenant_id_rejects_non_rfc_uuid_variants(variant: str) -> None:
+    assert not type_accepts("tenant_id", f"0192f1c4-7a3e-7c2d-{variant}b1f-3e4a5b6c7d8e")

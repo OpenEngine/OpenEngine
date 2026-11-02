@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:connection-bus
 info:
   title: OpenEngine Connection Bus (cxn)
-  version: 1.0.0-draft.3
+  version: 1.0.0-draft.4
   description: |
     The Connection Bus links OpenEngine to external providers. This document
     describes the NATS interface **CXN serves**: the commands and queries it
@@ -49,6 +49,11 @@ info:
     key (the shared `account` type) to its `tenant_id`, a UUIDv7.
     `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
     (`local_tenant`).
+
+    Account boundaries isolate subjects, reply inboxes and JetStream.
+    Identical tenant-facing subjects in different accounts do not share
+    messages or persisted streams. Shared services use only the caller's
+    account token inserted by NATS to identify the tenant.
 
     ## Tenant subjects
     Tenants use the subjects in this document,
