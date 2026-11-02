@@ -150,12 +150,8 @@ class Execution:
                 raise ServiceError(ErrorCode.INVALID_CURSOR, "invalid session cursor", details={"reason": "malformed"}) from None
         def key(session):
             return [session["created_at"], session["session_id"]]
-        async with self.store.transaction() as tx:
-            sessions = [item["snapshot"] for item in await tx.all("sessions")]
-        sessions = sorted((s for s in sessions if s["workspace_id"] == workspace_id
-                           and (not filters["state"] or s["state"] in filters["state"])
-                           and (after is None or key(s) < after)), key=key, reverse=True)
         limit = int(params.get("limit", 50))
+        sessions = await self.store.session_page(filters, after, limit + 1)
         page = sessions[:limit]
         cursor = None
         if len(sessions) > limit:
@@ -177,7 +173,7 @@ class Execution:
         allowed = {"starting": {"running", "failed"}, "running": {"completed", "failed"}}
         if state not in allowed.get(attempt["state"], set()):
             raise InvalidTransition()
-        if state == "failed" and error is None:
+        if (state == "failed" and error is None) or (state == "completed" and result is None):
             raise InvalidTransition()
         binding = await tx.get("attempt_bindings", attempt_id)
         runtime = await tx.get("workspace_runtimes", binding["workspace_id"])

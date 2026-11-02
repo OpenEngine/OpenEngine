@@ -75,3 +75,8 @@ runtime_commands = sa.Table(
     sa.Column("wire", sa.LargeBinary(), nullable=False),
     comment="Immutable internal commands accepted atomically with attempts; delivery is disabled.",
 )
+
+for name, fields in (("ix_sessions_workspace_page", ["workspace_id", "created_at"]),
+                     ("ix_sessions_workspace_state_page", ["workspace_id", "state", "created_at"])):
+    sa.Index(name, *[sa.literal_column(f"json_extract(body, '$.snapshot.{field}')") for field in fields],
+             sa.literal_column("key"), _table=documents["sessions"])

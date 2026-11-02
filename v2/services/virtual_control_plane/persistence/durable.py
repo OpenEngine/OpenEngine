@@ -206,6 +206,23 @@ class DurableStore:
         async with self.database.connect() as connection:
             return [row["snapshot"] for row in (await connection.execute(query, values)).scalars()]
 
+    async def session_page(self, filters: Document, after: list[str] | None, limit: int) -> list[Document]:
+        conditions = ["json_extract(body, '$.snapshot.workspace_id') = :workspace_id"]
+        values = {"workspace_id": filters["workspace_id"], "limit": limit}
+        if after is not None:
+            conditions.append("(json_extract(body, '$.snapshot.created_at'), key) < (:created, :key)")
+            values.update(created=after[0], key=after[1])
+        # Bound each indexed state seek before merging, avoiding a full sort.
+        pages = []
+        async with self.database.connect() as connection:
+            for state in filters.get("state") or [None]:
+                where = conditions + (["json_extract(body, '$.snapshot.state') = :state"] if state else [])
+                query = sa.text("SELECT body FROM sessions WHERE " + " AND ".join(where) +
+                                " ORDER BY json_extract(body, '$.snapshot.created_at') DESC, key DESC LIMIT :limit")
+                rows = await connection.execute(query.columns(body=sa.JSON), {**values, "state": state})
+                pages.extend(row["snapshot"] for row in rows.scalars())
+        return sorted(pages, key=lambda s: (s["created_at"], s["session_id"]), reverse=True)[:limit]
+
     async def pending_events(self, limit: int, exclude: Iterable[str] = ()) -> list[PendingEvent]:
         if excluded := list(exclude):
             query = _PENDING_EXCLUDING.bindparams(exclude=excluded, limit=limit)

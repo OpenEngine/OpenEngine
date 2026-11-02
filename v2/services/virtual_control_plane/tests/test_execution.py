@@ -288,3 +288,56 @@ def test_accepted_binding_and_command_cannot_be_overwritten(tmp_path):
         assert (await commands(store))[0] == wire
         await store.close()
     asyncio.run(scenario())
+
+
+def test_completion_requires_result_before_mutation(tmp_path):
+    async def scenario():
+        _, store, _, service = await setup(tmp_path)
+        reply = await service.execute(request())
+        attempt_id = reply["resource_id"]
+        async with store.transaction() as tx:
+            await service.transition(tx, attempt_id, "running")
+        before = await store.read("attempts", attempt_id)
+        async with store.transaction() as tx:
+            with pytest.raises(InvalidTransition):
+                await service.transition(tx, attempt_id, "completed")
+            assert await tx.get("attempts", attempt_id) == before
+        async with store.transaction() as tx:
+            await service.transition(tx, attempt_id, "completed", result={})
+        assert (await store.read("attempts", attempt_id))["snapshot"]["state"] == "completed"
+        assert (await store.read("operations", reply["operation_id"]))["snapshot"]["status"] == "succeeded"
+        assert [event.envelope["event_type"] for event in await store.pending_events(10)] == ["task.started", "task.completed"]
+        await store.close()
+
+    asyncio.run(scenario())
+
+
+def test_session_pages_use_indexes_without_writer_reservation(tmp_path):
+    async def scenario():
+        _, store, _, service = await setup(tmp_path)
+        async with store.transaction() as tx:
+            for i in range(300):
+                await tx.put("sessions", f"session_{i:04}", {"snapshot": {
+                    "session_id": f"session_{i:04}", "workspace_id": "ws_test" if i < 299 else "ws_other",
+                    "created_at": "2026-01-01T00:00:00Z", "state": "active" if i % 2 else "idle"}})
+            for state, index in [("", "ix_sessions_workspace_page"),
+                                 (" AND json_extract(body, '$.snapshot.state') = 'active'", "ix_sessions_workspace_state_page")]:
+                plan = await tx._connection.exec_driver_sql(
+                    "EXPLAIN QUERY PLAN SELECT body FROM sessions "
+                    "WHERE json_extract(body, '$.snapshot.workspace_id') = 'ws_test'" + state +
+                    " AND (json_extract(body, '$.snapshot.created_at'), key) < ('2026-01-01T00:00:00Z', 'session_0299')"
+                    " ORDER BY json_extract(body, '$.snapshot.created_at') DESC, key DESC LIMIT 2")
+                assert index in str(plan.all())
+        # A separate writer reservation must not block either query read.
+        async with store.transaction():
+            page = await asyncio.wait_for(service.list(query(limit=2)), 1)
+        assert [s["session_id"] for s in page["items"]] == ["session_0298", "session_0297"]
+        page = await service.list(query(limit=2, cursor=page["next_cursor"]))
+        assert [s["session_id"] for s in page["items"]] == ["session_0296", "session_0295"]
+        page = await service.list(query(limit=2, state=["active"]))
+        assert [s["session_id"] for s in page["items"]] == ["session_0297", "session_0295"]
+        page = await service.list(query(limit=2, state=["active", "idle"]))
+        assert [s["session_id"] for s in page["items"]] == ["session_0298", "session_0297"]
+        await store.close()
+
+    asyncio.run(scenario())
