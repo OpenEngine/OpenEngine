@@ -90,3 +90,36 @@ test('retained groups preserve all locations and representative context', t => {
     assert.doesNotMatch(group.context, /alternate/);
   }
 });
+
+test('npm prefix resolves both tree arguments from the invocation directory', t => {
+  const {spawnSync} = require('node:child_process');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clone-npm-'));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  const current = path.join(root, 'current');
+  const base = path.join(root, 'base');
+  const quality = path.join(current, 'tools/quality');
+  fs.mkdirSync(quality, {recursive: true});
+  fs.mkdirSync(base);
+  for (const name of ['a.py', 'b.py', 'c.py']) {
+    fs.writeFileSync(path.join(current, name), block);
+    if (name !== 'c.py') fs.writeFileSync(path.join(base, name), block);
+  }
+  // Invoke the real scanner without recursively running this test via the gate.
+  fs.writeFileSync(path.join(quality, 'package.json'), JSON.stringify({
+    scripts: {check: `node "${path.join(__dirname, 'duplication.cjs')}"`},
+  }));
+  const env = {...process.env};
+  delete env.INIT_CWD;
+  for (const args of [['../base', '.'], [base], [base, current]]) {
+    const result = spawnSync('npm', ['--prefix', 'tools/quality', 'run', '--silent', 'check', '--', ...args],
+      {cwd: current, env, encoding: 'utf8'});
+    assert.equal(result.status, 1, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.ok(report.findings.length);
+    assert.deepEqual(report.findings[0].locations.map(l => l.file), ['a.py', 'b.py', 'c.py']);
+  }
+  const direct = spawnSync(process.execPath, [path.join(__dirname, 'duplication.cjs'), '../base', '.'],
+    {cwd: current, env, encoding: 'utf8'});
+  assert.equal(direct.status, 1, direct.stderr);
+  assert.ok(JSON.parse(direct.stdout).findings.length);
+});

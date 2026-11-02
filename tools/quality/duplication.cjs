@@ -88,7 +88,12 @@ function findings(current, base, exceptions = []) {
 }
 
 if (require.main === module) {
-  const [base, current = '.'] = process.argv.slice(2);
+  // npm changes cwd to the package directory; INIT_CWD preserves the caller's
+  // directory for both the check script and the scanner spawned by the gate.
+  const invocationDirectory = process.env.INIT_CWD || process.cwd();
+  const [baseArgument, currentArgument = '.'] = process.argv.slice(2);
+  const base = baseArgument && path.resolve(invocationDirectory, baseArgument);
+  const current = path.resolve(invocationDirectory, currentArgument);
   if (!base || !fs.statSync(base).isDirectory()) throw new Error('Usage: npm run check -- /path/to/intended-base-tree [current-tree]');
   const result = findings(scan(path.resolve(current)), scan(path.resolve(base)), config.exceptions);
   console.log(JSON.stringify({detector: 'jscpd@4.0.5/token-windows-v1', minTokens: config.minTokens, findings: result}, null, 2));

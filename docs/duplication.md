@@ -7,6 +7,10 @@ npm --prefix tools/quality ci --ignore-scripts
 npm --prefix tools/quality run --silent gate -- /absolute/path/to/base-checkout . > /tmp/duplication-report.json
 ```
 
+Relative tree paths (including the default current tree, `.`) resolve from the
+directory where npm was invoked. Direct Node invocations use their working
+directory when `INIT_CWD` is unset.
+
 The base checkout must be a clean tree of the intended PR base revision, not
 an earlier working copy or the PR head. Export that revision with the repository's
 Git tooling, or use a separate checkout. The gate never fetches or guesses a base.
