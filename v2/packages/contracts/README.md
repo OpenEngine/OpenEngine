@@ -128,7 +128,7 @@ change together:
 | Subject namespace | `v1` in `oe.v1.…` | The wire API generation | a breaking change; `oe.v2` is served alongside `oe.v1` until callers move |
 | Contract directory | `{service}/v1/`, `common/v1/` | The files that define that generation | with the subject namespace: `oe.v2` lives in `{service}/v2/` |
 | Resource apiVersion | `apiVersion: openengine.cc/v1alpha1` on every kind | One API group, `openengine.cc`, for every service's resources, at the subject namespace's version plus a stability suffix | the `v1` part with the subject namespace; the suffix as `v1` matures: `v1alpha1`, `v1alpha2`, …, `v1beta1`, then `v1` once stable |
-| Contract release | `info.version` in each `asyncapi.yaml` (semver; now `1.0.0-draft.3`, GE's `1.0.0-draft.7`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
+| Contract release | `info.version` in each `asyncapi.yaml` (semver; CXN/VCP `1.0.0-draft.4`, tools `1.0.0-draft.5`, GE `1.0.0-draft.8`) | One release of a service's document | any contract change: patch for wording, minor for compatible additions, major for breaking changes. While a draft, every change bumps `draft.N` instead |
 | AsyncAPI format | `asyncapi: 3.1.0` in each document | The specification the documents are written in | the documents move to a newer AsyncAPI specification |
 
 The resource apiVersion is defined once, as `api_version` in
@@ -181,7 +181,7 @@ namespaces (tools) live inside a tenant. `oe up` runs a single account,
 whose tenant is the fixed LOCAL_TENANT, `00000000-0000-7000-8000-000000000001`
 (`local_tenant`).
 
-A request's tenant is the account the caller's connection belongs to. No
+A request's tenant is the caller's authenticated NATS account. No
 payload carries it, and the subjects tenants use carry no tenant or account
 token: they stay `oe.v1.{svc}.{control|query|events}.…` (and
 `oe.v1.tools.…`). Before a shared service receives a tenant's request, NATS
@@ -194,6 +194,21 @@ caller cannot forge another tenant's. Provider webhook subjects
 never exported. `validate.py` and `validate.mjs` reject an `{account}` token
 in any address of the four service contracts; the internal workspace runtime
 contract is not tenant-facing.
+
+Account isolation covers subjects, reply inboxes and JetStream. Identical
+subject and inbox names in different accounts refer to separate traffic;
+JetStream streams, consumers and stored messages belong to their account.
+A project, namespace or actor in a payload cannot choose a tenant or grant
+access to another account. Tenant-facing subjects remain unchanged.
+
+This section defines the required boundary, not deployed broker behavior.
+The [messaging package](../messaging/README.md) implements request principals,
+shared Client/Server addressing, account-token stripping before routing and
+service queue groups. Broker subject rewriting through exports/imports,
+operator-mode setup, account provisioning and registry persistence are deferred.
+So are database tenant migrations and RLS,
+per-attempt credentials and live NATS/database isolation suites. The internal
+workspace runtime contract retains its separate `oe.internal.v1` scope.
 
 ## Messages
 
