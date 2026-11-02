@@ -19,3 +19,11 @@ one tool, narrowed by its `when` (checked at apply against the tool's
 [cedar-python](https://pypi.org/project/cedar-python/), a Python binding over the
 Rust `cedar-policy` crate, and `authorization.py` holds the schema, the
 condition and ceiling checks, and the decision.
+
+Every table is tenant-scoped, including policies. Resource names are unique by
+(tenant_id, namespace, name); row IDs may repeat in different tenants.
+connection_name and workspace_name identify resources within the owning row's
+tenant. These are cross-service logical references, not cross-database foreign
+keys. A future store must derive all queries and cross-service references from
+its tenant-scoped handle/principal from inception; no store or runtime
+connection/workspace resolution exists yet.
