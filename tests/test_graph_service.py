@@ -1762,7 +1762,7 @@ def test_compiled_yaml_terminal_accepts_json_outputs(tmp_path, monkeypatch, incl
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('only_agent', ['codex', 'claude', 'opencode'])
+@pytest.mark.parametrize('only_agent', ['codex', 'claude'])
 def test_default_workflow_can_use_one_ready_agent_for_both_stages(tmp_path, only_agent):
     from engine.graph_runtime.inputs import ROUND_ROBIN, choose_runners
     from engine.runtime.workflows import load_workflow_file
@@ -1781,6 +1781,28 @@ def test_default_workflow_can_use_one_ready_agent_for_both_stages(tmp_path, only
             picked = choose_runners(graph.inputs, inputs, usage=dict, turns={}, available=ready)
             assert picked['implementation_runner'] == picked['review_runner'] == only_agent
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('policy', ['round-robin', 'least-utilized'])
+def test_default_workflow_automatic_pool_excludes_opencode(tmp_path, policy):
+    from engine.graph_runtime.inputs import choose_runners
+    from engine.runtime.workflows import load_workflow_file
+
+    path = tmp_path / 'starter.py'
+    path.write_text(starters.source())
+    graph = load_workflow_file(path)[0]
+    inputs = dict.fromkeys(('implementation_runner', 'review_runner'), policy)
+    turns = {}
+    for _ in range(6):
+        picked = choose_runners(
+            graph.inputs, inputs, usage=lambda: {'opencode': 0},
+            turns=turns, available=('codex', 'claude', 'opencode'),
+        )
+        assert set(picked.values()) <= {'codex', 'claude'}
+    with pytest.raises(ValueError, match='no installed and signed-in runner'):
+        choose_runners(
+            graph.inputs, inputs, usage=dict, turns={}, available=('opencode',),
+        )
 
 
 def test_invalid_model_is_excluded_from_auto_selection_but_explicit_choice_fails(tmp_path):
