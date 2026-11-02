@@ -300,7 +300,7 @@ def test_default_python_graph_uses_module_metadata(tmp_path: Path) -> None:
         async with graph_service(tmp_path) as service:
             graph, created = await service.add_graph("default", source=starters.source(), format="python")
             assert created and graph["name"] == starters.DEFAULT
-            assert graph["description"].startswith("Implement, check CI")
+            assert graph["description"].startswith("Implement, check local quality and CI")
             assert graph["definition"]["workflowId"] == starters.DEFAULT
             assert str(service.workflows()[0].graph_id) == graph["versionId"]
             again, created = await service.add_graph("default", source=starters.source(), format="python")

@@ -1,0 +1,22 @@
+version = 1
+
+[[checks]]
+id = "lint"
+command = ["uv", "run", "--offline", "--no-sync", "ruff", "check", "--output-format", "concise"]
+files = ["packages/**/*.py", "apps/**/*.py"]
+
+[[checks]]
+id = "types"
+command = ["uv", "run", "--offline", "--no-sync", "pyright"]
+files = ["pyrightconfig.json"]
+
+[[checks]]
+id = "structure"
+command = ["uv", "run", "--offline", "--no-sync", "pytest", "tests/test_boundaries.py", "tests/test_layout_helpers.py"]
+files = ["tests/test_boundaries.py", "tests/test_layout_helpers.py", "packages/**/*.py"]
+
+[[checks]]
+id = "tests"
+command = ["uv", "run", "--offline", "--no-sync", "pytest"]
+files = ["tests/test_*.py"]
+timeout = 1800

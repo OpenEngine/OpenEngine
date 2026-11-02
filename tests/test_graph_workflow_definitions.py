@@ -179,6 +179,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "spec",
         "naming",
         "implementation",
+        "quality",
         "ci-check",
         "review-security",
         "review-bugs",
@@ -196,6 +197,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Specification",
         "Naming",
         "Implementation",
+        "Local quality",
         "CI check",
         "Review (Security)",
         "Review (Bugs & task adherence)",
@@ -213,6 +215,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Planning",
         "Planning",
         "Planning",
+        "Implementation",
         "Implementation",
         "Implementation",
         "Review",
@@ -245,6 +248,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "agent",
         "agent",
         "tool",
+        "tool",
         "agent",
         "agent",
         "agent",
@@ -264,6 +268,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         True,
         False,
         True,
+        False,
         False,
         True,
         True,
@@ -456,6 +461,8 @@ def test_review_feedback_returns_to_implementation_at_most_once(
             if name == module.IMPLEMENTATION:
                 prompts.append(implementation.prompt(state))
                 return {"pr_url": pr_url}
+            if name == "quality":
+                return {"quality_check": {"passed": True}}
             if name == module.CI_CHECK:
                 return {"ci_check": {"passed": True}}
             return {}
@@ -519,6 +526,8 @@ def test_a_disconnected_run_is_told_to_stay_off_the_forge(
             visited.append(name)
             if name in (module.IMPLEMENTATION, module.IMPACT_ANALYSIS):
                 prompts.setdefault(name, []).append(nodes[name].prompt(state))
+            if name == "quality":
+                return {"quality_check": {"passed": True}}
             if name == module.CI_CHECK:
                 return {"ci_check": {"passed": True, "skipped": True}}
             return {}
@@ -584,6 +593,8 @@ def test_a_run_started_in_review_triages_before_it_fixes(monkeypatch) -> None:
                 return {"pr_url": pr_url}
             if name == "review-security":
                 prompts.setdefault(name, nodes[name].prompt(state))
+            if name == "quality":
+                return {"quality_check": {"passed": True}}
             if name == module.CI_CHECK:
                 return {"ci_check": {"passed": True}}
             if name == module.TRIAGE:
@@ -1027,6 +1038,8 @@ def test_default_graph_optional_steps_and_bounded_fix(spec, adversarial, review_
     def stub(name):
         def run(state):
             visited.append(name)
+            if name == "quality":
+                return {"quality_check": {"passed": True}}
             if name == module.CI_CHECK:
                 return {"ci_check": {"passed": True}}
             if name == module.RERANKER:

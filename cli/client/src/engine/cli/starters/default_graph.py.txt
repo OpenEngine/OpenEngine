@@ -1,6 +1,6 @@
 """Implementation and review, run as a graph.
 
-    workspace -> naming -> implementation -> ci-check -> [review facets] -> reranker -> impact-analysis -> human-review
+    workspace -> naming -> implementation -> quality -> ci-check -> [review facets] -> reranker -> impact-analysis -> human-review
 
 The review stage fans out to five parallel reviewers, each examining the
 change from a single angle (security, bugs & task adherence, performance,
@@ -14,7 +14,7 @@ A run can instead start in the review state (`engine.domain.states`), pointed
 at an existing change -- a pull request, or a branch -- through the `ref` and
 `pr_url` inputs. It is checked out at that change and goes straight to review:
 
-    workspace -> [review facets] -> reranker -> triage -> (implementation -> ci-check -> review ...)
+    workspace -> [review facets] -> reranker -> triage -> (implementation -> quality -> ci-check -> review ...)
 
 Nothing is posted; a person is shown the surviving findings at *triage* and
 chooses which to fix, and each fix is reviewed again before triage asks again.
@@ -26,6 +26,8 @@ tools and skip CI themselves, and the prompts are filled from the shared
 """
 
 import json
+
+from engine.graph_runtime_langgraph.components.quality import QualityGate, after_quality, quality_feedback
 
 from engine.graph_runtime_langgraph.components.change_prompts import (
     IMPLEMENTATION_PROMPT, FACET_REVIEW_PROMPT, RERANKER_PROMPT,
@@ -273,6 +275,10 @@ def _push_to(state: Mapping[str, Any]) -> str:
 
 
 def _implementation_prompt(state: Mapping[str, Any]) -> str:
+    if quality_feedback(state):
+        return (quality_feedback(state) + "Read the code, repair the failures, "
+                + UPDATE_CHANGE(state) + _push_to(state) + " Return the branch and pr_url outputs.\nOriginal task:\n"
+                + str(state.get("task", "")))
     ci = state.get("ci_check")
     if isinstance(ci, dict) and ci.get("passed") is False:
         return (
@@ -410,6 +416,7 @@ def pipeline(
         ),
     )
 
+    builder.add_node("quality", QualityGate())
     builder.add_node(CI_CHECK, CICheck())
 
     # ---- review fan-out: one node per facet, run in parallel ----------------
@@ -567,7 +574,8 @@ def pipeline(
     builder.add_edge(SPEC, NAMING)
     builder.add_edge(NAMING, IMPLEMENTATION)
 
-    builder.add_edge(IMPLEMENTATION, CI_CHECK)
+    builder.add_edge(IMPLEMENTATION, "quality")
+    builder.add_conditional_edges("quality", after_quality, [IMPLEMENTATION, CI_CHECK])
     builder.add_conditional_edges(
         CI_CHECK, _after_ci,
         [IMPLEMENTATION, *(_review_node_name(f.id) for f in REVIEW_FACETS)],
@@ -637,7 +645,7 @@ def graph_for(
         ),
         id="implementation-review-rerank",
         name="Implementation review rerank",
-        description="Implement, check CI, review parallel facets, rerank, fix once, and ask for human review.",
+        description="Implement, check local quality and CI, review parallel facets, rerank, fix once, and ask for human review.",
         previous_ids=PREVIOUS_IDS,
         inputs=(
             WorkflowInput("instruction", "Instruction"),

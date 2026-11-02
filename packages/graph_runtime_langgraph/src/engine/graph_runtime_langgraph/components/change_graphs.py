@@ -29,6 +29,7 @@ from engine.graph_runtime_langgraph.components.review_publish import ApprovalChe
 from engine.ports import WorkspaceProvider
 from engine.graph_runtime_langgraph.executions import current_execution
 from engine.runtime.change_requests import change_request
+from engine.graph_runtime_langgraph.components.quality import QualityGate, after_quality, quality_feedback
 
 
 def enabled(state: Mapping[str, Any], key: str) -> bool:
@@ -190,9 +191,9 @@ class Components:
 
     def implementation(self, *, fixing: bool = False) -> ACPNode:
         def prompt(state: Mapping[str, Any]) -> str:
-            if fixing or state.get('review_rounds') == 1 or state.get('ci_check', {}).get('passed') is False:
+            if quality_feedback(state) or fixing or state.get('review_rounds') == 1 or state.get('ci_check', {}).get('passed') is False:
                 return (
-                    'Read the code and make the smallest complete fixes. Test the change. '
+                    quality_feedback(state) + 'Read the code and make the smallest complete fixes. Test the change. '
                     + UPDATE_CHANGE(state) + ' Return the branch and pr_url outputs. '
                     + ('Use the existing target branch ' + str(state.get('inputs', {}).get('ref', ''))
                        + '; commit on that branch (check it out first if needed). When connected, push that branch to the same PR without opening another PR. ' if fixing else '')
@@ -269,6 +270,7 @@ def implement(components: Components) -> GraphWorkflow:
         + str(s.get('task', ''))))
     b.add_node('naming', NamingNode(agent=c.runner, registry=c.agents, cwd=checkout, session_config=c.config))
     b.add_node('implementation', c.implementation())
+    b.add_node('quality', QualityGate())
     b.add_node('ci-check', CICheck())
     for key, node in c.reviews().items():
         b.add_node(key, node)
@@ -277,7 +279,8 @@ def implement(components: Components) -> GraphWorkflow:
     b.add_conditional_edges('workspace', lambda s: 'spec' if enabled(s, 'spec') else 'naming', ['spec', 'naming'])
     b.add_edge('spec', 'naming')
     b.add_edge('naming', 'implementation')
-    b.add_edge('implementation', 'ci-check')
+    b.add_edge('implementation', 'quality')
+    b.add_conditional_edges('quality', after_quality, ['implementation', 'ci-check'])
     b.add_conditional_edges('ci-check', lambda s: _fanout(s) if s['ci_check']['passed'] else 'implementation',
                             ['implementation', *c.reviews()])
     b.add_edge(list(c.reviews()), 'reranker')
@@ -326,6 +329,7 @@ def fix(components: Components) -> GraphWorkflow:
     b.add_node('workspace', FixWorkspace(provider=c.provider, ref_input='ref'))
     b.add_node('threads', review_threads)
     b.add_node('implementation', c.implementation(fixing=True))
+    b.add_node('quality', QualityGate())
     b.add_node('ci-check', CICheck())
     b.add_node('reply', c.agent('reply', lambda s: ANSWER_REVIEW(s)
         + 'Report the completed fixes and any remaining unresolved requests. Do not modify code.\n'
@@ -334,7 +338,8 @@ def fix(components: Components) -> GraphWorkflow:
     b.add_edge(START, 'workspace')
     b.add_edge('workspace', 'threads')
     b.add_conditional_edges('threads', lambda s: 'implementation' if s.get('threads') else END, ['implementation', END])
-    b.add_edge('implementation', 'ci-check')
+    b.add_edge('implementation', 'quality')
+    b.add_conditional_edges('quality', after_quality, ['implementation', 'ci-check'])
     b.add_conditional_edges('ci-check', lambda s: 'reply' if s['ci_check']['passed'] else 'implementation', ['reply', 'implementation'])
     b.add_edge('reply', END)
     return _workflow(b, 'fix', c.runner, WorkflowInput('ref', 'Branch'), WorkflowInput('pr_url', 'Pull request'),

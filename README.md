@@ -73,6 +73,7 @@ Findings go back for one fix-and-review round before a human sees the PR. The so
 
 ## Learn more
 
+- [Local quality gate](docs/local-quality.md) — deterministic checks before review
 - [Docs](https://openengine.cc/docs/) — getting started, graphs, loops, CLI reference, integrations
 - [Blog](https://openengine.cc/blog/) — how we use OpenEngine, benchmarks, and what the loops find
 - [CLI reference](cli/README.md) — every `oe` command

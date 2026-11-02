@@ -55,8 +55,16 @@ jobs:
       - name: Build web client
         run: npm --prefix apps/web run build
 
-      - name: Run tests
-        run: uv run pytest
+      - name: Repository quality gate
+        run: python scripts/quality.py
+
+      - name: Upload quality reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: quality-reports
+          path: .engine/quality
+          include-hidden-files: true
 
       - name: Run OpenEngine
         shell: bash

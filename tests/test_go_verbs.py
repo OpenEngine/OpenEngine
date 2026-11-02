@@ -168,6 +168,8 @@ def test_builtin_default_routes_inputs(tmp_path, entry, mode, adversarial):
     def stub(key):
         def invoke(state):
             visited.append(key)
+            if key == 'quality':
+                return {'quality_check': {'passed': True}}
             if key in ('ci-check', 'fix-ci'):
                 return {'ci_check': {'passed': True}}
             if key == 'reranker':
@@ -191,7 +193,7 @@ def test_builtin_default_routes_inputs(tmp_path, entry, mode, adversarial):
         if adversarial:
             assert visited.index('refute') < visited.index('reranker')
     else:
-        assert visited == ['workspace', 'threads', 'implementation', 'ci-check', 'reply']
+        assert visited == ['workspace', 'threads', 'implementation', 'quality', 'ci-check', 'reply']
 
 
 @pytest.mark.parametrize('mode', ['connected', 'disconnected'])

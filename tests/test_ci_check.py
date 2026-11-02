@@ -109,6 +109,8 @@ def test_graph_runs_implementation_again_before_review(execution):
     def stub(name):
         def run(state):
             visited.append(name)
+            if name == "quality":
+                return {"quality_check": {"passed": True}}
             if name == module.IMPLEMENTATION:
                 return {"pr_url": PR}
             return {}
@@ -122,7 +124,7 @@ def test_graph_runs_implementation_again_before_review(execution):
     ]
     result = asyncio.run(builder.compile().ainvoke(STATE))
     assert result["ci_check"]["passed"] is True
-    assert visited[:4] == ["workspace", "naming", "implementation", "implementation"]
+    assert visited[:6] == ["workspace", "naming", "implementation", "quality", "implementation", "quality"]
     assert visited.count("reranker") == 1
     assert visited[-1] == "human-review"
 
