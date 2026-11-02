@@ -35,12 +35,12 @@ each is an independently actionable substantial shared block. This intentionally
 avoids treating unrelated pairwise matches as one three-file clone.
 
 Two distinct files are permitted. A group fails only when it occurs in at least
-three distinct files and a per-file occurrence count increases relative to the
-base. Thus a third or fourth file, or an additional copy within an already
-qualifying group, fails. Existing unchanged debt and line shifts pass. Changed
-content gets a new identity: a change shared by three files fails; changing only
+three distinct files and either the total occurrence count or distinct file count
+increases relative to the base. Thus a third or fourth file, or an additional copy
+within an already qualifying group, fails. Existing unchanged debt, line shifts,
+and content-preserving relocations pass. Changed content gets a new identity: a change shared by three files fails; changing only
 one copy does not fail if the remaining matching content has no new occurrences.
-A rename into a new path counts as a new occurrence. Removing copies passes.
+Renames are matched by content rather than path. Removing copies passes.
 
 Resolve a finding by extracting an appropriate abstraction, or add an explicit
 exception to `tools/quality/duplication.json` for independently owned code:

@@ -7,7 +7,8 @@ const config = require('./duplication.json');
 
 function scan(root, options = config) {
   if (!Number.isInteger(options.minTokens) || options.minTokens < 1) throw new Error('minTokens must be a positive integer');
-  const groups = new Map();
+  const index = new Map();
+  const files = [];
   function visit(directory) {
     for (const entry of fs.readdirSync(directory, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name))) {
       const absolute = path.join(directory, entry.name);
@@ -17,6 +18,7 @@ function scan(root, options = config) {
       if (!entry.isFile() || !options.extensions.includes(path.extname(entry.name))) continue;
       const format = getFormatByFile(entry.name);
       if (!format) throw new Error(`Unsupported source: ${relative}`);
+      const fileIndex = files.push(relative) - 1;
       const source = fs.readFileSync(absolute, 'utf8');
       const tokens = tokenize(source, format).filter(t => !['comment', 'empty', 'new_line'].includes(t.type));
       for (let i = 0; i <= tokens.length - options.minTokens; i++) {
@@ -24,15 +26,40 @@ function scan(root, options = config) {
         // Values, including identifier and literal spelling, are significant. Token
         // boundaries prevent concatenation collisions; lexical roles can vary by context.
         const id = createHash('sha256').update(JSON.stringify([format, block.map(t => t.value)])).digest('hex');
-        const location = {file: relative, start: block[0].loc.start.line, end: block.at(-1).loc.end.line};
-        if (!groups.has(id)) groups.set(id, {id, locations: [], context: source.slice(block[0].range[0], block.at(-1).range[1])});
-        groups.get(id).locations.push(location);
+        // Retain only flat numeric locations until cross-file repetition is known.
+        const location = [fileIndex, block[0].loc.start.line, block.at(-1).loc.end.line,
+          block[0].range[0], block.at(-1).range[1]];
+        const previous = index.get(id);
+        if (previous) previous.push(...location);
+        else index.set(id, location);
       }
     }
   }
   visit(root);
-  // Singleton windows cannot establish baseline debt or a qualifying clone.
-  for (const [id, group] of groups) if (Object.keys(counts(group)).length < 2) groups.delete(id);
+  const groups = new Map();
+  const contexts = new Map();
+  for (const [id, records] of index) {
+    let repeated = false;
+    for (let i = 5; i < records.length; i += 5) {
+      if (records[i] !== records[0]) { repeated = true; break; }
+    }
+    if (!repeated) continue;
+    const locations = [];
+    for (let i = 0; i < records.length; i += 5) {
+      locations.push({file: files[records[i]], start: records[i + 1], end: records[i + 2]});
+    }
+    const group = {id, locations};
+    groups.set(id, group);
+    const file = files[records[0]];
+    if (!contexts.has(file)) contexts.set(file, []);
+    contexts.get(file).push({group, start: records[3], end: records[4]});
+  }
+  index.clear();
+  // Read each representative source once, only for retained repeated groups.
+  for (const [file, entries] of contexts) {
+    const source = fs.readFileSync(path.join(root, file), 'utf8');
+    for (const {group, start, end} of entries) group.context = source.slice(start, end);
+  }
   return groups;
 }
 
@@ -51,7 +78,11 @@ function findings(current, base, exceptions = []) {
   }
   return [...current.values()].filter(group => {
     const now = counts(group), before = counts(base.get(group.id));
-    if (Object.keys(now).length < 3 || !Object.keys(now).some(p => now[p] > (before[p] || 0))) return false;
+    // Content identity matches relocated copies; splitting into more files still
+    // expands a group even when its total number of copies stays the same.
+    const total = counts => Object.values(counts).reduce((sum, n) => sum + n, 0);
+    if (Object.keys(now).length < 3 ||
+        (Object.keys(now).length <= Object.keys(before).length && total(now) <= total(before))) return false;
     return !exceptions.some(e => e.id === group.id && Object.keys(now).every(p => now[p] <= (e.files[p] || 0)));
   });
 }

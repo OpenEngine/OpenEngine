@@ -70,3 +70,23 @@ test('JavaScript sources also use token-aware grouping', t => {
   const files = Object.fromEntries(['a.js', 'b.js', 'c.js'].map(n => [n, code]));
   assert.ok(findings(tree(t, files), new Map()).length);
 });
+
+test('relocated copies preserve debt, while expansion after relocation still fails', t => {
+  const base = tree(t, copies(['a', 'b', 'c']));
+  assert.equal(findings(tree(t, copies(['a', 'b', 'renamed'])), base).length, 0);
+  assert.equal(findings(tree(t, copies(['moved/a', 'moved/b', 'moved/c'])), base).length, 0);
+  assert.ok(findings(tree(t, copies(['a', 'b', 'renamed', 'fourth'])), base).length);
+  assert.ok(findings(tree(t, {...copies(['a', 'b', 'renamed']), 'a.py': block + '\n' + block}), base).length);
+  const concentrated = tree(t, {...copies(['a', 'b']), 'a.py': block + '\n' + block});
+  assert.ok(findings(tree(t, copies(['a', 'b', 'c'])), concentrated).length);
+});
+test('retained groups preserve all locations and representative context', t => {
+  const groups = tree(t, {'a.py': block + '\n' + block, 'b.py': block, 'unique.py': other});
+  assert.ok(groups.size);
+  for (const group of groups.values()) {
+    assert.deepEqual([...new Set(group.locations.map(l => l.file))], ['a.py', 'b.py']);
+    assert.equal(group.locations.length, 3);
+    assert.match(group.context, /process/);
+    assert.doesNotMatch(group.context, /alternate/);
+  }
+});
