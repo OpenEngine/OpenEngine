@@ -243,7 +243,9 @@ def test_sandbox_blocks_host_access(tmp_path, monkeypatch):
     code = f"""import os,socket
 from pathlib import Path
 assert 'QUALITY_HOST_SECRET' not in os.environ
-for mode in ('r', 'w'):
+# Require an existing file: 'w' could create a sandbox-local file in the
+# parent directory bubblewrap creates for the checkout mount.
+for mode in ('r', 'r+'):
     try:
         open({str(outside)!r}, mode)
     except OSError:
