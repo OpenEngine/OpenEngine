@@ -464,9 +464,9 @@ class GithubIngress:
     ) -> None:
         self._webhook_secret = webhook_secret
         # What the deployment's configuration says it answers, frozen at
-        # construction, beside what the registry reports since: repositories
-        # are added and withdrawn while this process runs, and the webhook
-        # answers them from the next delivery on, like the rest of the server.
+        # construction, unless `live_repositories` is given: repositories are
+        # added and withdrawn while this process runs, and the webhook answers
+        # what that reports from the next delivery on, like the rest of the server.
         self._configured = {repo.lower() for repo in (repository, *repositories) if repo}
         self._live_repositories = live_repositories
         self._authenticated_login = authenticated_login
@@ -576,12 +576,13 @@ class GithubIngress:
     def _repositories(self) -> frozenset[str]:
         """The repositories this deployment answers right now.
 
-        The startup set plus what `live_repositories` reports, so a repository
-        onboarded while this process runs is answered without a restart, and
-        one no longer reported is not.
+        What `live_repositories` reports when there is one, so a repository
+        onboarded while this process runs is answered without a restart and
+        one withdrawn is not; otherwise the startup set.
         """
-        live = self._live_repositories() if self._live_repositories is not None else ()
-        return frozenset(self._configured | frozenset(repo.lower() for repo in live if repo))
+        if self._live_repositories is None:
+            return frozenset(self._configured)
+        return frozenset(repo.lower() for repo in self._live_repositories() if repo)
 
     def _answers(self, repository: str) -> bool:
         """Whether `repository` is one this deployment is configured to answer."""

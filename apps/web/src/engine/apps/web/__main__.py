@@ -389,6 +389,9 @@ def compose_app(
     registry = RepositoryRegistry(
         loaded.config.repos, loaded.config.repo_modes, loaded.config.repository_trust,
         host_aliases=loaded.config.github.host_aliases,
+        webhook_excluded=tuple(
+            name for name, repo in loaded.config.repo_configs.items() if not repo.webhooks
+        ),
     )
     github_login_config = _github_login_config(loaded, registry)
     _require_login_off_loopback(settings, github_login_config)

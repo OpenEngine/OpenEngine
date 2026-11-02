@@ -1232,3 +1232,38 @@ def test_the_webhook_stops_answering_a_checkout_set_to_disconnected(
         browser.portal.call(app.state.github_ingress.close)
     assert response.status_code == 200
     assert handled == []
+
+
+def test_the_webhook_ignores_a_checkout_with_webhooks_disabled(
+    *, client, web_app, git_repo, tmp_path
+) -> None:
+    from engine.runtime.repositories import RepositoryRegistry
+
+    checkout = git_repo(tmp_path / "web", origin="https://github.com/other/web.git")
+    registry = RepositoryRegistry({"web": str(checkout)}, webhook_excluded=("web",))
+    app, handled = _onboarded_app(web_app=web_app, registry=registry, static_repository="acme/api")
+    body, headers = _other_web_delivery()
+    with client(app) as browser:
+        response = browser.post("/api/github/events", content=body, headers=headers)
+        browser.portal.call(app.state.github_ingress.close)
+    assert response.status_code == 200
+    assert handled == []
+
+
+def test_a_startup_repository_disconnected_while_running_is_no_longer_answered(
+    *, client, web_app, git_repo, tmp_path
+) -> None:
+    from engine.runtime.repositories import RepositoryRegistry
+
+    checkout = git_repo(tmp_path / "web", origin="https://github.com/other/web.git")
+    api = git_repo(tmp_path / "api", origin="https://github.com/acme/api.git")
+    registry = RepositoryRegistry(
+        {"web": str(checkout), "api": str(api)}, {"web": "disconnected"},
+    )
+    app, handled = _onboarded_app(web_app=web_app, registry=registry, static_repository="other/web")
+    body, headers = _other_web_delivery()
+    with client(app) as browser:
+        response = browser.post("/api/github/events", content=body, headers=headers)
+        browser.portal.call(app.state.github_ingress.close)
+    assert response.status_code == 200
+    assert handled == []

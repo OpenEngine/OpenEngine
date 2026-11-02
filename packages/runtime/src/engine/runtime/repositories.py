@@ -44,6 +44,7 @@ class RepositorySnapshot:
     trusted: frozenset[Path]
     login_repositories: tuple[str, ...]
     run_projects: Mapping[str, str]
+    webhook_repositories: tuple[str, ...] = ()
 
 
 class RepositoryRegistry:
@@ -62,8 +63,10 @@ class RepositoryRegistry:
         host_aliases: Collection[str] = (),
         projects: Mapping[str, str] | None = None,
         login_repositories: Collection[str] = (),
+        webhook_excluded: Collection[str] = (),
     ) -> None:
         self._lock = RLock()
+        self._webhook_excluded = frozenset(webhook_excluded)
         self._hosts = frozenset(host_aliases)
         self._extra_login = tuple(login_repositories)
         entries: dict[str, dict[str, object]] = {name: {"path": path} for name, path in (repos or {}).items()}
@@ -114,6 +117,12 @@ class RepositoryRegistry:
             frozenset(paths[name] for name, value in trusted.items() if value),
             tuple(dict.fromkeys((*self._extra_login, *(projects[n] for n in repos if n in projects)))),
             MappingProxyType(run_projects),
+            # Where deliveries are answered: not a disconnected checkout, which
+            # reaches nothing outside itself, nor one set to `webhooks = false`.
+            tuple(dict.fromkeys(
+                projects[n].lower() for n in repos
+                if n in projects and n not in self._webhook_excluded and modes.get(n) != "disconnected"
+            )),
         )
 
     @property
