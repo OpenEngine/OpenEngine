@@ -32,4 +32,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Guard before dropping data, including tables checked by the older tenant revision.
+    bind = op.get_bind()
+    for name in ("repositories", "graphs", "graph_revisions", "operations", "command_receipts"):
+        if bind.scalar(sa.text(f"SELECT COUNT(*) FROM {name} WHERE tenant_id != :local"),
+                       {"local": "00000000000070008000000000000001"}):
+            raise RuntimeError(f"{name} has non-local tenant rows; remove them to downgrade")
     op.drop_table("repositories")

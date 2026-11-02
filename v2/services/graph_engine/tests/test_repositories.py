@@ -120,3 +120,36 @@ def test_invalid_imported_trust_and_tenant_isolation(tmp_path):
             assert await add("cmd_bad_"+str(index), **changes) == reply
         await store.close()
     asyncio.run(exercise())
+
+
+def test_transient_discovery_can_retry_same_command(tmp_path, monkeypatch):
+    from unittest.mock import AsyncMock
+    from graph_engine import repositories
+    path = tmp_path / "repo"
+    checkout(path)
+
+    async def exercise(failure):
+        config = DatabaseConfig(sqlite_directory=tmp_path / type(failure).__name__)
+        PERSISTENCE.upgrade(config)
+        store = PERSISTENCE.open(config)
+        registry = Registry(store)
+        server = Server(None, "ge", "nats://127.0.0.1:4222",
+                        commands=registry.commands(), authorizer=LocalOperator())
+        body = {"command_id": "cmd_retry", "causal_path": ["cmd_retry"], "payload": {
+            "project": "alpha", "checkout": str(path), "base_ref": "main", "workspace_policy": "worktree"}}
+        async def send():
+            return json.loads(await server.handle(PREFIX+"control.repositories.add", json.dumps(body).encode()))
+        with monkeypatch.context() as patch:
+            if isinstance(failure, OSError):
+                patch.setattr(repositories.asyncio, "create_subprocess_exec", AsyncMock(side_effect=failure))
+            else:
+                async def timeout(awaitable, seconds):
+                    awaitable.close()
+                    raise TimeoutError
+                patch.setattr(repositories.asyncio, "wait_for", timeout)
+            reply = await send()
+            assert reply["error"]["code"] == "UNAVAILABLE" and reply["error"]["retryable"]
+        assert (await send())["status"] == "accepted"
+        await store.close()
+    for failure in (OSError("temporary"), TimeoutError()):
+        asyncio.run(exercise(failure))

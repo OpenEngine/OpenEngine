@@ -3,8 +3,8 @@
 Run from `v2/`. `uv sync` printed:
 
 ```text
-Resolved 54 packages in 10ms
-Checked 53 packages in 6ms
+Resolved 54 packages in 4ms
+Checked 53 packages in 7ms
 ```
 
 Exact service walkthrough output:
@@ -19,13 +19,13 @@ $ uv run oe up
 | (_) |  _/ _|| .` | _|| .` | (_ || || .` | _|
  \___/|_| |___|_|\_|___|_|\_|\___|___|_|\_|___|
 
-NAME        PID    STATUS   ADDRESS
-supervisor  57456  ready
-nats        57460  ready    nats://127.0.0.1:4222
-cxn         57462  running
-ge          57463  ready    http://127.0.0.1:52928/healthz
-tools       57464  running
-vcp         57465  ready    http://127.0.0.1:52926/healthz
+NAME        PID   STATUS   ADDRESS
+supervisor  3675  ready
+nats        3678  ready    nats://127.0.0.1:4222
+cxn         3680  running
+ge          3681  ready    http://127.0.0.1:56773/healthz
+tools       3682  running
+vcp         3684  ready    http://127.0.0.1:56775/healthz
 
 $ uv run oe repo add .. --project alpha --base-ref main --workspace-policy worktree --no-trust
 CHECKOUT                                        PROJECT  BASE REF  WORKSPACE POLICY  TRUST
@@ -52,13 +52,13 @@ $ uv run oe up
 | (_) |  _/ _|| .` | _|| .` | (_ || || .` | _|
  \___/|_| |___|_|\_|___|_|\_|\___|___|_|\_|___|
 
-NAME        PID    STATUS   ADDRESS
-supervisor  57602  ready
-nats        57607  ready    nats://127.0.0.1:4222
-cxn         57608  running
-ge          57609  ready    http://127.0.0.1:52952/healthz
-tools       57610  running
-vcp         57612  ready    http://127.0.0.1:52954/healthz
+NAME        PID   STATUS   ADDRESS
+supervisor  3859  ready
+nats        3863  ready    nats://127.0.0.1:4222
+cxn         3864  running
+ge          3865  ready    http://127.0.0.1:56809/healthz
+tools       3866  running
+vcp         3867  ready    http://127.0.0.1:56810/healthz
 
 $ uv run oe repo list --project alpha
 CHECKOUT                                        PROJECT  BASE REF  WORKSPACE POLICY  TRUST
@@ -67,5 +67,4 @@ CHECKOUT                                        PROJECT  BASE REF  WORKSPACE POL
 $ uv run oe repo get --project beta
 CHECKOUT                                        PROJECT  BASE REF  WORKSPACE POLICY  TRUST
 /private/tmp/engine-workspaces/ws-cc4581bae439  beta     HEAD      worktree          trusted
-
 ```

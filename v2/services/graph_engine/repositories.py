@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from openengine.messaging.errors import invalid_argument
+from openengine.messaging.errors import ErrorCode, ServiceError, invalid_argument
 
 
 async def discover(checkout: str, base_ref: str) -> str:
@@ -21,7 +21,7 @@ async def discover(checkout: str, base_ref: str) -> str:
         except TimeoutError:
             process.kill()
             await process.communicate()
-            raise invalid_argument([("payload.checkout", "local discovery timed out")]) from None
+            raise ServiceError(ErrorCode.UNAVAILABLE, "local discovery timed out") from None
         if process.returncode:
             raise invalid_argument([("payload.checkout", "must be a working checkout with a valid base ref")])
         return stdout.decode().rstrip("\n")
@@ -31,6 +31,8 @@ async def discover(checkout: str, base_ref: str) -> str:
             raise invalid_argument([("payload.checkout", "bare repositories are not supported")])
         root = await read("rev-parse", "--show-toplevel")
         await read("rev-parse", "--verify", "--end-of-options", base_ref + "^{commit}")
-    except (OSError, UnicodeError):
+    except OSError:
+        raise ServiceError(ErrorCode.UNAVAILABLE, "cannot execute local discovery") from None
+    except UnicodeError:
         raise invalid_argument([("payload.checkout", "cannot discover local checkout")]) from None
     return str(Path(root).resolve())

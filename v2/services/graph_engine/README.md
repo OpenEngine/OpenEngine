@@ -115,5 +115,8 @@ GE also serves `repositories.add`, `repositories.list` and `repositories.get`.
 One tenant/project-scoped local checkout default stores its canonical checkout,
 base ref, workspace policy and nullable explicit trust decision. Registration
 is read-only discovery followed by an atomic defaults/operation/receipt write.
+Git execution failures and timeouts return retryable UNAVAILABLE without a receipt;
+retry the same command ID after recovery. Downgrade checks non-local tenant rows
+before dropping repository data.
 Only true grants trust; false and unset require approval. No imported settings
 are read. See the [onboarding reference](../../../docs/repository-onboarding.md#v2-local-registration-ticket-1056-part-1).

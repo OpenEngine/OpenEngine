@@ -333,6 +333,8 @@ class Registry:
                     ErrorCode.DEADLINE_EXCEEDED, str(late),
                     details={"deadline_at": request.body["deadline_at"], "received_at": _timestamp(late.received)}))
             except ServiceError as error:
+                if error.retryable:
+                    raise
                 return await self._reject(request, command, error)
         except CommandIdConflict as conflict:
             raise ServiceError(ErrorCode.COMMAND_ID_CONFLICT, str(conflict),
