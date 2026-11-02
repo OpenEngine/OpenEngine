@@ -53,7 +53,8 @@ def test_registration_restart_and_read_only_discovery(tmp_path):
                     assert accepted == accepted_by_project[project]
                 accepted_by_project[project] = accepted
                 assert await send("control.repositories.add", body) == accepted
-                changed = json.loads(json.dumps(body)); changed["payload"]["base_ref"] = "held"
+                changed = json.loads(json.dumps(body))
+                changed["payload"]["base_ref"] = "held"
                 assert (await send("control.repositories.add", changed))["error"]["code"] == "COMMAND_ID_CONFLICT"
                 for action in ("get", "list"):
                     reply = await send("query.repositories." + action, {"params": {"project": project}})
