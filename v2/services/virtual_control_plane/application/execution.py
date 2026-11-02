@@ -160,7 +160,7 @@ class Execution:
                 path = (root / value).resolve(strict=True)
                 if not path.is_relative_to(root) or (not path.is_dir() if directory else not path.is_file()):
                     raise ValueError()  # noqa: TRY301 -- normalize path failures
-        except (OSError, ValueError, RuntimeError):
+        except (OSError, ValueError, RuntimeError, KeyError, TypeError):
             raise invalid_argument([("context", "paths must exist inside the authorized workspace root")]) from None
 
     async def get(self, request):

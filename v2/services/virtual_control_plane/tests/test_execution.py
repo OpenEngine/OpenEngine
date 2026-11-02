@@ -422,3 +422,21 @@ def test_preparation_releases_writer_and_revalidates(tmp_path, change):
             assert reply["error"]["code"] == ("INVALID_STATE" if change in ("session", "ownership") else "UNAVAILABLE")
         await store.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("context", [{}, None, {"references": []},
+    {"references": [], "working_directory": 7, "instruction_files": []},
+    {"references": [], "working_directory": ".", "instruction_files": None}])
+def test_malformed_context_records_rejection(tmp_path, context):
+    async def scenario():
+        _, store, _, service = await setup(tmp_path)
+        service.context.value = context
+        req = request()
+        reply = await service.execute(req)
+        assert reply["status"] == "rejected"
+        assert reply["error"]["code"] == "INVALID_ARGUMENT"
+        await assert_empty(store)
+        service.context.value = {"working_directory": ".", "instruction_files": ["AGENTS.md"], "references": []}
+        assert await service.execute(req) == reply
+        await store.close()
+    asyncio.run(scenario())
