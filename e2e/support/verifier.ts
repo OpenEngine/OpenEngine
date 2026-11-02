@@ -1,10 +1,10 @@
 import type { Page } from "@playwright/test"
 
 /**
- * What the benchmark's verifier (tests/benchmark/verify.spec.ts) uses to drive the calculator the agents built. It knows
- * nothing of how the page is made: keys are the buttons whose visible name is the key's label, and the display is any
- * visible text that is not a key. There are no ids, classes or test ids to depend on, so any markup that shows the keys
- * and the answer passes.
+ * What the benchmark's verifier (the `@verify` tests in tests/benchmark/benchmark.spec.ts) uses to check what the agents
+ * built. It knows nothing of how the page is made: keys are the buttons whose visible name is the key's label, and the
+ * display is any visible text that is not a key. There are no ids, classes or test ids to depend on, so any markup that
+ * shows the keys and the answer passes.
  */
 
 /** How long a key may take to be found or the display to change, in milliseconds. A page that never shows it has failed, not hung. */
@@ -25,3 +25,26 @@ export async function expectDisplay(page: Page, shows: string) {
     await page.waitForTimeout(100)
   }
 }
+
+/**
+ * What the verifier's docs check looks for in the calculator's README: that it says how to run, test and deploy it. Only
+ * that each subject is there; whether the instructions work is for the person who checks the run.
+ */
+export const README_COVERS: Record<string, RegExp> = {
+  run: /\b(run|open|start|serve)\b/i,
+  test: /\btests?\b/i,
+  deploy: /\b(deploy|publish)/i,
+}
+
+/** A release's tag: a semver version, with or without a leading `v`. */
+export const SEMVER_TAG = /^v?\d+\.\d+\.\d+$/
+
+/**
+ * Whether a merged pull request's Conventional Commits title makes a release, and so must be in the changelog: `feat`,
+ * `fix`, `perf` or a breaking change (`!`). `docs`, `chore` and the rest do not, release-please's and semantic-release's
+ * own release pull requests among them.
+ */
+export const makesRelease = (title: string) => /^(feat|fix|perf)(\([^)]*\))?!?:|^\w+(\([^)]*\))?!:/.test(title)
+
+/** Whether the changelog names pull request `number`, as both tools do: `(#16)` or `[#16](…)`. */
+export const changelogNames = (changelog: string, number: number) => new RegExp(`#${number}\\b`).test(changelog)

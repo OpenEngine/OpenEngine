@@ -126,6 +126,13 @@ journey's run and selects it for the `verify` project; running the config withou
 `support/verifier.ts` finds the keys by their button names and the display by its visible text, so nothing depends on
 ids, classes or test ids.
 
+"Verify the docs and releases", also tagged `@verify`, runs after it and reads the calculator's repository through
+GitHub's API: the README says how to run, test and deploy it (by wording only; the person checking the run judges whether
+it is right), `CHANGELOG.md` names every merged pull request whose Conventional Commits type makes a release (`feat`,
+`fix`, `perf` or `!`), and the latest release has a semver tag with an entry in the changelog. It waits up to ten minutes
+for the release workflow to commit the changelog. Each check is a step, so `benchmark-results/verify.json` records them
+one by one.
+
 `support/mask.ts` hides a secret in a guide screenshot. Pass `mask(locator)` among the targets
 of `screenshot()`; it draws an opaque box over the element, which the benchmark must do for every
 token or secret on screen.
