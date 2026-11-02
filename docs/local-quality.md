@@ -1,11 +1,20 @@
 # Local repository quality gate
 
-Run `python scripts/quality.py` with Python 3.11+ from the target checkout
+Run `python scripts/quality.py` with Python 3.11+ on Linux with Bubblewrap installed
+(`sudo apt-get install bubblewrap` on Ubuntu) from the target checkout
 (activate `.venv` first). This is also the
 command used by CI. Install the development environment once with
 `uv sync --locked --all-packages`; subsequent gate runs use `uv run --offline
 --no-sync`, so disconnected runs need no forge or package download. A missing
-installed tool fails the gate. CI status remains an additional gate.
+installed tool fails the gate. Checks run inside a Bubblewrap namespace with no
+network or host processes, read-only system/interpreter/tool inputs, and write
+access only to the checkout and a disposable temporary directory. The environment
+is explicitly constructed; host credentials and environment variables are not
+inherited. User namespaces must be enabled. Unsupported hosts (including macOS)
+and unavailable or denied sandbox creation fail closed; use a Linux checkout or
+VM for these runs. There is no unrestricted execution fallback. Timeout and graph
+cancellation kill the check process group and its isolated process namespace
+before repair can begin. CI status remains an additional gate.
 
 `.quality.toml` belongs to the target repository and is read anew after every
 implementation or repair. Commit it and its rules so future tasks inherit them.
@@ -29,7 +38,8 @@ prompts or reload historical reviews.
 The command prints a bounded JSON result: `passed`, `diagnostics`, and `report`.
 Each diagnostic has a check/rule `id`, `file`, `line`, actionable `message`, and
 argv rendered as a reproducible `command`. Compiler-style locations are extracted
-when available; infrastructure and unlocated failures point to `.quality.toml`.
+when available (at most ten locations per check, reading at most 10,000 chunks
+of 4 KiB); infrastructure and unlocated failures point to `.quality.toml`.
 Full stdout/stderr and the complete JSON result are saved under a unique
 `.engine/quality/` report directory in the target checkout, outside prompts.
 CI uploads those directories as artifacts. Graph state retains only the bounded

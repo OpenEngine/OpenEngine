@@ -1,6 +1,7 @@
 """Local quality gate shared by implementation and repair graphs."""
 import asyncio
 import json
+import threading
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,7 +27,19 @@ class QualityGate:
     graph_node_show_in_sidebar: bool = False
 
     async def __call__(self, state: Mapping[str, Any]) -> dict[str, Any]:
-        result = await asyncio.to_thread(run_checks, Path(checkout(state)))
+        cancelled = threading.Event()
+        worker = asyncio.create_task(asyncio.to_thread(run_checks, Path(checkout(state)), cancelled))
+        try:
+            result = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled.set()
+            while not worker.done():
+                try:
+                    await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    # Repeated cancellation must not release the workspace early.
+                    continue
+            raise
         failures = state.get("quality_failures", 0) + (not result["passed"])
         if not result["passed"] and failures > 2:
             raise QualityRetriesExhausted(result["report"])

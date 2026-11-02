@@ -1,6 +1,8 @@
 """The local gate is fail closed and repairs before review without a model."""
 import asyncio
 import json
+import os
+import time
 from pathlib import Path
 import sys
 
@@ -9,7 +11,16 @@ from langgraph.graph import END, START, StateGraph
 
 from engine.graph_runtime_langgraph import State
 from engine.graph_runtime_langgraph.components.quality import QualityGate, QualityRetriesExhausted, after_quality
-from engine.graph_runtime_langgraph.quality import run_checks
+from engine.graph_runtime_langgraph.quality import run_checks, _diagnostics, _execution
+from engine.graph_runtime_langgraph import quality
+
+
+@pytest.fixture(autouse=True)
+def execution_boundary(request, monkeypatch):
+    """Unit-test orchestration separately from the Linux sandbox integration."""
+    if request.node.name.startswith("test_sandbox_"):
+        return
+    monkeypatch.setattr(quality, "_execution", lambda command, root, temporary: (command, {"PATH": os.defpath}))
 
 
 def configure(root, command, files=None):
@@ -158,3 +169,117 @@ def test_pytest_failure_summary_is_actionable(tmp_path):
     assert result["diagnostics"][0]["line"] == 42
     assert "test_rule" in result["diagnostics"][0]["message"]
     assert "forbidden import" in result["diagnostics"][0]["message"]
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_process_tree_stops_before_return(tmp_path, cancel):
+    child = "import time; time.sleep(0.6); open('leftover', 'w').write('alive')"
+    parent = ("import subprocess,sys,time; subprocess.Popen([sys.executable,'-c'," + repr(child)
+              + "]); open('ready','w').write('ready'); time.sleep(30)")
+    configure(tmp_path, [sys.executable, "-c", parent])
+    with (tmp_path / ".quality.toml").open("a") as config:
+        config.write("timeout = 0.2\n" if not cancel else "timeout = 30\n")
+
+    async def run():
+        task = asyncio.create_task(QualityGate()({"workspace": str(tmp_path)}))
+        if cancel:
+            for _ in range(200):
+                if (tmp_path / "ready").exists():
+                    break
+                await asyncio.sleep(0.01)
+            assert (tmp_path / "ready").exists()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            assert not (await task)["quality_check"]["passed"]
+    asyncio.run(run())
+    time.sleep(0.8)
+    assert not (tmp_path / "leftover").exists()
+
+
+def test_large_failure_output_is_bounded(tmp_path):
+    log = tmp_path / "large.log"
+    with log.open("w") as output:
+        output.write("x" * 2_000_000 + "\n")
+        for _ in range(100):
+            output.write("scan.py:7:2: Q001 fix this\n")
+    started = time.monotonic()
+    diagnostics = _diagnostics(log, "example", "check")
+    assert time.monotonic() - started < 2
+    assert len(diagnostics) == 10
+    assert all(d["file"] == "scan.py" and d["line"] == 7 for d in diagnostics)
+
+
+def test_sandbox_missing_fails_closed(tmp_path, monkeypatch):
+    configure(tmp_path, [sys.executable, "-c", "open('executed','w').close()"])
+    monkeypatch.setattr(quality.shutil, "which", lambda *args, **kwargs: None)
+    monkeypatch.setattr(quality.sys, "platform", "linux")
+    result = run_checks(tmp_path)
+    assert not result["passed"]
+    assert "sandbox unavailable" in result["diagnostics"][0]["message"]
+    assert not (tmp_path / "executed").exists()
+
+
+def test_sandbox_permissions_are_explicit(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUALITY_HOST_SECRET", "hidden")
+    monkeypatch.setattr(quality.sys, "platform", "linux")
+    monkeypatch.setattr(quality.shutil, "which", lambda name, **kwargs: "/usr/bin/" + name)
+    argv, environment = _execution(["python3", "scan.py"], tmp_path, tmp_path / "temporary")
+    assert argv[0] == "/usr/bin/bwrap"
+    assert "--unshare-all" in argv and "--die-with-parent" in argv
+    assert "QUALITY_HOST_SECRET" not in environment
+    assert environment["HOME"] == str(tmp_path / "temporary")
+    assert "--ro-bind" in argv
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Quality sandbox requires Linux with bubblewrap")
+def test_sandbox_blocks_host_access(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUALITY_HOST_SECRET", "hidden")
+    outside = tmp_path / "host-secret"
+    outside.write_text("secret")
+    root = tmp_path / "checkout"
+    root.mkdir()
+    code = f"""import os,socket
+from pathlib import Path
+assert 'QUALITY_HOST_SECRET' not in os.environ
+for mode in ('r', 'w'):
+    try:
+        open({str(outside)!r}, mode)
+    except OSError:
+        pass
+    else:
+        raise AssertionError('host access allowed')
+s = socket.socket()
+try:
+    s.connect(('1.1.1.1', 80))
+except OSError:
+    pass
+else:
+    raise AssertionError('network allowed')
+try:
+    Path('.engine/injected').write_text('bad')
+except OSError:
+    pass
+else:
+    raise AssertionError('artifact writes allowed')
+Path('checked').write_text('ok')
+import subprocess,sys
+subprocess.Popen([sys.executable, '-c', "import time; time.sleep(0.3); open('detached','w').close()"], start_new_session=True)
+"""
+    configure(root, [sys.executable, "-c", code])
+    result = run_checks(root)
+    assert result["passed"], result
+    assert (root / "checked").read_text() == "ok"
+    assert outside.read_text() == "secret"
+    time.sleep(0.5)
+    assert not (root / "detached").exists()
+
+
+def test_artifact_symlink_cannot_redirect_host_writes(tmp_path):
+    root = tmp_path / "checkout"
+    root.mkdir()
+    (root / ".engine").symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(ValueError, match="must not be symlinks"):
+        run_checks(root)
+    assert not (tmp_path / "quality").exists()

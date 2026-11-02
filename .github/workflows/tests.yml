@@ -55,8 +55,13 @@ jobs:
       - name: Build web client
         run: npm --prefix apps/web run build
 
+      - name: Install quality sandbox
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
       - name: Repository quality gate
-        run: python scripts/quality.py
+        run: |
+          source .venv/bin/activate
+          python scripts/quality.py
 
       - name: Upload quality reports
         if: always()
