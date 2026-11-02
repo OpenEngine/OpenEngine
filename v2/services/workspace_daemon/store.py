@@ -206,6 +206,10 @@ class Transaction:
         query = _ATTEMPT if state is None else _ATTEMPT.where(attempts.c.state == state)
         return [_attempt(row) for row in await self._connection.execute(query.order_by(attempts.c.attempt_id))]
 
+    async def attempt_ids(self, *states: str) -> list[str]:
+        query = sa.select(attempts.c.attempt_id).where(attempts.c.state.in_(states)).order_by(attempts.c.attempt_id)
+        return list((await self._connection.execute(query)).scalars())
+
     async def save_attempt(self, attempt: dict[str, Any]) -> None:
         command = attempt["command"]
         values = {key: attempt.get(key) for key in (

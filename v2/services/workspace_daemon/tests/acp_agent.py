@@ -84,7 +84,7 @@ while True:
             child = subprocess.Popen(["/bin/sleep", "300"])
             log.with_suffix(".child").write_text(str(child.pid))
         for index in range(40 if mode == "flood" else 0):
-            chunk(session_id, f"chunk {index}. ")
+            chunk(session_id, f"{index:02d}" * 16000)  # one full 32,000-character message each
         chunk(session_id, "Inspected workspace. ")
         chunk(session_id, "Found the requested result.")
         # Cumulative context usage: not a delta, so never reported.

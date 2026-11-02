@@ -127,8 +127,8 @@ class ExecutionWorker:
     async def run_once(self) -> int:
         """Start due work; returns how many recorded attempts were launched."""
         async with self.journal.store.read() as tx:
-            recorded = [a["command"]["target"]["attempt_id"] for a in await tx.attempts("recorded")]
-            orphaned = [a["command"]["target"]["attempt_id"] for state in INTERRUPTED for a in await tx.attempts(state)]
+            recorded = await tx.attempt_ids("recorded")
+            orphaned = await tx.attempt_ids(*INTERRUPTED)
         launched = 0
         for attempt_id in recorded:
             if self._start(attempt_id, self._run(attempt_id)):

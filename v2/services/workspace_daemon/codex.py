@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import uuid4
@@ -25,13 +24,14 @@ from uuid import uuid4
 from workspace_daemon import context as task_context
 from workspace_daemon.acp import MAX_FRAME, ACPClient, ACPError
 from workspace_daemon.executor import LaunchFailed, Outcome, Progress
+from workspace_daemon.journal import now
+from workspace_daemon.launch import ENVIRONMENT
 
 log = logging.getLogger(__name__)
 
 MAX_PROMPT_BYTES = 524288
 CHUNK = 32000
 MAX_SUMMARY = 65536
-ENVIRONMENT = {"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"}
 USAGE = {"inputTokens": "input_tokens", "outputTokens": "output_tokens", "cachedReadTokens": "cache_read_tokens"}
 
 
@@ -48,10 +48,6 @@ class UnconfirmedTermination(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__("the executor process tree is not confirmed empty")
-
-
-def now() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
 
 
 def prompt_text(root: Path, instructions: list[Path], task: dict[str, Any]) -> str:
@@ -114,32 +110,44 @@ class CodexExecutor:
 
     async def wait(self, attempt_id: str, handle: dict[str, Any], progress: Progress) -> Outcome:
         client, prompt = self.running.pop(attempt_id)
-        text: list[str] = []
+        pending, summary = "", ""
+
+        async def flush(size: int) -> None:
+            # Streamed fragments are coalesced: one message per CHUNK characters and one for the rest of the turn.
+            nonlocal pending
+            while pending and len(pending) >= size:
+                await progress({"kind": "conversation", "message_id": "msg_" + uuid4().hex, "role": "agent",
+                                "text": pending[:CHUNK]})
+                pending = pending[CHUNK:]
 
         async def update(value: dict[str, Any]) -> None:
+            nonlocal pending, summary
             content = value.get("content")
             if (value.get("sessionUpdate") != "agent_message_chunk" or not isinstance(content, dict)
                     or content.get("type") != "text" or not isinstance(content.get("text"), str)):
                 return
-            text.append(content["text"])
-            for index in range(0, len(content["text"]), CHUNK):
-                await progress({"kind": "conversation", "message_id": "msg_" + uuid4().hex, "role": "agent",
-                                "text": content["text"][index:index + CHUNK]})
+            pending += content["text"]
+            summary = (summary + content["text"])[-MAX_SUMMARY:]
+            await flush(CHUNK)
 
         outcome: Outcome = ("failed", {"error": {"code": "PROVIDER_ERROR", "message": "Agent did not complete its turn",
                                                  "retryable": False}, "reason": "executor_failed"}, "killed")
         try:
             started = now()
             result = await client.prompt(prompt, update, self.prompt_timeout)
+            await flush(1)
             usage = result.get("usage") or {}
             if all(type(usage.get(key)) is int and usage[key] >= 0 for key in ("inputTokens", "outputTokens")):
                 await progress({"kind": "usage", "period_start": started, "period_end": now(), "usage": {
                     name: usage[key] for key, name in USAGE.items() if type(usage.get(key)) is int and usage[key] >= 0}})
             if result.get("stopReason") == "end_turn":
-                summary = "".join(text)[-MAX_SUMMARY:].strip() or "Agent completed the task."
-                outcome = ("completed", {"result": {"summary": summary}}, "exited")
+                outcome = ("completed", {"result": {"summary": summary.strip() or "Agent completed the task."}},
+                           "exited")
         except (ACPError, TimeoutError, OSError) as error:
             log.warning("ACP prompt failed: %s", type(error).__name__, extra={"daemon.attempt_id": attempt_id})
+        except Exception:
+            # Once the tree is fenced this is a known failure, not a lost executor.
+            log.exception("ACP prompt failed unexpectedly", extra={"daemon.attempt_id": attempt_id})
         finally:
             # A finished turn is not evidence that the agent's tools stopped.
             if not await self._stop(handle, client, client.process):
@@ -157,5 +165,9 @@ class CodexExecutor:
         if client is not None:
             await client.close()
         elif process is not None:
-            await process.wait()
+            try:
+                async with asyncio.timeout(5):
+                    await process.communicate()  # closes stdin and drains the pipes so the process is reaped
+            except (OSError, TimeoutError):
+                log.warning("adapter pipes did not close after fencing")
         return True

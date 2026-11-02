@@ -67,9 +67,9 @@ def test_conversation_and_usage_project_atomically_once_and_continue_the_convers
         await complete(server, dispatcher, worker, outbox, request("continue", session_id), "cmd_second")
         published = await events(store)  # each envelope was validated against the public contract on append
         assert [e["event_type"] for e in published] == [
-            "task.started", "conversation.message", "conversation.message", "usage.reported", "task.completed"] * 2
+            "task.started", "conversation.message", "usage.reported", "task.completed"] * 2
         messages = [e for e in published if e["event_type"] == "conversation.message"]
-        assert [m["payload"]["sequence"] for m in messages] == [1, 2, 3, 4]
+        assert [m["payload"]["sequence"] for m in messages] == [1, 2]  # one coalesced message per turn
         assert all(m["resources"]["session_id"] == session_id for m in messages)
         assert "Replayed history" not in [m["payload"]["text"] for m in messages]
         usage = [e["payload"] for e in published if e["event_type"] == "usage.reported"]

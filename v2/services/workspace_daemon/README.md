@@ -116,15 +116,17 @@ operator-configured adapter behind the same executor port as `fake`:
   capability are journaled with `running`. `continue` uses `session/load` on
   that ID and fails (rejection or `launch_failed`) if it is missing or cannot
   be loaded, never opening a new one. History replayed during load is discarded.
-- Agent message chunks become `conversation` progress (new message ID per
-  chunk, at most 32,000 characters). The prompt result's explicit
+- Streamed agent message chunks are coalesced into `conversation` progress:
+  one message (new message ID) per 32,000 characters and one for the rest of
+  the turn. The completion summary keeps only the last 64 KiB of text. The prompt result's explicit
   `inputTokens`/`outputTokens` (and `cachedReadTokens`) become one `usage`
   delta for the turn. Cumulative `usage_update` notifications, costs and
   artifacts are never reported.
 - Every prompt read and write shares a deadline (`--prompt-timeout-seconds`,
   default 3600), so an adapter that stops reading or answering fails the
   attempt. The whole process tree is fenced before any terminal update,
-  including after `end_turn`.
+  including after `end_turn`. Any other error during the turn fails the fenced
+  attempt as `executor_failed`.
 
 `supervision.py` is the only supervisor the installed daemon has. The daemon
 runs as root on Linux; each launch gets a cgroup under a root-owned delegated
@@ -136,8 +138,17 @@ removes the cgroup, so a launcher that had not joined can never join later; a
 handle from an earlier boot is already fenced. A timeout returns unconfirmed
 and the attempt stays owned. Start-up refuses the codex executor (exit 1) off
 Linux, without root, without a delegated cgroup root, or if the agent account
-owns or can write the cgroup root, launcher, journal directory or workspace
-root.
+owns or can write the cgroup root, launcher, journal directory, workspace
+root, the resolved `--codex-acp` adapter or any directory above it.
+
+Where OS enforcement stops: those checks cover only the paths themselves, not
+the trees beneath them, ACLs or the journal database file. Read-only execution
+is otherwise the ACP `read-only` mode plus operator file permissions; anything
+inside the workspace the agent account owns or can write, its HOME and `/tmp`
+stay writable to it. Every attempt on a host runs as the one configured agent
+UID, so concurrent attempts are not isolated from each other (signals,
+`/proc`, the shared HOME and Codex configuration); the cgroup bounds lifetime,
+not isolation. Run one attempt per agent account where that matters.
 
 Operator provisioning (not done by the daemon or VCP): install the Codex ACP
 adapter at an absolute path; create the agent account and authenticate Codex

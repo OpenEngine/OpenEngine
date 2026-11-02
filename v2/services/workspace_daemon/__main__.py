@@ -97,8 +97,13 @@ def executors(args, journal_directory: Path, root: Path) -> dict[str, ExecutorPo
         if (None in (args.cgroup_root, args.agent_uid, args.agent_gid, args.agent_home)
                 or not args.codex_acp.is_absolute() or args.prompt_timeout_seconds <= 0):
             raise SupervisionUnavailable(Unsupervised.CONFIGURATION)
+        try:
+            adapter = args.codex_acp.resolve(strict=True)
+        except OSError as error:
+            raise SupervisionUnavailable(Unsupervised.CONFIGURATION, str(args.codex_acp)) from error
+        # A workload able to replace the adapter, or a directory above it, would run in every later task.
         supervisor = CgroupSupervisor(args.cgroup_root, uid=args.agent_uid, gid=args.agent_gid, home=args.agent_home,
-                                      protected=(journal_directory, root))
+                                      protected=(journal_directory, root, adapter, *adapter.parents))
         configured["codex"] = CodexExecutor(args.codex_acp, supervisor, prompt_timeout=args.prompt_timeout_seconds)
     return configured
 

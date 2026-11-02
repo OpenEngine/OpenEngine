@@ -17,7 +17,7 @@ import pytest
 
 from workspace_daemon import store as journal_store
 from workspace_daemon.__main__ import executors, main, parser
-from workspace_daemon.codex import CodexExecutor
+from workspace_daemon.codex import CHUNK, CodexExecutor
 from workspace_daemon.context import read_instruction
 from workspace_daemon.executor import ExecutionWorker, FakeExecutor
 from workspace_daemon.initialization import locations
@@ -83,11 +83,12 @@ def test_context_progress_usage_permission_denial_and_continuation(tmp_path):
         await run(journal, task(model="fixture-large"))
         await drain(outbox)
         assert [u["kind"] for u in updates(vcp)] == [
-            "runtime.ready", "attempt.started", "attempt.progress", "attempt.progress", "attempt.progress", "attempt.completed"]
+            "runtime.ready", "attempt.started", "attempt.progress", "attempt.progress", "attempt.completed"]
         progress = [u["payload"] for u in updates(vcp, "attempt.progress")]
-        assert [p.get("text") for p in progress[:2]] == ["Inspected workspace. ", "Found the requested result."]
-        assert progress[2]["usage"] == {"input_tokens": 10, "output_tokens": 7, "cache_read_tokens": 3}  # no cost
-        assert progress[2]["period_start"] <= progress[2]["period_end"]
+        # Streamed fragments are coalesced into one message for the turn.
+        assert progress[0]["text"] == "Inspected workspace. Found the requested result."
+        assert progress[1]["usage"] == {"input_tokens": 10, "output_tokens": 7, "cache_read_tokens": 3}  # no cost
+        assert progress[1]["period_start"] <= progress[1]["period_end"]
         assert updates(vcp, "attempt.completed")[0]["payload"]["result"]["summary"] == \
             "Inspected workspace. Found the requested result."
         log = frames(tmp_path)
@@ -121,7 +122,7 @@ def test_context_progress_usage_permission_denial_and_continuation(tmp_path):
         assert [f["method"] for f in loads] == ["session/new", "session/load"]
         assert loads[1]["params"]["sessionId"] == first["executor_session_id"]
         texts = [u["payload"].get("text") for u in updates(vcp, "attempt.progress")]
-        assert "Replayed history" not in texts and texts.count("Inspected workspace. ") == 2
+        assert "Replayed history" not in texts and texts.count("Inspected workspace. Found the requested result.") == 2
         assert (await state(restarted, "attempt_2"))["state"] == "completed"
         await restarted.store.close()
     asyncio.run(scenario())
@@ -175,6 +176,23 @@ def test_blocked_io_and_crashes_fail_only_after_the_tree_is_fenced(tmp_path, mod
         journal, vcp, outbox = await setup(tmp_path, codex(tmp_path, mode, fence, prompt_timeout=0.5))
         # Larger than a pipe buffer, so a reader that stopped blocks the write itself.
         await run(journal, task(instruction="x" * 60000))
+        await drain(outbox)
+        failed = updates(vcp, "attempt.failed")[0]
+        assert (failed["payload"]["reason"], failed["termination"]) == ("executor_failed", "killed")
+        assert len(fence.fenced) == 1 and all(p.returncode is not None for p in fence.processes.values())
+        await journal.store.close()
+    asyncio.run(scenario())
+
+
+def test_unexpected_wait_errors_fail_the_fenced_attempt_rather_than_lose_it(tmp_path, monkeypatch):
+    async def scenario():
+        fence = GroupFence()
+        journal, vcp, outbox = await setup(tmp_path, codex(tmp_path, fence=fence))
+
+        async def broken(attempt_id, value):
+            raise ValueError(value)  # for example a journal or encoding error
+        monkeypatch.setattr(journal, "progress", broken)
+        await run(journal, task())
         await drain(outbox)
         failed = updates(vcp, "attempt.failed")[0]
         assert (failed["payload"]["reason"], failed["termination"]) == ("executor_failed", "killed")
@@ -280,7 +298,7 @@ def test_progress_waits_for_outbox_capacity_and_drops_nothing(tmp_path):
             await asyncio.sleep(0.01)
         await drain(outbox)
         texts = [u["payload"]["text"] for u in updates(vcp, "attempt.progress") if "text" in u["payload"]]
-        assert texts == [f"chunk {i}. " for i in range(40)] + ["Inspected workspace. ", "Found the requested result."]
+        assert texts == [f"{i:02d}" * (CHUNK // 2) for i in range(40)] + ["Inspected workspace. Found the requested result."]
         assert updates(vcp)[-1]["kind"] == "attempt.completed"
         await journal.store.close()
     asyncio.run(scenario())
