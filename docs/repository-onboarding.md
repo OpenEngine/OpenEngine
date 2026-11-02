@@ -141,8 +141,10 @@ settings when doing so. Merging code does not update or restart a running
 instance: run the startup check, restart, and verify repository selection in the
 live UI as part of rollout.
 
-Registering a repository does not configure its GitHub event routing;
-multi-repository webhooks are tracked in #709.
+Registering a repository with a GitHub origin also configures its GitHub event
+routing: the running webhook answers it from the next delivery on, with no
+restart. A checkout set to `disconnected` is not answered, because a run in it
+reaches nothing outside its checkout.
 
 ## Dedicated GitHub accounts and authenticated CLI onboarding
 

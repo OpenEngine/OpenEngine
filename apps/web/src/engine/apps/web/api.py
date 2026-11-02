@@ -1192,6 +1192,36 @@ async def _ready_runner_choices(
     return available
 
 
+def _webhook_repositories(registry: RepositoryRegistry, startup: Collection[str]) -> frozenset[str]:
+    """The GitHub repositories whose deliveries are answered, now.
+
+    Asked of the registry on every delivery rather than read at startup:
+    `oe repo add` publishes a new snapshot while the server runs, and a
+    disconnected or removed checkout stops being answered with it. A startup
+    repository the registry has no checkout for is kept, since nothing live
+    speaks for it. A startup repository registered under that name as
+    disconnected or `webhooks = false` is withdrawn, whatever its origin.
+    """
+    snapshot = registry.snapshot
+    known = {project.lower() for project in snapshot.projects.values()} | snapshot.webhook_withdrawn
+    return frozenset(snapshot.webhook_repositories) | {
+        repo.lower() for repo in startup if repo and repo.lower() not in known
+    }
+
+
+def _webhook_reader(registry: RepositoryRegistry, startup: Collection[str]) -> Callable[[], frozenset[str]]:
+    """`_webhook_repositories`, recomputed only when the registry publishes a new snapshot."""
+    last: list[tuple[object, frozenset[str]]] = []
+
+    def read() -> frozenset[str]:
+        snapshot = registry.snapshot
+        if not last or last[0][0] is not snapshot:
+            last[:] = [(snapshot, _webhook_repositories(registry, startup))]
+        return last[0][1]
+
+    return read
+
+
 def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding lifecycle belongs here
     session: AgentSession,
     runners: Mapping[str, AgentRunner],
@@ -4248,10 +4278,13 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
                 await github_refuse_comment(delivery)
         return may_write
 
+    webhook_repositories = _webhook_reader(repository_registry, (github_repository, *github_repositories))
+
     github_ingress = GithubIngress(
         webhook_secret=github_webhook_secret,
         repository=github_repository,
         repositories=github_repositories,
+        live_repositories=webhook_repositories,
         authenticated_login=github_posting_login,
         may_act=github_sender_may_act,
         handle=github_comment_handler or github_concierge_turn,
@@ -4300,12 +4333,7 @@ def create_app(  # noqa: PLR0913, PLR0915 -- composition boundary; onboarding li
             repository=repository,
             # Local readiness only: GitHub's webhook setup and delivery are
             # independent of whether Engine accepts this repository.
-            configured=bool(
-                repository.lower() in {
-                    repo.lower() for repo in (github_repository, *github_repositories) if repo
-                }
-                and github_webhook_secret()
-            ),
+            configured=bool(repository.lower() in webhook_repositories() and github_webhook_secret()),
         ))
 
     def _mentioned_workflow(project: str = "") -> GraphWorkflow | None:

@@ -400,7 +400,9 @@ def test_comment_panel_uses_runs_repository_before_a_pr_is_opened(
         response = browser.get("/api/runs/existing/github-comments")
     assert response.status_code == 200
     assert response.json() == {
-        "repository": "other/web", "configured": "other/web" in webhook_repositories,
+        # The repository is onboarded under [repos], and the webhook answers
+        # what the registry reports whether or not it is configured as well.
+        "repository": "other/web", "configured": True,
         "comments": [],
     }
 
