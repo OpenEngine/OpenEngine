@@ -434,3 +434,23 @@ def test_account_accepts_an_account_public_key() -> None:
 )
 def test_account_rejects(value: str) -> None:
     assert not type_accepts("account", value)
+
+
+@pytest.mark.parametrize("variant", ["8", "9", "a", "b"])
+def test_tenant_id_accepts_rfc_uuid_variants(variant: str) -> None:
+    assert type_accepts("tenant_id", f"0192f1c4-7a3e-7c2d-{variant}b1f-3e4a5b6c7d8e")
+
+
+@pytest.mark.parametrize("variant", ["0", "7", "c", "f"])
+def test_tenant_id_rejects_non_rfc_variants(variant: str) -> None:
+    assert not type_accepts("tenant_id", f"0192f1c4-7a3e-7c2d-{variant}b1f-3e4a5b6c7d8e")
+
+
+def test_node_tenant_account_address_rule() -> None:
+    if not shutil.which("node"):
+        pytest.skip("Node is needed for the Node contract validator")
+    result = subprocess.run(
+        ["node", "--test", str(CONTRACTS / "tooling/tenant-addresses.test.mjs")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
