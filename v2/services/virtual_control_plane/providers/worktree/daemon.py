@@ -7,7 +7,10 @@ The daemon holds an exclusive `flock` on its journal directory for its whole
 life, and the kernel drops that lock when it exits. Liveness and confirmed
 termination are read from that lock, never from a PID alone: a free lock is
 proof no daemon owns the journal. The recorded PID only selects which process
-to signal, after `ps` shows it is the daemon for this journal.
+to signal, and only `ps` decides which process that is: the session leader
+whose command line names this journal. A daemon started just before VCP
+crashed, with no record yet, is still found and stopped. The daemon gets a
+minimal environment, never VCP's own secrets.
 
 Launching agents and fencing their process trees is #1055's; this module only
 runs and stops the daemon.
@@ -25,14 +28,13 @@ import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, NoReturn
 
-from openengine.messaging import ErrorCode, ServiceError
+from workspace_daemon.initialization import LOCK_FILE
 
 from virtual_control_plane.application.ports import Ownership
+from virtual_control_plane.providers.errors import terminal, unavailable
+from virtual_control_plane.providers.worktree.files import write_atomically
 
-LOCK_FILE = ".daemon.lock"
-"""The daemon's own journal lock (`workspace_daemon.__main__.LOCK_FILE`)."""
 RECORD_FILE = "daemon.json"
 READY_FILE = "daemon.ready"
 LOG_FILE = "daemon.log"
@@ -40,14 +42,8 @@ EXIT_REFUSED = 2
 START_TIMEOUT_SECONDS = 30.0
 STOP_TIMEOUT_SECONDS = 10.0
 POLL_SECONDS = 0.05
-
-
-def _unavailable(message: str, **details: Any) -> NoReturn:
-    raise ServiceError(ErrorCode.UNAVAILABLE, message, retryable=True, details=details or None)
-
-
-def _terminal(message: str, **details: Any) -> NoReturn:
-    raise ServiceError(ErrorCode.PROVIDER_ERROR, message, retryable=False, details=details or None)
+INHERITED_VARIABLES = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TZ")
+"""The only parts of VCP's environment a daemon (and, from #1055, its agents) sees."""
 
 
 class HostDaemon:
@@ -55,16 +51,19 @@ class HostDaemon:
 
     `credentials` are the runtime-scoped NATS credentials file; without them
     `local_test_account` must be explicit, as the daemon itself requires.
+    `inherit` names the environment variables passed through from VCP.
     """
 
     def __init__(self, nats_url: str, *, credentials: Path | None = None, local_test_account: bool = False,
                  command: Sequence[str] = (sys.executable, "-m", "workspace_daemon"),
-                 start_timeout: float = START_TIMEOUT_SECONDS, stop_timeout: float = STOP_TIMEOUT_SECONDS) -> None:
+                 start_timeout: float = START_TIMEOUT_SECONDS, stop_timeout: float = STOP_TIMEOUT_SECONDS,
+                 inherit: Sequence[str] = INHERITED_VARIABLES) -> None:
         if not credentials and not local_test_account:
             raise ValueError("provision runtime credentials or explicitly allow the local test account")  # noqa: TRY003
         self.nats_url, self.credentials, self.local_test_account = nats_url, credentials, local_test_account
         self.command = tuple(command)
         self.start_timeout, self.stop_timeout = start_timeout, stop_timeout
+        self.inherit = tuple(inherit)
         self._children: dict[str, subprocess.Popen] = {}
 
     @staticmethod
@@ -103,26 +102,28 @@ class HostDaemon:
         log = os.open(directory / LOG_FILE, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600)
         try:
             # Its own session: VCP's signals and exit never reach it, and its group can be signalled as one.
-            process = subprocess.Popen(arguments, cwd=directory, stdin=subprocess.DEVNULL, stdout=log,
+            environment = {name: os.environ[name] for name in self.inherit if name in os.environ}
+            process = subprocess.Popen(arguments, cwd=directory, env=environment, stdin=subprocess.DEVNULL, stdout=log,
                                        stderr=subprocess.STDOUT, start_new_session=True)
         except OSError as error:
-            _terminal(f"cannot start the workspace daemon: {error.strerror or error}")
+            terminal(f"cannot start the workspace daemon: {error.strerror or error}")
         finally:
             os.close(log)
         self._children[ownership.runtime_id] = process
-        _write(directory / RECORD_FILE, {"pid": process.pid, "workspace_id": ownership.workspace_id,
-                                         "runtime_id": ownership.runtime_id, "generation": ownership.generation})
+        write_atomically(directory / RECORD_FILE, json.dumps({
+            "pid": process.pid, "workspace_id": ownership.workspace_id, "runtime_id": ownership.runtime_id,
+            "generation": ownership.generation}))
         deadline = time.monotonic() + self.start_timeout
         while not ready.exists():
             if (code := process.poll()) is not None:
                 self._children.pop(ownership.runtime_id, None)
                 if code == EXIT_REFUSED:
-                    _terminal("workspace daemon refused to recover its journal", exit_code=code)
-                _unavailable(f"workspace daemon exited with {code} during start-up", exit_code=code)
+                    terminal("workspace daemon refused to recover its journal", exit_code=code)
+                unavailable(f"workspace daemon exited with {code} during start-up", exit_code=code)
             if time.monotonic() > deadline:
                 await self._signal(process.pid, signal.SIGKILL)
                 await asyncio.to_thread(process.wait)
-                _unavailable("workspace daemon did not start listening in time")
+                unavailable("workspace daemon did not start listening in time")
             await asyncio.sleep(POLL_SECONDS)
 
     async def stop(self, directory: Path, journal: Path) -> None:
@@ -144,20 +145,27 @@ class HostDaemon:
                 if not self.running(journal):
                     return
                 await asyncio.sleep(POLL_SECONDS)
-        _unavailable("workspace daemon termination is not confirmed", runtime_id=runtime_id)
+        unavailable("workspace daemon termination is not confirmed", runtime_id=runtime_id)
 
     def _verified_pid(self, directory: Path, journal: Path) -> int:
-        """The recorded daemon's PID, only if that process is still this journal's daemon."""
+        """The session leader whose command line runs this journal's daemon; the record only breaks ties."""
         try:
-            record = json.loads((directory / RECORD_FILE).read_text())
-            pid = int(record["pid"])
+            recorded = int(json.loads((directory / RECORD_FILE).read_text())["pid"])
         except (OSError, ValueError, KeyError, TypeError):
-            _unavailable("the journal is locked but no daemon record names its process")
-        command = subprocess.run(["ps", "-ww", "-o", "command=", "-p", str(pid)], capture_output=True,
+            recorded = None  # VCP stopped between starting the daemon and recording it
+        listing = subprocess.run(["ps", "-ww", "-A", "-o", "pid=,pgid=,command="], capture_output=True,
                                  text=True, check=False).stdout
-        if f"--journal-directory {journal} " not in command + " ":
-            _unavailable("the journal is locked by a process this record does not identify", pid=pid)
-        return pid
+        candidates = []
+        for line in listing.splitlines():
+            fields = line.split(None, 2)
+            if (len(fields) == 3 and fields[0] == fields[1]
+                    and f"--journal-directory {journal} " in fields[2] + " "):
+                candidates.append(int(fields[0]))
+        if recorded in candidates:
+            return recorded
+        if len(candidates) == 1:
+            return candidates[0]
+        unavailable("the journal is locked by a process no daemon command line identifies", candidates=candidates)
 
     @staticmethod
     async def _signal(pid: int, signum: int) -> None:
@@ -170,12 +178,3 @@ class HostDaemon:
         if (child := self._children.get(runtime_id)) is not None and child.poll() is not None:
             del self._children[runtime_id]
 
-
-def _write(path: Path, value: dict[str, Any]) -> None:
-    temporary = path.with_suffix(".tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "w") as file:
-        json.dump(value, file)
-        file.flush()
-        os.fsync(file.fileno())
-    os.replace(temporary, path)

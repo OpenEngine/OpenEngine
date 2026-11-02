@@ -191,14 +191,19 @@ runtime owns `worktrees/{runtime_id}/`:
 | `owner.json` | provider, workspace, runtime, generation and, per repository, the source's real path, the commit its `ref` resolved to and the worktree path |
 | `workspace/` | the workspace root an agent sees: `repositories/{index}` worktrees, context files, `AGENTS.md` |
 | `state/` | the workspace daemon's private (`0700`) journal, a sibling of the root |
+| `context.json` | digests of the context files and `AGENTS.md` VCP wrote into the root |
 | `ready`, `daemon.json`, `daemon.log` | preparation marker; daemon PID hint and output |
 
 The Workspace contract is used as it is; no field was added. A repository
 `url` must be an absolute local path or `file://` URL (a worktree needs a
-local repository); `ref` is a branch, tag or commit, defaulting to the
+local repository) whose real path lies beneath one of the operator's
+`OE_VCP_WORKTREE_SOURCE_ROOTS` (`os.pathsep`-separated); with none configured,
+no repository can be named, so a caller cannot expose an arbitrary host
+repository. `ref` is a branch, tag or commit, defaulting to the
 source's `HEAD`, and is resolved once to a commit before anything is created.
 `resources` are rejected with `INVALID_ARGUMENT` because a host process
-cannot enforce them, and context paths must be relative without `.`/`..`.
+cannot enforce them, and context paths must be relative without `.`/`..` and,
+when repositories are requested, outside `repositories/`.
 
 Ownership is persisted before side effects. VCP commits the runtime's
 ownership at acceptance, and the adapter writes `owner.json` into a pending
@@ -225,21 +230,38 @@ metadata is a terminal `PROVIDER_ERROR`.
 The adapter never touches the source repository's working tree, other
 worktrees or branches. It runs only `rev-parse`, `worktree list/add/lock/
 unlock/remove` and, inside its own worktrees, `status`, `checkout` and
-`for-each-ref`, with inherited `GIT_*` variables stripped. VCP creates no
+`for-each-ref`, with inherited `GIT_*` variables stripped and hooks, `fsmonitor`
+and remote transports disabled (`-c core.hooksPath=/dev/null -c
+core.fsmonitor=false -c protocol.allow=never`), so a source repository's hooks
+cannot run commands as VCP. Filter drivers in a source repository's own config
+still run on checkout, which is why sources are limited to operator-allowed
+roots. VCP creates no
 branch and deletes none, so branches an agent creates or checks out stay in
 the repository after destroy.
 
 **Cleanup policy.** Before anything is stopped or removed, destroy refuses
 (terminal `PROVIDER_ERROR`, ownership kept, workspace `failed`) when an owned
-worktree has uncommitted or untracked changes, has a `HEAD` commit that no
-branch or tag contains, still exists after Git lost its metadata, or when
-another worktree is registered inside the runtime directory. A stale
+worktree has uncommitted, untracked or ignored files, has a `HEAD` commit that no
+branch or tag contains, still exists after Git lost its metadata, when
+another worktree is registered inside the runtime directory, or when the
+workspace root holds anything outside the worktrees that VCP did not write
+(an agent's scratch output, or a context file changed since `context.json`
+recorded it). A stale
 registration whose directory is already gone is removed. The operator can
 authorize discarding work with `OE_VCP_WORKTREE_DISCARD_CHANGES=1` (`worktree
-remove --force`); it still deletes no branch. Other files under the workspace
-root (context files, scratch output) are workspace-owned and removed with it,
-as in smolvm. Removal deletes `owner.json` last, so an interrupted destroy
-resumes.
+remove --force`); it still deletes no branch. A workspace that never became
+ready has nothing of an agent's and is removed without the policy. Removal
+opens every directory below the runtime directory with `O_NOFOLLOW`, and a
+worktree path reached through a symlink is refused, so swapping a parent for a
+symlink cannot redirect deletion outside the owned root. Removal deletes
+`owner.json` last, so an interrupted destroy resumes. Directory removal runs
+off the event loop.
+
+The record's generation must match: the daemon's journal is sealed to the
+generation that created it, so another generation of the same runtime is an
+`OwnershipMismatch`, never adopted, restarted or removed. Replacing a
+generation needs fencing first (#1055); today the lifecycle only creates
+generation 1.
 
 **Host daemon.** `providers/worktree/daemon.py` runs `python -m
 workspace_daemon` for the runtime (workspace root, separate journal
@@ -252,11 +274,18 @@ exclusive journal `flock`: a free lock is proof no daemon owns the journal.
 `ensure` rediscovers a running daemon and restarts a dead one on its
 established journal. Destroy, which the lifecycle already refuses while
 attempts are active, sends SIGTERM and then SIGKILL to the daemon's process
-group, after `ps` identifies the recorded PID as this journal's daemon. It
+group, after `ps` identifies the session leader whose command line runs this
+journal's daemon. `daemon.json` only breaks ties, so a daemon started just
+before VCP crashed, with no record yet, is still found and stopped. It
 removes files only once the lock is free. An unidentifiable lock holder or
 unconfirmed termination is a retryable `UNAVAILABLE` that keeps everything.
 Daemon credentials come from `OE_VCP_RUNTIME_CREDENTIALS`;
 `OE_VCP_RUNTIME_LOCAL_TEST_ACCOUNT=1` is the explicit test-only alternative.
+That one file is passed to every daemon on the host: it is not yet scoped to
+`oe.internal.v1.vcp.runtimes.{runtime_id}.*` per runtime, so one runtime's
+daemon could act for another until per-runtime credentials are issued. Each
+daemon gets only `PATH`, `HOME`, `USER`, `LOGNAME`, `LANG`, `LC_ALL`,
+`LC_CTYPE`, `TMPDIR` and `TZ` from VCP's environment, never its secrets.
 Without either, the adapter is not registered. `OE_VCP_WORKTREE_TOOLS`
 (default `git,terminal`) sets the advertised tools; preparation checks they
 exist on the host.

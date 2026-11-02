@@ -63,7 +63,8 @@ class Vcp:
         self.environment = {**os.environ, "OE_NATS_URL": url, "OE_VCP_STATE_DIR": str(tmp_path / "vcp"),
                             "OE_VCP_READY_FILE": str(self.ready), "OE_VCP_HEALTH_PORT": "0",
                             "OE_DATABASE_BACKEND": "sqlite", "OE_SQLITE_DIRECTORY": str(tmp_path / "db"),
-                            "OE_VCP_WORKTREE": "1", "OE_VCP_RUNTIME_LOCAL_TEST_ACCOUNT": "1"}
+                            "OE_VCP_WORKTREE": "1", "OE_VCP_RUNTIME_LOCAL_TEST_ACCOUNT": "1",
+                            "OE_VCP_WORKTREE_SOURCE_ROOTS": str(tmp_path / "source")}
         self.process: subprocess.Popen | None = None
 
     async def start(self) -> None:

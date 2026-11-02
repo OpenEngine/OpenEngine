@@ -21,7 +21,8 @@ restartable operation worker. The smolvm adapter is registered only when
 `OE_VCP_SMOLVM_IMAGE` names a guest image (`OE_VCP_SMOLVM_TOOLS` and
 `OE_VCP_SMOLVM_EXECUTABLE` refine it). The Git worktree (`process`) adapter is
 registered only when `OE_VCP_WORKTREE=1`, owning `worktrees/` inside the
-exclusively locked state directory, and the workspace daemons it supervises
+exclusively locked state directory and checking out only repositories beneath
+`OE_VCP_WORKTREE_SOURCE_ROOTS`, and the workspace daemons it supervises
 have broker credentials (`OE_VCP_RUNTIME_CREDENTIALS`, or the explicit
 test-only `OE_VCP_RUNTIME_LOCAL_TEST_ACCOUNT=1`); VCP then also commits those
 daemons' runtime updates. Otherwise no provider is configured and readiness promises
@@ -78,6 +79,7 @@ SMOLVM_EXECUTABLE_VARIABLE = "OE_VCP_SMOLVM_EXECUTABLE"
 WORKTREE_VARIABLE = "OE_VCP_WORKTREE"
 WORKTREE_TOOLS_VARIABLE = "OE_VCP_WORKTREE_TOOLS"
 WORKTREE_DISCARD_VARIABLE = "OE_VCP_WORKTREE_DISCARD_CHANGES"
+WORKTREE_SOURCE_ROOTS_VARIABLE = "OE_VCP_WORKTREE_SOURCE_ROOTS"
 RUNTIME_CREDENTIALS_VARIABLE = "OE_VCP_RUNTIME_CREDENTIALS"
 RUNTIME_LOCAL_TEST_ACCOUNT_VARIABLE = "OE_VCP_RUNTIME_LOCAL_TEST_ACCOUNT"
 
@@ -107,6 +109,7 @@ def providers(environment: Mapping[str, str] = os.environ) -> dict[str, Allocati
             tools = [tool for tool in environment.get(WORKTREE_TOOLS_VARIABLE, ",".join(worktree.DEFAULT_TOOLS)).split(",") if tool]
             configured[worktree.PROVIDER] = worktree.Worktree(
                 _state_directory(environment) / "worktrees", tools=tools, daemon=daemon,
+                source_roots=[root for root in environment.get(WORKTREE_SOURCE_ROOTS_VARIABLE, "").split(os.pathsep) if root],
                 discard_changes=environment.get(WORKTREE_DISCARD_VARIABLE) == "1")
     return configured
 

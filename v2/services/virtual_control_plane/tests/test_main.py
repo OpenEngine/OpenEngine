@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -111,7 +112,9 @@ def test_the_worktree_provider_needs_a_root_and_explicit_daemon_credentials(tmp_
     assert adapter.root == tmp_path.resolve() / "worktrees"
     assert adapter.capabilities["isolation"] == "process" and adapter.capabilities["tools"] == ["terminal"]
     assert adapter.daemon is not None and adapter.daemon.nats_url == "nats://127.0.0.1:4333"
-    assert not adapter.discard_changes
+    assert not adapter.discard_changes and adapter.source_roots == ()
     credentials = vcp.providers({**root, vcp.RUNTIME_CREDENTIALS_VARIABLE: "/run/oe/runtime.creds",
-                                 vcp.WORKTREE_DISCARD_VARIABLE: "1"})["process"]
+                                 vcp.WORKTREE_DISCARD_VARIABLE: "1",
+                                 vcp.WORKTREE_SOURCE_ROOTS_VARIABLE: f"{tmp_path}/a{os.pathsep}{tmp_path}/b{os.pathsep}"})["process"]
     assert credentials.daemon.credentials == Path("/run/oe/runtime.creds") and credentials.discard_changes
+    assert credentials.source_roots == (tmp_path.resolve() / "a", tmp_path.resolve() / "b")

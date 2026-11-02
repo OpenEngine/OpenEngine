@@ -10,6 +10,7 @@ daemon termination.
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import os
 import signal
@@ -23,6 +24,7 @@ from openengine.messaging import ServiceError, envelopes
 from virtual_control_plane.application.ports import Ownership, OwnershipMismatch
 from virtual_control_plane.providers.worktree import HostDaemon, Worktree, lock_reason
 from virtual_control_plane.providers.worktree import daemon as daemon_module
+from virtual_control_plane.providers.worktree.daemon import INHERITED_VARIABLES
 from virtual_control_plane.tests import worktree_daemon_fake
 
 pytestmark = pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="worktree workspaces run on macOS and Linux")
@@ -80,7 +82,8 @@ def root(tmp_path: Path) -> Path:
 
 
 def adapter(root: Path, **options) -> Worktree:
-    return Worktree(root, tools=("git", "terminal", "oe-missing-tool"), **options)
+    """Repositories are allowed beneath the test's temporary directory, which also holds `root`."""
+    return Worktree(root, tools=("git", "terminal", "oe-missing-tool"), source_roots=(root.parent,), **options)
 
 
 def spec(origin: Path, **context) -> dict:
@@ -96,7 +99,7 @@ def worktree_path(root: Path, ownership: Ownership = OWNERSHIP, index: int = 0) 
 
 
 def test_capabilities_are_process_level_and_validation_rejects_what_a_host_cannot_honor(root: Path) -> None:
-    worktree = Worktree(root, tools=("terminal", "git", "terminal"))
+    worktree = Worktree(root, tools=("terminal", "git", "terminal"), source_roots=("/srv",))
 
     capabilities = worktree.capabilities
 
@@ -107,17 +110,57 @@ def test_capabilities_are_process_level_and_validation_rejects_what_a_host_canno
                                         "files": [{"path": "notes/a.md", "content": ""}]}))
     with pytest.raises(ServiceError) as error:
         worktree.validate(document(resources={"cpuMillis": 1000}, context={
-            "repositories": [{"url": "https://example.test/repo.git"}, {"url": "relative"}, {"url": "/r", "ref": "--upload-pack=x"}],
-            "files": [{"path": "../escape", "content": ""}, {"path": "/abs", "content": ""}, {"path": "a/./b", "content": ""}]}))
+            "repositories": [{"url": "https://example.test/repo.git"}, {"url": "relative"}, {"url": "/srv/r", "ref": "--upload-pack=x"},
+                             {"url": "file:///home/someone/secrets"}, {"url": "/srv/../home/someone/secrets"}],
+            "files": [{"path": "../escape", "content": ""}, {"path": "/abs", "content": ""}, {"path": "a/./b", "content": ""},
+                      {"path": "repositories/0/.git", "content": ""}]}))
     assert [violation["field"] for violation in error.value.details["violations"]] == [
         "payload.workspace.spec.resources",
         "payload.workspace.spec.context.repositories[0].url",
         "payload.workspace.spec.context.repositories[1].url",
         "payload.workspace.spec.context.repositories[2].ref",
+        "payload.workspace.spec.context.repositories[3].url",
+        "payload.workspace.spec.context.repositories[4].url",
         "payload.workspace.spec.context.files[0].path",
         "payload.workspace.spec.context.files[1].path",
         "payload.workspace.spec.context.files[2].path",
+        "payload.workspace.spec.context.files[3].path",
     ]
+    # Without repositories nothing is a worktree, so `repositories/` is an ordinary context path.
+    worktree.validate(document(context={"files": [{"path": "repositories/notes.md", "content": ""}]}))
+    # With no allowed source roots configured, no repository can be named at all.
+    with pytest.raises(ServiceError):
+        Worktree(root).validate(document(context={"repositories": [{"url": "/srv/repo"}]}))
+
+
+def test_a_repository_outside_the_allowed_source_roots_is_never_checked_out(origin: Path, root: Path, tmp_path: Path) -> None:
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    (allowed / "link").symlink_to(origin)  # a symlink inside an allowed root does not make its target allowed
+    worktree = Worktree(root, source_roots=(allowed,))
+
+    for url in (str(origin), str(allowed / "link")):
+        with pytest.raises(ServiceError) as error:
+            run(worktree.provision(OWNERSHIP, document(context={"repositories": [{"url": url}]})))
+        assert error.value.code == "PROVIDER_ERROR" and "source root" in error.value.message
+    assert not (root / "rt_a").exists() and registered(origin, worktree_path(root)) == []
+
+
+def test_source_repository_hooks_and_fsmonitor_never_run(origin: Path, root: Path, tmp_path: Path) -> None:
+    ran = tmp_path / "ran"
+    hook = origin / ".git" / "hooks" / "post-checkout"
+    hook.write_text(f"#!/bin/sh\necho hook >> {ran}\n")
+    hook.chmod(0o755)
+    monitor = tmp_path / "fsmonitor"
+    monitor.write_text(f"#!/bin/sh\necho fsmonitor >> {ran}\n")
+    monitor.chmod(0o755)
+    git(origin, "config", "core.fsmonitor", str(monitor))
+    worktree = adapter(root)
+
+    locator = run(worktree.provision(OWNERSHIP, spec(origin)))
+    run(worktree.destroy(OWNERSHIP, locator))
+
+    assert not ran.exists()
 
 
 def test_provision_creates_an_independent_detached_worktree_and_leaves_the_caller_alone(
@@ -333,6 +376,71 @@ def test_stale_git_metadata_fails_ensure_and_destroy_removes_only_what_is_provab
     assert not (root / "rt_a").exists() and evidence(origin, tmp_path) == before
 
 
+def test_a_generation_the_directory_was_not_created_for_is_never_adopted(origin: Path, root: Path) -> None:
+    worktree = adapter(root)
+    locator = run(worktree.provision(OWNERSHIP, spec(origin)))
+    rebound = Ownership(OWNERSHIP.workspace_id, OWNERSHIP.runtime_id, OWNERSHIP.generation + 1)
+
+    # The daemon's journal is sealed to generation 1; generation 2 must not adopt, restart or remove it.
+    for call in (worktree.provision(rebound, spec(origin)), worktree.ensure(rebound, locator, spec(origin)),
+                 worktree.destroy(rebound, locator)):
+        with pytest.raises(OwnershipMismatch):
+            run(call)
+    assert registered(origin, worktree_path(root)) and (root / "rt_a" / "owner.json").exists()
+    run(worktree.destroy(OWNERSHIP, locator))
+
+
+def test_files_outside_the_worktrees_that_vcp_did_not_write_are_never_silently_deleted(origin: Path, root: Path) -> None:
+    worktree = adapter(root)
+    specification = spec(origin, instructions="x", files=[{"path": "notes/todo.md", "content": "x\n"}])
+    locator = run(worktree.provision(OWNERSHIP, specification))
+    workspace = root / "rt_a" / "workspace"
+
+    for path, change in (("scratch.txt", lambda: (workspace / "scratch.txt").write_text("agent output")),
+                         ("notes/todo.md", lambda: ((workspace / "scratch.txt").unlink(),
+                                                    (workspace / "notes" / "todo.md").write_text("edited"))),
+                         ("notes/more", lambda: ((workspace / "notes" / "todo.md").write_text("x\n"),
+                                                 (workspace / "notes" / "more").mkdir()))):
+        change()
+        with pytest.raises(ServiceError) as error:
+            run(worktree.destroy(OWNERSHIP, locator))
+        assert error.value.code == "PROVIDER_ERROR" and error.value.details["path"] == path
+        assert (root / "rt_a" / "owner.json").exists() and registered(origin, worktree_path(root))
+
+    # Ignored files inside a worktree are the agent's work too.
+    (workspace / "notes" / "more").rmdir()
+    admin = Path(git(worktree_path(root), "rev-parse", "--path-format=absolute", "--git-common-dir").strip())
+    (admin / "info").mkdir(exist_ok=True)
+    (admin / "info" / "exclude").write_text("build/\n")
+    (worktree_path(root) / "build").mkdir()
+    (worktree_path(root) / "build" / "output").write_text("built")
+    with pytest.raises(ServiceError) as error:
+        run(worktree.destroy(OWNERSHIP, locator))
+    assert "ignored" in error.value.message
+    (admin / "info" / "exclude").write_text("")
+
+    run(adapter(root, discard_changes=True).destroy(OWNERSHIP, locator))
+    assert not (root / "rt_a").exists()
+
+
+def test_removal_never_follows_a_parent_swapped_for_a_symlink(origin: Path, root: Path, tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    (outside / "repositories" / "0").mkdir(parents=True)
+    (outside / "repositories" / "0" / "keep").write_text("keep")
+    worktree = adapter(root, discard_changes=True)
+    locator = run(worktree.provision(OWNERSHIP, spec(origin)))
+    workspace = root / "rt_a" / "workspace"
+    workspace.rename(root / "rt_a" / "moved")
+    workspace.symlink_to(outside)
+
+    for call in (worktree.ensure(OWNERSHIP, locator, spec(origin)), worktree.destroy(OWNERSHIP, locator)):
+        with pytest.raises(ServiceError) as error:
+            run(call)
+        assert "symlink" in error.value.message
+    assert (outside / "repositories" / "0" / "keep").read_text() == "keep"
+    assert (root / "rt_a" / "owner.json").exists()
+
+
 def test_dirty_or_unreferenced_work_is_refused_and_branches_are_never_deleted(origin: Path, root: Path, tmp_path: Path) -> None:
     before = evidence(origin, tmp_path)
     worktree = adapter(root)
@@ -407,7 +515,8 @@ def starts(root: Path) -> list[list[str]]:
 
 def supervised(root: Path, **options) -> Worktree:
     return adapter(root, daemon=HostDaemon("nats://127.0.0.1:1", local_test_account=True, command=FAKE_DAEMON,
-                                           stop_timeout=options.pop("stop_timeout", 5.0)), **options)
+                                           stop_timeout=options.pop("stop_timeout", 5.0),
+                                           inherit=(*INHERITED_VARIABLES, "OE_TEST_DAEMON_IGNORE_TERM")), **options)
 
 
 def test_the_daemon_is_started_once_rediscovered_after_restart_and_stopped_before_removal(origin: Path, root: Path) -> None:
@@ -461,17 +570,43 @@ def test_destroy_escalates_to_sigkill_and_keeps_ownership_when_termination_is_un
     assert not (root / "rt_a").exists()
 
 
+def test_the_daemon_gets_a_minimal_environment(origin: Path, root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OE_TEST_CONTROL_PLANE_SECRET", "s3cret")
+    monkeypatch.setenv("OE_TEST_DAEMON_IGNORE_TERM", "0")
+    locator = run(supervised(root).provision(OWNERSHIP, spec(origin)))
+    pid = json.loads((root / "rt_a" / "daemon.json").read_text())["pid"]
+
+    environment = subprocess.run(["ps", "-ww", "-E", "-o", "command=", "-p", str(pid)] if sys.platform == "darwin"
+                                 else ["cat", f"/proc/{pid}/environ"], capture_output=True, text=True).stdout
+    assert "OE_TEST_DAEMON_IGNORE_TERM" in environment and "OE_TEST_CONTROL_PLANE_SECRET" not in environment
+    run(supervised(root).destroy(OWNERSHIP, locator))
+
+
+def test_a_daemon_started_before_its_record_was_written_is_still_found_and_stopped(origin: Path, root: Path) -> None:
+    worktree = supervised(root)
+    locator = run(worktree.provision(OWNERSHIP, spec(origin)))
+    (root / "rt_a" / "daemon.json").unlink()  # VCP crashed between starting the daemon and recording it
+    journal = root / "rt_a" / "state"
+
+    run(supervised(root).destroy(OWNERSHIP, locator))
+    assert not HostDaemon.running(journal) and not (root / "rt_a").exists()
+
+
 def test_an_unidentifiable_journal_lock_holder_is_never_signalled(origin: Path, root: Path) -> None:
     worktree = supervised(root)
     locator = run(worktree.provision(OWNERSHIP, spec(origin)))
+    journal = root / "rt_a" / "state"
+    run(worktree.daemon.stop(root / "rt_a", journal))
+    # Something other than a daemon for this journal (here, this test) holds the lock.
+    lock = os.open(journal / ".daemon.lock", os.O_RDWR)
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     record = root / "rt_a" / "daemon.json"
-    real = json.loads(record.read_text())
-    record.write_text(json.dumps({**real, "pid": os.getpid()}))
-
-    with pytest.raises(ServiceError) as error:
-        run(worktree.destroy(OWNERSHIP, locator))
-
-    assert error.value.code == "UNAVAILABLE" and HostDaemon.running(root / "rt_a" / "state")
-    record.write_text(json.dumps(real))
+    record.write_text(json.dumps({**json.loads(record.read_text()), "pid": os.getpid()}))
+    try:
+        with pytest.raises(ServiceError) as error:
+            run(worktree.destroy(OWNERSHIP, locator))
+        assert error.value.code == "UNAVAILABLE" and HostDaemon.running(journal)
+    finally:
+        os.close(lock)
     run(worktree.destroy(OWNERSHIP, locator))
     assert not (root / "rt_a").exists()
