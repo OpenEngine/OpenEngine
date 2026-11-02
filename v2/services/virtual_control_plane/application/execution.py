@@ -12,6 +12,7 @@ import base64
 import binascii
 import json
 from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
 
 from openengine.contracts.runtime import validate_wire_message
@@ -142,7 +143,8 @@ class Execution:
         workspace.update(version=workspace["version"] + 1, updated_at=timestamp)
         # All validation precedes the first write. Any storage failure rolls back
         # these records and the receipt written by Lifecycle._command.
-        await tx.put("sessions", session["session_id"], {"snapshot": session})
+        stored = await tx.get("sessions", session["session_id"]) or {}  # keeps its history sequence
+        await tx.put("sessions", session["session_id"], {**stored, "snapshot": session})
         await tx.put("attempts", attempt_id, {"snapshot": attempt, "operation_id": operation["operation_id"]})
         await tx.put("attempt_bindings", attempt_id, {**binding, "execution": message["execution"], "session_mode": selection["mode"]})
         await tx.put("operations", operation["operation_id"], {"snapshot": operation, "causal_path": body["causal_path"]})
@@ -190,6 +192,45 @@ class Execution:
         if len(sessions) > limit:
             cursor = base64.urlsafe_b64encode(json.dumps({"version": 1, "filters": filters, "after": key(page[-1])}).encode()).decode().rstrip("=")
         return {"items": page, "next_cursor": cursor}
+
+    async def progress(self, tx, attempt_id, payload):
+        """Trusted projection of one ordered, deduplicated progress record for a running attempt.
+
+        A conversation record takes the session's next history sequence; a usage
+        delta is added to the attempt once, and its period may not overlap the
+        attempt's previous one. Nothing is projected for artifacts here.
+        """
+        record = await tx.get("attempts", attempt_id)
+        if record is None or record["snapshot"]["state"] != "running":
+            raise InvalidTransition()
+        binding = await tx.get("attempt_bindings", attempt_id)
+        attempt, timestamp, event_id = record["snapshot"], now(), identity("evt_")
+        resources = {key: binding[key] for key in ("workspace_id", "session_id", "attempt_id")}
+        session_record = await tx.get("sessions", binding["session_id"])
+        session = session_record["snapshot"]
+        if payload["kind"] == "conversation":
+            session_record["history_sequence"] = sequence = session_record.get("history_sequence", 0) + 1
+            event = {"event_type": "conversation.message", "resources": {**resources, "message_id": payload["message_id"]},
+                     "payload": {"role": payload["role"], "text": payload["text"], "sequence": sequence}}
+        elif payload["kind"] == "usage":
+            start, end = (datetime.fromisoformat(payload[key].replace("Z", "+00:00")) for key in ("period_start", "period_end"))
+            previous = record.get("usage_period_end")
+            if end < start or (previous and start < datetime.fromisoformat(previous.replace("Z", "+00:00"))):
+                raise InvalidTransition()
+            total = attempt.setdefault("usage", {"input_tokens": 0, "output_tokens": 0})
+            for key, value in payload["usage"].items():
+                total[key] = total.get(key, 0) + value
+            record["usage_period_end"] = payload["period_end"]
+            event = {"event_type": "usage.reported", "resources": resources, "payload": {
+                key: payload[key] for key in ("usage", "period_start", "period_end")}}
+        else:
+            raise InvalidTransition()
+        operation_record = await tx.get("operations", record["operation_id"])
+        session.update(updated_at=timestamp, attempts=[attempt if a["attempt_id"] == attempt_id else a for a in session["attempts"]])
+        await tx.append_event({"event_id": event_id, "occurred_at": timestamp, "producer": "vcp",
+                               "causal_path": [*operation_record["causal_path"], event_id], **event})
+        await tx.put("attempts", attempt_id, record)
+        await tx.put("sessions", binding["session_id"], session_record)
 
     async def transition(self, tx, attempt_id, state, *, error=None, result=None):
         """Trusted projection primitive, not a runtime message handler.

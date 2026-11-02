@@ -118,12 +118,12 @@ class RuntimeUpdates:
         elif not status.get("journal_id"):
             raise Rejected("IDENTITY_MISMATCH", "runtime has not registered its journal")
         else:
-            await self._project(tx, message)
+            await self._project(tx, message, status.get("progress_kinds", []))
         status.update(sequence=message["sequence"], boot_id=message["boot_id"])
         await tx.put("runtime_status", target["runtime_id"], status)
         await tx.record_runtime_update(target["runtime_id"], message["event_id"], message["sequence"], digest(message))
 
-    async def _project(self, tx, message: dict[str, Any]) -> None:
+    async def _project(self, tx, message: dict[str, Any], progress_kinds: list[str]) -> None:
         target = message["target"]
         attempt_id = target["attempt_id"]
         binding = await tx.get("attempt_bindings", attempt_id)
@@ -134,12 +134,15 @@ class RuntimeUpdates:
         sequence = record.get("attempt_sequence", 0) + 1
         if message["attempt_sequence"] != sequence:
             raise Rejected("EVENT_CONFLICT", "attempt sequence is not contiguous", quarantine=True)
-        state = STATES.get(message["kind"])
-        if state is None:
-            raise Rejected("EVENT_CONFLICT", "update kind is not supported by this runtime milestone", quarantine=True)
-        payload = message["payload"]
+        state, payload = STATES.get(message["kind"]), message["payload"]
+        progress = message["kind"] == "attempt.progress" and payload["kind"] in progress_kinds
+        if state is None and not progress:
+            raise Rejected("EVENT_CONFLICT", "update kind was not registered by this runtime", quarantine=True)
         try:
-            await self.execution.transition(tx, attempt_id, state, error=payload.get("error"), result=payload.get("result"))
+            if progress:
+                await self.execution.progress(tx, attempt_id, payload)
+            else:
+                await self.execution.transition(tx, attempt_id, state, error=payload.get("error"), result=payload.get("result"))
         except InvalidTransition:
             raise Rejected("EVENT_CONFLICT", "invalid attempt transition", quarantine=True) from None
         record = await tx.get("attempts", attempt_id)

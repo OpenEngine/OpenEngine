@@ -71,6 +71,9 @@ sessions = sa.Table(
     "journal_sessions", metadata,
     sa.Column("session_id", sa.String(128), primary_key=True),
     sa.Column("command_id", sa.String(128), sa.ForeignKey("journal_commands.command_id"), nullable=False),
+    # The executor's own conversation (an ACP session ID) and whether it can be loaded again.
+    sa.Column("executor_session_id", sa.String(1024), nullable=True),
+    sa.Column("executor_resumable", sa.Boolean(), nullable=False, server_default=sa.false()),
     comment="Sessions owned by this runtime; the opening command carries their agent.",
 )
 attempts = sa.Table(
@@ -176,18 +179,24 @@ class Transaction:
             error_code=detail.get("code"), error_message=detail.get("message")))
 
     async def session(self, session_id: str) -> dict[str, Any] | None:
-        """The session's agent, from its opening command, and its unfinished attempt."""
-        query = (sa.select(commands.c.command).join(sessions, sessions.c.command_id == commands.c.command_id)
+        """The session's agent, from its opening command, its executor conversation and its unfinished attempt."""
+        query = (sa.select(commands.c.command, sessions.c.executor_session_id, sessions.c.executor_resumable)
+                 .join(sessions, sessions.c.command_id == commands.c.command_id)
                  .where(sessions.c.session_id == session_id))
         row = await self._first(query)
         if row is None:
             return None
         active = await self._first(sa.select(attempts.c.attempt_id)
                                    .where(attempts.c.session_id == session_id, sa.text(_ACTIVE)))
-        return {"agent": _decode(row.command)["payload"]["agent"], "active_attempt": active and active.attempt_id}
+        return {"agent": _decode(row.command)["payload"]["agent"], "active_attempt": active and active.attempt_id,
+                "executor_session_id": row.executor_session_id, "executor_resumable": row.executor_resumable}
 
     async def open_session(self, session_id: str, command_id: str) -> None:
         await self._connection.execute(sessions.insert().values(session_id=session_id, command_id=command_id))
+
+    async def save_executor_session(self, session_id: str, executor_session_id: str, resumable: bool) -> None:
+        await self._connection.execute(sessions.update().where(sessions.c.session_id == session_id).values(
+            executor_session_id=executor_session_id, executor_resumable=resumable))
 
     async def attempt(self, attempt_id: str) -> dict[str, Any] | None:
         row = await self._first(_ATTEMPT.where(attempts.c.attempt_id == attempt_id))
@@ -214,6 +223,11 @@ class Transaction:
                  .order_by(updates.c.sequence).limit(1))
         row = (await self._connection.execute(query)).first()
         return None if row is None else (row.sequence, row.wire)
+
+    async def pending_updates(self) -> int:
+        """Unacknowledged updates, counted through the pending partial index."""
+        query = sa.select(sa.func.count()).select_from(updates).where(updates.c.acknowledged.is_(False))
+        return (await self._connection.execute(query)).scalar_one()
 
     async def has_update(self, sequence: int) -> bool:
         query = sa.select(updates.c.sequence).where(updates.c.sequence == sequence)
