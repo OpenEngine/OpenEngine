@@ -159,6 +159,7 @@ def test_timed_out_check_fails(tmp_path):
     result = run_checks(tmp_path)
     assert not result["passed"]
     assert "Unable to execute" in result["diagnostics"][0]["message"]
+    assert "Fix a hung or slow check" in result["diagnostics"][0]["message"]
 
 
 def test_pytest_failure_summary_is_actionable(tmp_path):
@@ -285,3 +286,25 @@ def test_artifact_symlink_cannot_redirect_host_writes(tmp_path):
     with pytest.raises(ValueError, match="must not be symlinks"):
         run_checks(root)
     assert not (tmp_path / "quality").exists()
+
+
+def test_execution_failure_explains_repair(tmp_path):
+    configure(tmp_path, ["missing-quality-tool"])
+    result = run_checks(tmp_path)
+    message = result["diagnostics"][0]["message"]
+    assert "Install the required executable 'missing-quality-tool'" in message
+    assert "correct its command" in message
+
+
+def test_unparsed_failure_points_to_exact_log_and_repair(tmp_path):
+    from engine.graph_runtime_langgraph.components.quality import quality_feedback
+
+    configure(tmp_path, [sys.executable, "-c", "print('custom check failed'); raise SystemExit(2)"])
+    result = run_checks(tmp_path)
+    diagnostic = result["diagnostics"][0]
+    assert "status 2" in diagnostic["message"]
+    assert str(Path(result["report"]) / "example.log") in diagnostic["message"]
+    feedback = quality_feedback({"quality_check": result})
+    assert "from the target checkout" in feedback
+    assert "two repair attempts" in feedback
+    assert json.dumps(diagnostic["command"]) in feedback

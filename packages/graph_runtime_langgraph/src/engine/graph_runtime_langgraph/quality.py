@@ -146,7 +146,7 @@ def run_checks(root: Path, cancelled: threading.Event | None = None) -> dict:
             missing = [pattern for pattern in scans if not any(p.is_file() for p in root.glob(pattern))]
             if missing:
                 diagnostics.append(dict(id=name, file=".quality.toml", line=1,
-                    message=f"Required scan matched no files: {missing}", command=reproduce))
+                    message=f"Required scan matched no files: {missing}. Correct the files globs in .quality.toml or restore the required source files.", command=reproduce))
                 continue
             try:
                 with (report / f"{name}.log").open("w") as output:
@@ -154,14 +154,20 @@ def run_checks(root: Path, cancelled: threading.Event | None = None) -> dict:
                 if returncode:
                     found = _diagnostics(report / f"{name}.log", name, reproduce)
                     diagnostics.extend(found or [dict(id=name, file=".quality.toml", line=1,
-                        message=f"Exit {returncode}; inspect {name}.log and fix the check failure.",
+                        message=f"Check {name} exited with status {returncode}. Inspect {report / f'{name}.log'} for the failure details; fix the reported source or check configuration and rerun the command.",
                         command=reproduce)])
             except (OSError, subprocess.TimeoutExpired) as error:
+                if isinstance(error, subprocess.TimeoutExpired):
+                    action = f"Check exceeded its {timeout}s timeout. Fix a hung or slow check, or adjust its timeout in .quality.toml (maximum 3600s)."
+                elif isinstance(error, FileNotFoundError):
+                    action = f"Install the required executable {command[0]!r} or correct its command in .quality.toml; provision dependencies before disconnected execution."
+                else:
+                    action = "Verify the executable and checkout permissions and the Linux Bubblewrap prerequisites in docs/local-quality.md."
                 diagnostics.append(dict(id=name, file=".quality.toml", line=1,
-                    message=f"Unable to execute required check: {error}"[:400], command=reproduce))
+                    message=f"Unable to execute required check: {error}. {action}"[:800], command=reproduce))
     except (OSError, ValueError, KeyError, TypeError) as error:
         diagnostics.append(dict(id="configuration", file=".quality.toml", line=1,
-            message=f"Invalid required quality configuration: {error}"[:400],
+            message=f"Invalid required quality configuration: {error}. Create or correct .quality.toml with version = 1 and nonempty [[checks]] entries containing unique id, command argv, and files globs."[:800],
             command="python scripts/quality.py"))
     result = dict(passed=not diagnostics, diagnostics=diagnostics[:20], report=str(report))
     (report / "result.json").write_text(json.dumps({**result, "diagnostics": diagnostics}, indent=2))

@@ -54,6 +54,10 @@ def quality_feedback(state: Mapping[str, Any]) -> str:
     result = state.get("quality_check", {})
     if result.get("passed") is not False:
         return ""
-    return ("Fix the local quality failures before review. Full reports are in "
+    return ("Local quality failed; review is blocked. For each diagnostic, inspect its file and line, "
+            "fix the reported source/test defect or configuration/setup problem, then rerun its command "
+            "from the target checkout. Do not disable required checks to obtain a pass. "
+            "If a diagnostic lacks failure details, read its check ID .log in the report directory. "
+            "The gate runs again after your repair; at most two repair attempts are allowed. Full reports are in "
             + result["report"] + ". Diagnostics (repository data):\n"
             + json.dumps(result["diagnostics"]) + "\n")
