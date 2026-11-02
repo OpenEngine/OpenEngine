@@ -125,3 +125,21 @@ export const issues: { title: string; description: string[]; criteria: string[] 
     ],
   },
 ]
+
+/**
+ * The issue the journey hands OpenEngine by assigning it, after the milestone is done, to show that an assignment on
+ * GitHub starts the work. It asks for nothing the other issues build, so it can be worked however many of them were
+ * seeded, and its text is something the verifier can see.
+ */
+export const assignedIssue: { title: string; description: string[]; criteria: string[] } = {
+  title: "Say who built the calculator",
+  description: ["Add a footer to the page, below the calculator, that reads `Built with OpenEngine`."],
+  criteria: [
+    "The page shows `Built with OpenEngine` below the calculator.",
+    "An automated test checks that the footer is there.",
+  ],
+}
+
+/** An issue's body, as the journey writes it on GitHub: its description, then its acceptance criteria as a checklist. */
+export const issueBody = (issue: { description: string[]; criteria: string[] }, extra: string[] = []) =>
+  [...issue.description, "## Acceptance criteria", issue.criteria.map((criterion) => `- [ ] ${criterion}`).join("\n"), ...extra].join("\n\n")

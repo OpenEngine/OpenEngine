@@ -230,3 +230,18 @@ export async function teardown({ repo = BENCH_REPO } = {}): Promise<TeardownResu
 export async function inContainer(...command: string[]): Promise<string> {
   return (await docker("exec", BENCH_CONTAINER, ...command)).stdout
 }
+
+/** Where OpenEngine's server writes its log in the container (`oe daemon logs` prints its end). */
+const DAEMON_LOG = `${CONTAINER_HOME}/.local/state/openengine/logs/engine-web.log`
+
+/** The lines of OpenEngine's log that match `pattern`, read from the container. Empty if there is no log yet. */
+export async function daemonLog(pattern: RegExp): Promise<string[]> {
+  const log = await inContainer("sh", "-c", `cat "${DAEMON_LOG}" 2>/dev/null || true`)
+  return log.split("\n").filter((line) => pattern.test(line))
+}
+
+/** What OpenEngine logged about GitHub's webhook deliveries, for a failure to say why a delivery was not acted on. */
+export const webhookLog = async () => (await daemonLog(/GitHub|self-login|delivery|work order|assign/i)).slice(-40).join("\n")
+
+/** OpenEngine's server, installed in the container; `--check` reports how it is wired and exits. */
+export const ENGINE_WEB = `${CONTAINER_HOME}/.local/share/openengine/current/venv/bin/engine-web`

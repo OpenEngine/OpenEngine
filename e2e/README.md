@@ -126,6 +126,16 @@ journey's run and selects it for the `verify` project; running the config withou
 `support/verifier.ts` finds the keys by their button names and the display by its visible text, so nothing depends on
 ids, classes or test ids.
 
+After the milestone, the journey checks OpenEngine's GitHub integration. It sets `[work_orders] workflow` to the journey's
+graph and restarts OpenEngine, checks with `engine-web --check` that OpenEngine acts as the harness's account with write
+access to the repository, then opens one more issue (`assignedIssue` in `fixtures/calculator/issues.ts`) and assigns it to
+that account. Nothing else starts the run: the assignment reaches OpenEngine only through the webhook. The harness works
+that run like the others, then checks that OpenEngine commented its progress on the issue, that GitHub's delivery log shows
+every webhook delivery accepted (except while OpenEngine restarted), and that OpenEngine's log shows a CI event waking a
+run. A failure quotes what OpenEngine logged about GitHub. "Verify the issues and pull requests", tagged `@verify`, checks
+that every issue in the milestone was closed by a pull request rather than by the harness, and "Verify the calculator"
+checks the footer the assigned issue asked for.
+
 "Verify the docs and releases", also tagged `@verify`, runs after it and reads the calculator's repository through
 GitHub's API: the README says how to run, test and deploy it (by wording only; the person checking the run judges whether
 it is right), `CHANGELOG.md` names every merged pull request whose Conventional Commits type makes a release (`feat`,

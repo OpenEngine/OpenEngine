@@ -2,10 +2,10 @@ import { randomBytes } from "node:crypto"
 import { expect } from "@playwright/test"
 import { withDocMeta } from "@test2doc/playwright/DocMeta"
 import { Terminal, test } from "../../fixtures/terminal.ts"
-import { BENCH_REPO, BENCH_TOPIC, containerSession, getRepo, gh, whoami } from "../../support/benchmark.ts"
-import { issues } from "../../fixtures/calculator/issues.ts"
+import { BENCH_REPO, BENCH_TOPIC, containerSession, daemonLog, ENGINE_WEB, getRepo, gh, inContainer, webhookLog, whoami } from "../../support/benchmark.ts"
+import { assignedIssue, issueBody, issues } from "../../fixtures/calculator/issues.ts"
 import { milestone } from "../../fixtures/calculator/milestone.ts"
-import { driveMilestone, type Budget } from "../../support/driver.ts"
+import { driveMilestone, listRuns, type Budget } from "../../support/driver.ts"
 import { show, step } from "../../support/show.ts"
 import { changelogNames, expectDisplay, key, makesRelease, press, README_COVERS, SEMVER_TAG } from "../../support/verifier.ts"
 import { launchQuickTunnel } from "../../support/quick-tunnel.ts"
@@ -386,12 +386,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               const numbers: string[] = []
               let previousId = ""
               for (const issue of issues.slice(0, SEEDED)) {
-                const body = [
-                  ...issue.description,
-                  "## Acceptance criteria",
-                  issue.criteria.map((criterion) => `- [ ] ${criterion}`).join("\n"),
-                  ...(numbers.length ? [`Depends on #${numbers.at(-1)}`] : []),
-                ].join("\n\n")
+                const body = issueBody(issue, numbers.length ? [`Depends on #${numbers.at(-1)}`] : [])
                 const created = JSON.parse(await gh("api", `${api}/issues`, "-f", `title=${issue.title}`, "-f", `body=${body}`, "-F", `milestone=${number}`)) as { number: number; id: number }
                 // The text above is what OpenEngine reads; the link is what GitHub shows, as "Blocked by #N" on the issue.
                 if (previousId) await gh("api", "-X", "POST", `${api}/issues/${created.number}/dependencies/blocked_by`, "-F", `issue_id=${previousId}`)
@@ -535,9 +530,103 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             },
           )
 
+          // While OpenEngine restarts, nothing answers the tunnel, so a delivery then is refused by no fault of OpenEngine's.
+          const restart = { from: 0, to: 0 }
+          await step(
+            "OpenEngine can also take work straight from GitHub: assign an issue to the account it uses, and it starts on it. Tell it which graph an assigned issue starts, then restart it so it reads the change.\n\n" +
+              "```sh\nprintf '\\n[work_orders]\\nworkflow = \"" + GRAPH + "\"\\n' >> ~/.config/openengine/engine.toml\noe daemon stop\noe daemon start\n```",
+            async () => {
+              await terminal.run("clear")
+              // Not set before now: OpenEngine refuses to start when the graph it names is not registered yet.
+              await terminal.run(`printf '\\n[work_orders]\\nworkflow = "${GRAPH}"\\n' >> ~/.config/openengine/engine.toml`)
+              restart.from = Date.now()
+              await terminal.run("oe daemon stop", { timeout: 120_000 })
+              await terminal.run("oe daemon start", { timeout: 120_000 })
+              restart.to = Date.now()
+              await terminal.run("tail -n 2 ~/.config/openengine/engine.toml")
+              await show("benchmark__terminal--work-orders.png", terminal, testInfo, await terminal.row(/^workflow = /), "An assigned issue starts the calculator graph")
+            },
+          )
+
+          await step("[nodoc] OpenEngine acts on GitHub as the harness's account, with write access to the repository", async () => {
+            // An assignment counts only when it names the account OpenEngine resolves from its own login, so check that
+            // login is the one the harness assigns. `engine-web --check` reports it and exits; it reads the same files the
+            // daemon does.
+            const check = await inContainer("sh", "-c", `"${ENGINE_WEB}" --check 2>&1 || true`)
+            expect(check, `engine-web --check names ${owner} as its GitHub account:\n${check}`).toMatch(new RegExp(`authenticated=True account=${owner}\\b`, "i"))
+            expect(check, `engine-web --check finds write access to ${repo}:\n${check}`).toMatch(new RegExp(`github ${repo}: write access`, "i"))
+          })
+
+          // The runs there were before the assignment: any other is one the assignment started.
+          const before = new Set((await listRuns(GRAPH)).map((run) => run.runId))
+          const assigned = await step(
+            "Assign an issue to OpenEngine, and it picks it up and starts working on it. Here the issue is a new one for the calculator. `@me` is the account `gh` is signed in as, which is also the account OpenEngine uses. GitHub tells OpenEngine about the assignment through the webhook, so there is nothing to run.\n\n" +
+              "```sh\ngh issue edit <issue number> --repo <your-account>/" + BENCH_REPO + " --add-assignee @me\ngh issue view <issue number> --repo <your-account>/" + BENCH_REPO + " --json assignees --jq '.assignees[].login'\n```",
+            async () => {
+              const milestoneNumber = (await gh("api", `${api}/milestones`, "--jq", `.[] | select(.title == "${milestone.title}") | .number`)).trim()
+              const { number } = JSON.parse(await gh("api", `${api}/issues`, "-f", `title=${assignedIssue.title}`, "-f", `body=${issueBody(assignedIssue)}`, "-F", `milestone=${milestoneNumber}`)) as { number: number }
+              await terminal.run("clear")
+              await terminal.run(`gh issue edit ${number} --repo ${repo} --add-assignee @me`)
+              await terminal.run(`gh issue view ${number} --repo ${repo} --json assignees --jq '.assignees[].login'`)
+              await show("benchmark__terminal--issue-assigned.png", terminal, testInfo, await terminal.row(new RegExp(`^${owner}$`)), "The issue is assigned to OpenEngine's account")
+              return number
+            },
+          )
+
+          await step("[nodoc] The assignment starts a run, with nothing else asking for one", async () => {
+            try {
+              await expect
+                .poll(async () => (await listRuns(GRAPH)).some((run) => !before.has(run.runId)), { timeout: 5 * 60_000, intervals: [10_000] })
+                .toBe(true)
+            } catch {
+              // Why not, as far as GitHub and OpenEngine can say: GitHub's answer to the delivery, and what OpenEngine logged.
+              const answers = await gh("api", `${hookPath}/deliveries?per_page=100`, "--jq", '[.[] | select(.event == "issues" and .action == "assigned") | .status_code] | join(", ")')
+              throw new Error(`Assigning #${assigned} started no run in five minutes. GitHub's answers to the assignment: ${answers.trim() || "none listed"}. OpenEngine's log:\n${await webhookLog()}`)
+            }
+          })
+
+          const fromAssignment = await step("[nodoc] The assigned issue's run is worked to the end", async () => {
+            const driven = await driveMilestone({ repo, milestone: milestone.title, graph: GRAPH, budget: BUDGET, until: "milestone-done", onProgress: (line) => console.log(`[assigned] ${line}`) })
+            // The driver sees the earlier runs again; only the new ones are this phase's.
+            const runIds = new Set(driven.runs.map((run) => run.runId).filter((runId) => !before.has(runId)))
+            return { runs: driven.runs.filter((run) => runIds.has(run.runId)), failures: driven.failures.filter((failure) => ![...before].some((runId) => failure.startsWith(`${runId}:`))) }
+          })
+          expect(fromAssignment.failures, "the assigned issue's run failed").toEqual([])
+
+          await step(
+            "OpenEngine reports on the issue as it goes: when the review is done, and when the work is finished. Read the issue's comments.\n\n" +
+              "```sh\ngh issue view <issue number> --repo <your-account>/" + BENCH_REPO + " --comments\n```",
+            async () => {
+              const comments = async () => (JSON.parse(await gh("api", `${api}/issues/${assigned}/comments`)) as { body: string }[]).map((comment) => comment.body)
+              await expect
+                .poll(comments, { timeout: 120_000, message: `OpenEngine says on #${assigned} that the review and the work finished` })
+                .toEqual(expect.arrayContaining([expect.stringContaining("Review finished."), expect.stringContaining("Work order finished.")]))
+              await terminal.run("clear")
+              await terminal.run(`gh issue view ${assigned} --repo ${repo} --comments`)
+              await show("benchmark__terminal--issue-progress.png", terminal, testInfo, await terminal.row(/Work order finished\./), "OpenEngine's progress, on the issue")
+            },
+          )
+
+          await step("[nodoc] OpenEngine accepted every webhook delivery GitHub sent, and they woke the runs waiting on CI", async () => {
+            // GitHub's log of every delivery and OpenEngine's answer. Anything but 200 is work OpenEngine did not take:
+            // a 503 is a delivery it could not act on, such as one it could not tell was for its own account.
+            type Delivery = { event: string; action: string | null; status_code: number; delivered_at: string }
+            const pages = JSON.parse(await gh("api", "--paginate", "--slurp", `${hookPath}/deliveries?per_page=100`)) as Delivery[][]
+            // GitHub's clock and this computer's differ by a little, so the restart's window is widened by a few seconds.
+            const duringRestart = ({ delivered_at }: Delivery) => Date.parse(delivered_at) >= restart.from - 5_000 && Date.parse(delivered_at) <= restart.to + 5_000
+            const deliveries = pages.flat().filter((delivery) => !duringRestart(delivery))
+            const refused = deliveries.filter((delivery) => delivery.status_code !== 200).map((delivery) => `${delivery.delivered_at} ${delivery.event}.${delivery.action ?? "-"} ${delivery.status_code}`)
+            testInfo.annotations.push({ type: "webhook-deliveries", description: String(deliveries.length) }, { type: "webhook-refused", description: String(refused.length) })
+            expect(refused, `OpenEngine refused webhook deliveries. Its log:\n${await webhookLog()}`).toEqual([])
+            // A run waiting on CI is woken by GitHub's check events, and falls back to polling without them.
+            const woke = await daemonLog(/woke [1-9]\d* CI steps?/)
+            testInfo.annotations.push({ type: "ci-wakes", description: String(woke.length) })
+            expect(woke, `no CI event woke a run waiting on CI. OpenEngine's log:\n${await webhookLog()}`).not.toHaveLength(0)
+          })
+
           // What the work cost and how it went, for the report.
-          // The second phase sees the first run again, so a run counts once, as the later phase last saw it.
-          const runs = [...new Map([...first.runs, ...rest.runs].map((run) => [run.runId, run])).values()]
+          // Later phases see earlier runs again, so a run counts once, as the latest phase last saw it.
+          const runs = [...new Map([...first.runs, ...rest.runs, ...fromAssignment.runs].map((run) => [run.runId, run])).values()]
           testInfo.annotations.push(
             { type: "runs", description: String(runs.length) },
             { type: "rate-limited-runs", description: String(runs.filter((run) => run.status === "rate-limited").length) },
@@ -545,7 +634,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             { type: "total-cost-usd", description: runs.reduce((sum, run) => sum + run.costUsd, 0).toFixed(2) },
           )
           await testInfo.attach("runs.json", { body: JSON.stringify(runs, null, 2), contentType: "application/json" })
-          expect([...first.failures, ...rest.failures], "no run failed or went over budget").toEqual([])
+          expect([...first.failures, ...rest.failures, ...fromAssignment.failures], "no run failed or went over budget").toEqual([])
         } finally {
           // Stopped here as well as by teardown, so a run that passes leaves nothing running.
           await terminal.run("oe daemon stop", { timeout: 120_000 }).catch(() => {})
@@ -559,11 +648,18 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
         const url = `https://${await whoami()}.github.io/${BENCH_REPO}/`
 
         await step("The calculator is deployed with all its keys", async () => {
-          // The deploy follows the last merge by a minute or so. The last key to be built is ÷, so wait until the page has it.
+          // The deploy follows the last merge by a minute or so. The last key to be built is ÷, and the last change of all is
+          // the footer the assigned issue asked for, so wait until the page has both.
           await expect(async () => {
             await page.goto(url)
             await expect(key(page, "÷")).toBeVisible({ timeout: 2_000 })
+            await expect(page.getByText("Built with OpenEngine")).toBeVisible({ timeout: 2_000 })
           }).toPass({ timeout: 10 * 60_000, intervals: [20_000] })
+        })
+
+        await step("It shows the footer the issue assigned on GitHub asked for", async () => {
+          await page.goto(url)
+          await expect(page.getByText("Built with OpenEngine", { exact: true })).toBeVisible()
         })
 
         await step("It adds", async () => {
@@ -602,6 +698,21 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           await page.goto(url)
           await press(page, "77C")
           await expectDisplay(page, "0")
+        })
+      })
+
+      test("Verify the issues and pull requests", { tag: ["@verify"] }, async () => {
+        const repo = `${await whoami()}/${BENCH_REPO}`
+
+        await step("Every issue in the milestone was closed by the pull request that worked it", async () => {
+          // GitHub links an issue to the pull request whose merge closed it. The harness closes an issue a merged pull
+          // request should have closed but didn't, and an issue it closed has no such link.
+          const listed = JSON.parse(
+            await gh("issue", "list", "--repo", repo, "--milestone", milestone.title, "--state", "all", "--limit", "100", "--json", "number,title,state,closedByPullRequestsReferences"),
+          ) as { number: number; title: string; state: string; closedByPullRequestsReferences: { number: number }[] }[]
+          expect(listed, "the milestone has issues").not.toHaveLength(0)
+          const unlinked = listed.filter((issue) => issue.state !== "CLOSED" || issue.closedByPullRequestsReferences.length === 0)
+          expect(unlinked.map(({ number, title, state }) => `#${number} ${title} (${state})`), "issues no pull request closed").toEqual([])
         })
       })
 
