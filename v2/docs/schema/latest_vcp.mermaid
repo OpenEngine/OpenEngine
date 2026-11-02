@@ -1,5 +1,5 @@
 ---
-title: vcp at 700f6cbb335e (green added, red removed, amber changed)
+title: vcp at 9b7f1ac760d9 (green added, red removed, amber changed)
 config:
   theme: neutral
 ---
@@ -11,16 +11,14 @@ erDiagram
     classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
     classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
     classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
-    attempt_bindings["attempt_bindings<br/>Immutable accepted execution identity and generation binding. (ADDED)"] {
-        VARCHAR(128) key PK "ADDED; not null"
-        JSON body "ADDED; not null"
+    attempt_bindings["attempt_bindings<br/>Immutable accepted execution identity and generation binding."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
     }
-    class attempt_bindings added
-    attempts["attempts<br/>Task attempts and their execute operation identity. (ADDED)"] {
-        VARCHAR(128) key PK "ADDED; not null"
-        JSON body "ADDED; not null"
+    attempts["attempts<br/>Task attempts and their execute operation identity."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
     }
-    class attempts added
     command_receipts["command_receipts<br/>Immutable command identity and original response for idempotent replay."] {
         VARCHAR(128) key PK "not null"
         JSON body "not null"
@@ -39,22 +37,19 @@ erDiagram
         DATETIME published_at "nullable"
     }
     class outbox changed
-    runtime_commands["runtime_commands<br/>Immutable internal commands accepted atomically with attempts; delivery is disabled. (ADDED)"] {
-        VARCHAR(128) command_id PK "ADDED; not null"
-        TEXT subject "ADDED; not null"
-        BLOB wire "ADDED; not null"
+    runtime_commands["runtime_commands<br/>Immutable internal commands accepted atomically with attempts; delivery is disabled."] {
+        VARCHAR(128) command_id PK "not null"
+        TEXT subject "not null"
+        BLOB wire "not null"
     }
-    class runtime_commands added
-    runtime_status["runtime_status<br/>Execution readiness and registered capabilities of an owned runtime. (ADDED)"] {
-        VARCHAR(128) key PK "ADDED; not null"
-        JSON body "ADDED; not null"
+    runtime_status["runtime_status<br/>Execution readiness and registered capabilities of an owned runtime."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
     }
-    class runtime_status added
-    sessions["sessions<br/>Agent conversation snapshots, separate from workspace lifecycle. (ADDED)"] {
-        VARCHAR(128) key PK "ADDED; not null"
-        JSON body "ADDED; not null"
+    sessions["sessions<br/>Agent conversation snapshots, separate from workspace lifecycle."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
     }
-    class sessions added
     workspace_runtimes["workspace_runtimes<br/>Provider ownership, opaque locator, runtime identity and generation."] {
         VARCHAR(128) key PK "not null"
         JSON body "not null"
