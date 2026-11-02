@@ -181,7 +181,7 @@ namespaces (tools) live inside a tenant. `oe up` runs a single account,
 whose tenant is the fixed LOCAL_TENANT, `00000000-0000-7000-8000-000000000001`
 (`local_tenant`).
 
-A request's tenant is the account the caller's connection belongs to. No
+A request's tenant is the caller's authenticated NATS account. No
 payload carries it, and the subjects tenants use carry no tenant or account
 token: they stay `oe.v1.{svc}.{control|query|events}.…` (and
 `oe.v1.tools.…`). Before a shared service receives a tenant's request, NATS
@@ -194,6 +194,12 @@ caller cannot forge another tenant's. Provider webhook subjects
 never exported. `validate.py` and `validate.mjs` reject an `{account}` token
 in any address of the four service contracts; the internal workspace runtime
 contract is not tenant-facing.
+
+NATS isolates each account's subjects, reply inboxes and JetStream resources
+from other accounts. Tenant identity comes from the authenticated connection
+and the broker-supplied internal account token, never from a caller's payload
+or a caller-chosen subject token. These are contractual guarantees; broker
+provisioning and runtime enforcement are implemented by later tickets.
 
 ## Messages
 
