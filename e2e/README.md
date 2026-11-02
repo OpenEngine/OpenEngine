@@ -131,8 +131,9 @@ graph and restarts OpenEngine, checks with `engine-web --check` that OpenEngine 
 access to the repository, then opens one more issue (`assignedIssue` in `fixtures/calculator/issues.ts`) and assigns it to
 that account. Nothing else starts the run: the assignment reaches OpenEngine only through the webhook. The harness works
 that run like the others, then checks that OpenEngine commented its progress on the issue, that GitHub's delivery log shows
-every webhook delivery accepted (except while OpenEngine restarted), and that OpenEngine's log shows a CI event waking a
-run. A failure quotes what OpenEngine logged about GitHub. "Verify the issues and pull requests", tagged `@verify`, checks
+every webhook delivery accepted (except while OpenEngine restarted), and that OpenEngine's log shows CI events reaching
+the steps that wait on CI. How many it woke is reported, not required: the calculator's CI usually finishes before a run
+starts waiting. A failure quotes what OpenEngine logged about GitHub. "Verify the issues and pull requests", tagged `@verify`, checks
 that every issue in the milestone was closed by a pull request rather than by the harness, and "Verify the calculator"
 checks the footer the assigned issue asked for.
 

@@ -619,10 +619,17 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             const refused = deliveries.filter((delivery) => delivery.status_code !== 200).map((delivery) => `${delivery.delivered_at} ${delivery.event}.${delivery.action ?? "-"} ${delivery.status_code}`)
             testInfo.annotations.push({ type: "webhook-deliveries", description: String(deliveries.length) }, { type: "webhook-refused", description: String(refused.length) })
             expect(refused, `OpenEngine refused webhook deliveries. Its log:\n${await webhookLog()}`).toEqual([])
-            // A run waiting on CI is woken by GitHub's check events, and falls back to polling without them.
-            const woke = await daemonLog(/woke [1-9]\d* CI steps?/)
-            testInfo.annotations.push({ type: "ci-wakes", description: String(woke.length) })
-            expect(woke, `no CI event woke a run waiting on CI. OpenEngine's log:\n${await webhookLog()}`).not.toHaveLength(0)
+            // A run waiting on CI is woken by GitHub's check events, and falls back to polling without them. Each CI event
+            // OpenEngine takes for this repository logs how many steps it woke. The calculator's CI takes seconds, so it is
+            // usually done before a run starts waiting, and none needs waking: the count is reported, not required.
+            const ciEvents = await daemonLog(new RegExp(`for ${repo}@[0-9a-f]+ woke \\d+ CI steps?`, "i"))
+            const ignored = await daemonLog(/not a configured repository/)
+            testInfo.annotations.push(
+              { type: "ci-events", description: String(ciEvents.length) },
+              { type: "ci-wakes", description: String(ciEvents.filter((line) => !/woke 0 /.test(line)).length) },
+            )
+            expect(ignored, `OpenEngine ignored CI events as from a repository it doesn't answer:\n${ignored.join("\n")}`).toEqual([])
+            expect(ciEvents, `no CI event reached the steps waiting on CI. OpenEngine's log:\n${await webhookLog()}`).not.toHaveLength(0)
           })
 
           // What the work cost and how it went, for the report.
