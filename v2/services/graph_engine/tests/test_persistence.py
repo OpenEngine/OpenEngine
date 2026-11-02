@@ -285,3 +285,96 @@ def test_any_revision_of_a_graph_is_read_back(config: DatabaseConfig) -> None:
 def test_postgres_store_is_a_stub() -> None:
     with pytest.raises(BackendNotImplemented, match="graph engine's store"):
         PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES)).scoped(LOCAL_TENANT)
+
+
+def test_two_tenants_isolate_graphs_revisions_operations_pages_and_receipts(config: DatabaseConfig) -> None:
+    from openengine.persistence import new_tenant, assert_tenant_scoped
+
+    assert assert_tenant_scoped(metadata, "ge") == []
+
+    async def scenario() -> None:
+        handle = PERSISTENCE.open(config)
+        alpha, beta = handle.scoped(new_tenant()), handle.scoped(new_tenant())
+        try:
+            a, b = await asyncio.gather(
+                alpha.apply(_command("shared"), _definition("alpha")),
+                beta.apply(_command("shared", "beta"), _definition("beta")),
+            )
+            assert a != b
+            assert await alpha.apply(_command("shared"), _definition("alpha")) == a
+            assert await beta.apply(_command("shared", "beta"), _definition("beta")) == b
+            for own, other, reply in ((alpha, beta, a), (beta, alpha, b)):
+                assert await other.graph(reply["resource_id"]) is None
+                assert await other.revision(reply["resource_id"], 1) is None
+                assert await other.operation(reply["operation_id"]) is None
+                assert (await own.graph(reply["resource_id"])).name == "triage"
+                assert len(await own.graphs("default", 1)) == 1
+                assert await own.graphs("default", 1, after=("triage", reply["resource_id"])) == []
+                with pytest.raises(CommandIdConflict) as conflict:
+                    await own.apply(_command("shared", "different"), _definition("x"))
+                assert conflict.value.operation_id == reply["operation_id"]
+            rejection = {"status": "rejected", "error": {"message": "alpha only"}}
+            await alpha.reject(_command("rejected"), rejection)
+            accepted = await beta.apply(_command("rejected"), _definition("beta"))
+            assert accepted["status"] == "accepted"
+            assert await alpha.apply(_command("rejected"), _definition("alpha")) == rejection
+        finally:
+            await handle.close()
+
+    asyncio.run(scenario())
+
+
+def test_tenant_migration_refuses_unsafe_downgrade_and_cross_tenant_foreign_keys(config: DatabaseConfig) -> None:
+    from openengine.persistence import new_tenant
+    tenant = new_tenant()
+
+    async def populate() -> str:
+        handle = PERSISTENCE.open(config)
+        try:
+            return (await handle.scoped(tenant).apply(_command("cmd"), _definition("{}")))["resource_id"]
+        finally:
+            await handle.close()
+
+    graph_id = asyncio.run(populate())
+    engine = PERSISTENCE.database(config).migration_engine()
+    with engine.begin() as connection:
+        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+        with pytest.raises(sa.exc.IntegrityError):
+            connection.execute(sa.text(
+                "INSERT INTO graph_revisions (tenant_id, graph_id, revision, format, source, source_sha256, created_at) "
+                "VALUES (:tenant, :graph, 2, 'resource', '{}', 'sha', '2026-10-27')"
+            ), {"tenant": LOCAL_TENANT.hex, "graph": graph_id})
+    with pytest.raises(RuntimeError, match="non-local tenant rows"):
+        downgrade(PERSISTENCE.migrations, PERSISTENCE.database(config), "d75ffe6cc5ed")
+    assert PERSISTENCE.drift(metadata, config) == []
+
+
+def test_populated_local_tenant_rows_survive_downgrade_and_upgrade(config: DatabaseConfig) -> None:
+    async def populate() -> dict:
+        handle = PERSISTENCE.open(config)
+        try:
+            store = handle.scoped(LOCAL_TENANT)
+            reply = await store.apply(_command("accepted"), _definition("first"))
+            await store.apply(_command("changed"), _definition("second"))
+            await store.reject(_command("rejected"), {"status": "rejected", "error": {"message": "legacy"}})
+            return reply
+        finally:
+            await handle.close()
+
+    reply = asyncio.run(populate())
+    downgrade(PERSISTENCE.migrations, PERSISTENCE.database(config), "d75ffe6cc5ed")
+    PERSISTENCE.upgrade(config)
+    assert PERSISTENCE.drift(metadata, config) == []
+
+    async def replay() -> None:
+        handle = PERSISTENCE.open(config)
+        try:
+            store = handle.scoped(LOCAL_TENANT)
+            assert await store.apply(_command("accepted"), _definition("first")) == reply
+            assert (await store.apply(_command("rejected"), _definition("{}")))["error"]["message"] == "legacy"
+            assert (await store.revision(reply["resource_id"], 1)).source == "first"
+            assert (await store.revision(reply["resource_id"], 2)).source == "second"
+        finally:
+            await handle.close()
+
+    asyncio.run(replay())

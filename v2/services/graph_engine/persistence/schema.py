@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
-from openengine.persistence import UtcDateTime
+from openengine.persistence import UtcDateTime, tenant_table
 
 metadata = sa.MetaData()
 
-graphs = sa.Table(
+graphs = tenant_table(
     "graphs",
     metadata,
     sa.Column("graph_id", sa.String(128), primary_key=True),
@@ -22,7 +22,7 @@ graphs = sa.Table(
     comment="One row per graph name in a project. Its ID never changes; applying a changed definition adds a revision.",
 )
 
-graph_revisions = sa.Table(
+graph_revisions = tenant_table(
     "graph_revisions",
     metadata,
     sa.Column("graph_id", sa.String(128), sa.ForeignKey("graphs.graph_id"), primary_key=True),
@@ -34,7 +34,7 @@ graph_revisions = sa.Table(
     comment="Every revision of every graph, numbered from 1 and never changed once written.",
 )
 
-operations = sa.Table(
+operations = tenant_table(
     "operations",
     metadata,
     sa.Column("operation_id", sa.String(128), primary_key=True),
@@ -51,7 +51,7 @@ operations = sa.Table(
     comment="The durable record of each accepted command's progress, which operations.{operation_id}.get reads.",
 )
 
-command_receipts = sa.Table(
+command_receipts = tenant_table(
     "command_receipts",
     metadata,
     sa.Column("project", sa.String(64), primary_key=True),

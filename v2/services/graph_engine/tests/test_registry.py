@@ -16,7 +16,6 @@ import yaml
 
 from openengine.contracts.validate import load_contract, validate_message
 from openengine.messaging import LOCAL_TENANT, ErrorCode, LocalOperator, Principal, Request, Server, ServiceError
-from openengine.persistence import LOCAL_TENANT as LOCAL_TENANT_ID
 from openengine.persistence import DatabaseConfig
 
 from graph_engine.persistence import PERSISTENCE, sqlite
@@ -53,7 +52,7 @@ def authorizer() -> LocalOperator:
 def send(tmp_path: Path, authorizer: LocalOperator):
     config = DatabaseConfig(sqlite_directory=tmp_path)
     PERSISTENCE.upgrade(config)
-    store = PERSISTENCE.open(config).scoped(LOCAL_TENANT_ID)
+    store = PERSISTENCE.open(config)
     registry = Registry(store, authorizer)
     server = Server(
         None, "ge", "nats://127.0.0.1:4222", queries=registry.queries(), commands=registry.commands(), authorizer=authorizer,
@@ -434,7 +433,7 @@ def test_a_receipt_kept_before_projects_still_replays(tmp_path: Path) -> None:
         ), {"subject": APPLY, "fingerprint": fingerprint, "response": json.dumps(response)})
     PERSISTENCE.upgrade(config)
 
-    store = PERSISTENCE.open(config).scoped(LOCAL_TENANT_ID)
+    store = PERSISTENCE.open(config)
     registry = Registry(store)
     server = Server(None, "ge", "nats://127.0.0.1:4222", queries=registry.queries(), commands=registry.commands())
     loop = asyncio.new_event_loop()
@@ -444,3 +443,52 @@ def test_a_receipt_kept_before_projects_still_replays(tmp_path: Path) -> None:
     finally:
         loop.run_until_complete(store.close())
         loop.close()
+
+
+def test_two_tenant_handlers_isolate_acceptance_rejection_conflicts_and_pages(tmp_path: Path) -> None:
+    from openengine.messaging import Dedicated
+    from openengine.persistence import new_tenant
+
+    config = DatabaseConfig(sqlite_directory=tmp_path)
+    PERSISTENCE.upgrade(config)
+    handle = PERSISTENCE.open(config)
+    registry = Registry(handle)
+    servers = [Server(
+        None, "ge", "nats://127.0.0.1:4222", queries=registry.queries(), commands=registry.commands(),
+        tenancy=Dedicated(str(new_tenant())),
+    ) for _ in range(2)]
+
+    async def send(server, subject, body):
+        return json.loads(await server.handle(subject, json.dumps(body).encode()))
+
+    async def scenario() -> None:
+        alpha, beta = servers
+        try:
+            body = _apply("cmd_shared", {"graph": GRAPH})
+            a, b = await asyncio.gather(send(alpha, APPLY, body), send(beta, APPLY, body))
+            assert a["status"] == b["status"] == "accepted"
+            assert a["resource_id"] != b["resource_id"]
+            assert await send(alpha, APPLY, body) == a
+            assert await send(beta, APPLY, body) == b
+            for own, other, reply in ((alpha, beta, a), (beta, alpha, b)):
+                page = await send(own, LIST, {"params": {"limit": 1}})
+                assert [g["graph_id"] for g in page["result"]["items"]] == [reply["resource_id"]]
+                assert page["result"]["next_cursor"] is None
+                for subject in (f"oe.v1.ge.query.graphs.{reply['resource_id']}.get",
+                                f"oe.v1.ge.query.operations.{reply['operation_id']}.get"):
+                    assert (await send(other, subject, {"params": {}}))["error"]["code"] == "NOT_FOUND"
+                    assert (await send(own, subject, {"params": {}}))["status"] == "ok"
+                conflict = await send(own, APPLY, _apply("cmd_shared", {"graph": _changed("different")}))
+                assert conflict["error"]["code"] == "COMMAND_ID_CONFLICT"
+                assert conflict["error"]["details"]["original_operation_id"] == reply["operation_id"]
+            malformed = _apply("cmd_rejected", {"python": {"invalid": True}})
+            rejected = await send(alpha, APPLY, malformed)
+            assert rejected["status"] == "rejected"
+            accepted = await send(beta, APPLY, _apply("cmd_rejected", {"graph": GRAPH}))
+            assert accepted["status"] == "accepted"
+            assert await send(alpha, APPLY, malformed) == rejected
+            assert (await send(beta, APPLY, malformed))["error"]["details"]["original_operation_id"] == accepted["operation_id"]
+        finally:
+            await handle.close()
+
+    asyncio.run(scenario())

@@ -1,5 +1,5 @@
 ---
-title: ge at d75ffe6cc5ed (green added, red removed, amber changed)
+title: ge at 5cce010cee3d (green added, red removed, amber changed)
 config:
   theme: neutral
 ---
@@ -12,7 +12,8 @@ erDiagram
     classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
     classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
     command_receipts["command_receipts<br/>The reply to every command GE accepted or rejected for good, so a retry with its command ID in its project gets the same one. (CHANGED)"] {
-        VARCHAR(64) project PK "ADDED; not null"
+        CHAR(32) tenant_id PK "ADDED; not null"
+        VARCHAR(64) project PK "not null"
         VARCHAR(128) command_id PK "not null"
         VARCHAR(255) subject "not null"
         VARCHAR(64) fingerprint "not null"
@@ -20,7 +21,8 @@ erDiagram
         DATETIME created_at "not null"
     }
     class command_receipts changed
-    graph_revisions["graph_revisions<br/>Every revision of every graph, numbered from 1 and never changed once written."] {
+    graph_revisions["graph_revisions<br/>Every revision of every graph, numbered from 1 and never changed once written. (CHANGED)"] {
+        CHAR(32) tenant_id PK,FK "ADDED; not null"
         VARCHAR(128) graph_id PK,FK "not null"
         INTEGER revision PK "not null"
         VARCHAR(16) format "not null"
@@ -28,18 +30,21 @@ erDiagram
         VARCHAR(64) source_sha256 "not null"
         DATETIME created_at "not null"
     }
-    graphs ||--o{ graph_revisions : "graph_id"
+    class graph_revisions changed
+    graphs ||--o{ graph_revisions : "tenant_id, graph_id"
     graphs["graphs<br/>One row per graph name in a project. Its ID never changes; applying a changed definition adds a revision. (CHANGED)"] {
+        CHAR(32) tenant_id PK,UK "ADDED; not null"
         VARCHAR(128) graph_id PK "not null"
         VARCHAR(64) name UK "not null"
         VARCHAR(2000) description "nullable"
         INTEGER latest_revision "not null"
         DATETIME created_at "not null"
         DATETIME updated_at "not null"
-        VARCHAR(64) project UK "ADDED; not null"
+        VARCHAR(64) project UK "not null"
     }
     class graphs changed
     operations["operations<br/>The durable record of each accepted command's progress, which operations.{operation_id}.get reads. (CHANGED)"] {
+        CHAR(32) tenant_id PK,UK "ADDED; not null"
         VARCHAR(128) operation_id PK "not null"
         VARCHAR(128) command_id UK "not null"
         VARCHAR(64) operation "not null"
@@ -49,6 +54,6 @@ erDiagram
         JSON error "nullable"
         DATETIME created_at "not null"
         DATETIME updated_at "not null"
-        VARCHAR(64) project UK "ADDED; not null"
+        VARCHAR(64) project UK "not null"
     }
     class operations changed

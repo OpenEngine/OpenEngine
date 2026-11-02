@@ -1,7 +1,7 @@
 """The graph engine's store on SQLite.
 
 GE is the database's only writer, and its commands read before they write, so
-a lock makes them take turns: concurrent applies of one graph can neither
+an immediate write transaction makes them take turns across scoped stores: concurrent applies of one graph can neither
 number two revisions alike nor both record one command ID. The tables' keys
 refuse either anyway.
 """
@@ -16,7 +16,7 @@ from typing import Any
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from openengine.persistence import Database, DatabaseStore
+from openengine.persistence import DatabaseStore, TenantDatabase
 
 from graph_engine.persistence.schema import command_receipts, graph_revisions, graphs, operations
 from graph_engine.persistence.store import (
@@ -38,8 +38,9 @@ def _new_id(prefix: str) -> str:
 
 
 class SqliteGraphs(DatabaseStore):
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: TenantDatabase) -> None:
         super().__init__(database)
+        self.database = database
         self._writing = asyncio.Lock()
 
     async def apply(
@@ -47,6 +48,8 @@ class SqliteGraphs(DatabaseStore):
         deadline: datetime | None = None,
     ) -> dict[str, Any]:
         async with self._writing, self.database.transaction() as transaction:
+            # Reserve the writer before reading, including across per-request scoped stores.
+            await transaction.exec_driver_sql("BEGIN IMMEDIATE")
             if (receipt := await _receipt(transaction, command)) is not None:
                 return receipt
             now = datetime.now(UTC)
@@ -54,12 +57,14 @@ class SqliteGraphs(DatabaseStore):
             if deadline is not None and deadline < now:
                 raise DeadlineExceeded(deadline, now)
             graph = (await transaction.execute(graphs.select().where(
+                graphs.c.tenant_id == self.database.tenant,
                 graphs.c.project == command.project, graphs.c.name == definition.name,
             ))).one_or_none()
             if expected_version is not None and (graph is None or graph.latest_revision != expected_version):
                 raise VersionConflict(expected_version, graph.latest_revision if graph else None)
             latest = graph and await transaction.scalar(
                 sa.select(graph_revisions.c.source_sha256).where(
+                    graph_revisions.c.tenant_id == self.database.tenant,
                     graph_revisions.c.graph_id == graph.graph_id, graph_revisions.c.revision == graph.latest_revision
                 )
             )
@@ -67,24 +72,27 @@ class SqliteGraphs(DatabaseStore):
             if graph is None:
                 graph_id, revision = _new_id("graph"), 1
                 await transaction.execute(graphs.insert().values(
+                    tenant_id=self.database.tenant,
                     graph_id=graph_id, project=command.project, name=definition.name, description=definition.description,
                     latest_revision=revision, created_at=now, updated_at=now,
                 ))
             elif created:
                 graph_id, revision = graph.graph_id, graph.latest_revision + 1
-                await transaction.execute(graphs.update().where(graphs.c.graph_id == graph_id).values(
+                await transaction.execute(graphs.update().where(graphs.c.tenant_id == self.database.tenant, graphs.c.graph_id == graph_id).values(
                     description=definition.description, latest_revision=revision, updated_at=now,
                 ))
             else:
                 graph_id, revision = graph.graph_id, graph.latest_revision
             if created:
                 await transaction.execute(graph_revisions.insert().values(
+                    tenant_id=self.database.tenant,
                     graph_id=graph_id, revision=revision, format=definition.format, source=definition.source,
                     source_sha256=definition.source_sha256, created_at=now,
                 ))
             operation_id = _new_id("op")
             # Applying is done once it is recorded, so the operation is recorded as succeeded.
             await transaction.execute(operations.insert().values(
+                tenant_id=self.database.tenant,
                 operation_id=operation_id, project=command.project, command_id=command.command_id, operation=APPLY, status="succeeded",
                 resources={"graph_id": graph_id},
                 result={"graph": {"graph_id": graph_id, "revision": revision}, "created": created},
@@ -98,6 +106,8 @@ class SqliteGraphs(DatabaseStore):
 
     async def reject(self, command: Command, response: dict[str, Any]) -> dict[str, Any]:
         async with self._writing, self.database.transaction() as transaction:
+            # Reserve the writer before reading, including across per-request scoped stores.
+            await transaction.exec_driver_sql("BEGIN IMMEDIATE")
             if (receipt := await _receipt(transaction, command)) is not None:
                 return receipt
             await _record(transaction, command, response, datetime.now(UTC))
@@ -105,13 +115,13 @@ class SqliteGraphs(DatabaseStore):
 
     async def graph(self, graph_id: str) -> Graph | None:
         async with self.database.connect() as connection:
-            row = (await connection.execute(graphs.select().where(graphs.c.graph_id == graph_id))).one_or_none()
-        return Graph(**row._mapping) if row else None
+            row = (await connection.execute(graphs.select().where(graphs.c.tenant_id == self.database.tenant, graphs.c.graph_id == graph_id))).one_or_none()
+        return Graph(**{key: value for key, value in row._mapping.items() if key != "tenant_id"}) if row else None
 
     async def graphs(
         self, project: str, limit: int, name_prefix: str | None = None, after: tuple[str, str] | None = None,
     ) -> list[Graph]:
-        query = graphs.select().where(graphs.c.project == project).order_by(graphs.c.name, graphs.c.graph_id).limit(limit)
+        query = graphs.select().where(graphs.c.tenant_id == self.database.tenant, graphs.c.project == project).order_by(graphs.c.name, graphs.c.graph_id).limit(limit)
         if name_prefix is not None:
             # Not LIKE, which SQLite compares case-insensitively and which would read `_` as a wildcard.
             query = query.where(sa.func.substr(graphs.c.name, 1, len(name_prefix)) == name_prefix)
@@ -120,26 +130,28 @@ class SqliteGraphs(DatabaseStore):
             query = query.where(sa.or_(graphs.c.name > name, sa.and_(graphs.c.name == name, graphs.c.graph_id > graph_id)))
         async with self.database.connect() as connection:
             rows = (await connection.execute(query)).all()
-        return [Graph(**row._mapping) for row in rows]
+        return [Graph(**{key: value for key, value in row._mapping.items() if key != "tenant_id"}) for row in rows]
 
     async def revision(self, graph_id: str, revision: int) -> GraphRevision | None:
         query = graph_revisions.select().where(
+            graph_revisions.c.tenant_id == self.database.tenant,
             graph_revisions.c.graph_id == graph_id, graph_revisions.c.revision == revision
         )
         async with self.database.connect() as connection:
             row = (await connection.execute(query)).one_or_none()
-        return GraphRevision(**row._mapping) if row else None
+        return GraphRevision(**{key: value for key, value in row._mapping.items() if key != "tenant_id"}) if row else None
 
     async def operation(self, operation_id: str) -> Operation | None:
-        query = operations.select().where(operations.c.operation_id == operation_id)
+        query = operations.select().where(operations.c.tenant_id == self.database.tenant, operations.c.operation_id == operation_id)
         async with self.database.connect() as connection:
             row = (await connection.execute(query)).one_or_none()
-        return Operation(**row._mapping) if row else None
+        return Operation(**{key: value for key, value in row._mapping.items() if key != "tenant_id"}) if row else None
 
 
 async def _receipt(transaction: AsyncConnection, command: Command) -> dict[str, Any] | None:
     """The response recorded for `command`'s ID in its project, if it has one; CommandIdConflict if it was another command."""
     query = command_receipts.select().where(
+        command_receipts.c.tenant_id == transaction.info["tenant_id"],
         command_receipts.c.project == command.project, command_receipts.c.command_id == command.command_id,
     )
     receipt = (await transaction.execute(query)).one_or_none()
@@ -152,6 +164,7 @@ async def _receipt(transaction: AsyncConnection, command: Command) -> dict[str, 
 
 async def _record(transaction: AsyncConnection, command: Command, response: dict[str, Any], now: datetime) -> None:
     await transaction.execute(command_receipts.insert().values(
+        tenant_id=transaction.info["tenant_id"],
         project=command.project, command_id=command.command_id, subject=command.subject, fingerprint=command.fingerprint,
         response=response, created_at=now,
     ))
