@@ -171,6 +171,9 @@ jobs:
       # Every spec in `e2e/`, graph WorkOrders included: they had their own
       # allowed-to-fail job while the interface caught up with the graph
       # engine, and now that they pass they gate merging like the rest.
+      - name: Install quality sandbox
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+
       - name: Drive the interface
         run: npm --prefix apps/web run test:e2e
 
@@ -344,6 +347,9 @@ jobs:
 
       - name: Install workspace
         run: uv sync --locked --all-packages
+
+      - name: Install quality sandbox
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap
 
       - name: Run tests
         # The blocking tier, and everything in it is deterministic: protocol
