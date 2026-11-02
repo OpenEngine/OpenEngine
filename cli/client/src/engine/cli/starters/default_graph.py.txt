@@ -599,10 +599,11 @@ def pipeline(
 #: Runner choices for the implementation and review stages.  An agent added
 #: with `oe agent add` is offered beside these by the process serving it,
 #: and joins the policies when installed and signed in on the backend.
+#: OpenCode is opt-in: parallel reviewers contend for its shared database.
 DEFAULT_RUNNER = "round-robin"
 DEFAULT_REVIEW_RUNNER = "round-robin"
 RUNNER_CHOICES = tuple(dict.fromkeys(
-    runner for runner in ("codex", "claude", "opencode", DEFAULT_RUNNER)
+    runner for runner in ("codex", "claude", DEFAULT_RUNNER)
     if runner not in (LEAST_UTILIZED, ROUND_ROBIN)
 ))
 #: What the runner dropdowns offer: a runner, or a policy that picks one per run.
