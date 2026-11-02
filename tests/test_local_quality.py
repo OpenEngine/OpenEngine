@@ -269,7 +269,7 @@ subprocess.Popen([sys.executable, '-c', "import time; time.sleep(0.3); open('det
 """
     configure(root, [sys.executable, "-c", code])
     result = run_checks(root)
-    assert result["passed"], result
+    assert result["passed"], {**result, "output": (Path(result["report"]) / "example.log").read_text()}
     assert (root / "checked").read_text() == "ok"
     assert outside.read_text() == "secret"
     time.sleep(0.5)

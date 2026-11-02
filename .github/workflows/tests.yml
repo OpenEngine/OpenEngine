@@ -56,7 +56,11 @@ jobs:
         run: npm --prefix apps/web run build
 
       - name: Install quality sandbox
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          # Ubuntu's AppArmor user-namespace restriction prevents Bubblewrap
+          # from configuring its isolated network (RTM_NEWADDR: EPERM).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Repository quality gate
         run: |
@@ -172,7 +176,11 @@ jobs:
       # allowed-to-fail job while the interface caught up with the graph
       # engine, and now that they pass they gate merging like the rest.
       - name: Install quality sandbox
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          # Ubuntu's AppArmor user-namespace restriction prevents Bubblewrap
+          # from configuring its isolated network (RTM_NEWADDR: EPERM).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Drive the interface
         run: npm --prefix apps/web run test:e2e
@@ -349,7 +357,11 @@ jobs:
         run: uv sync --locked --all-packages
 
       - name: Install quality sandbox
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update && sudo apt-get install -y bubblewrap
+          # Ubuntu's AppArmor user-namespace restriction prevents Bubblewrap
+          # from configuring its isolated network (RTM_NEWADDR: EPERM).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
       - name: Run tests
         # The blocking tier, and everything in it is deterministic: protocol

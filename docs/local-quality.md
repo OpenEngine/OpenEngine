@@ -10,7 +10,10 @@ installed tool fails the gate. Checks run inside a Bubblewrap namespace with no
 network or host processes, read-only system/interpreter/tool inputs, and write
 access only to the checkout and a disposable temporary directory. The environment
 is explicitly constructed; host credentials and environment variables are not
-inherited. User namespaces must be enabled. Unsupported hosts (including macOS)
+inherited. User namespaces must be enabled. On Ubuntu runners, CI sets
+`kernel.apparmor_restrict_unprivileged_userns=0` so Bubblewrap can configure its
+isolated network; a local administrator must likewise permit Bubblewrap user
+namespaces if AppArmor denies them. Unsupported hosts (including macOS)
 and unavailable or denied sandbox creation fail closed; use a Linux checkout or
 VM for these runs. There is no unrestricted execution fallback. Timeout and graph
 cancellation kill the check process group and its isolated process namespace
