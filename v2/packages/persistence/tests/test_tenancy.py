@@ -363,7 +363,7 @@ def test_lists_every_services_violations(capsys: pytest.CaptureFixture[str]) -> 
     lines = capsys.readouterr().out.splitlines()
     assert "connection_bus: connections: no tenant_id column" in lines
     assert {line.split(":")[0] for line in lines} == {
-        "connection_bus", "graph_engine", "virtual_control_plane",
+        "connection_bus", "virtual_control_plane",
     }
 
 

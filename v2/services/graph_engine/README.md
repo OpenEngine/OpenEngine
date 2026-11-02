@@ -19,6 +19,20 @@ uv run oe graph list --json       # the query-response, with next_cursor
 uv run oe graph get NAME[@REV]    # a revision, the latest by default, and its source
 ```
 
+### Tenant isolation
+GE scopes every store operation to the verified `request.principal.tenant_id`.
+The process owns the open persistence handle and closes it after draining;
+handlers obtain tenant-bound stores from that handle. Project authorization
+still applies within that tenant. Graph IDs, revisions, operations, list pages,
+accepted and rejected receipts, and command-conflict details are tenant-local.
+Two tenants may reuse graph names and command IDs in the same project.
+
+Migration `5cce010cee3d` backfills existing rows to `LOCAL_TENANT` and rebuilds
+primary, unique and foreign keys with `tenant_id` first. Existing revision
+sources and receipt fingerprints/replies are preserved, so local retries replay.
+Downgrade refuses any non-local rows before changing tables. The CLI still
+uses local-operator tenancy; tenant provisioning and selection are separate work.
+
 ### Graph registry
 [`registry.py`](registry.py) serves `graphs.apply`. Graphs belong to a
 project: a command or query acts in the `project` it names, or in `default`

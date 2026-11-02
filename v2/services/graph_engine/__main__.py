@@ -26,7 +26,7 @@ import nats
 from alembic.util import CommandError
 from openengine.messaging import LocalOperator, Server, listen_address
 from openengine.messaging.server import is_loopback
-from openengine.persistence import LOCAL_TENANT, DatabaseConfig
+from openengine.persistence import DatabaseConfig, OpenPersistence
 from openengine.telemetry import configure
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -58,7 +58,7 @@ async def _health(healthy, reader: asyncio.StreamReader, writer: asyncio.StreamW
         writer.close()
 
 
-async def serve(nats_url: str, health_port: int, ready_file: Path | None, store: Graphs) -> int:
+async def serve(nats_url: str, health_port: int, ready_file: Path | None, store: OpenPersistence[Graphs]) -> int:
     stopping = asyncio.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(signum, stopping.set)
@@ -123,7 +123,7 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
     return EXIT_OK
 
 
-async def _serve_store(nats_url: str, health_port: int, ready_file: Path | None, store: Graphs) -> int:
+async def _serve_store(nats_url: str, health_port: int, ready_file: Path | None, store: OpenPersistence[Graphs]) -> int:
     try:
         return await serve(nats_url, health_port, ready_file, store)
     finally:
@@ -150,8 +150,7 @@ def main() -> int:
                 os.environ.get(NATS_URL_VARIABLE, "nats://127.0.0.1:4222"),
                 int(os.environ.get(HEALTH_PORT_VARIABLE, "0")),
                 Path(ready_file) if ready_file else None,
-                # One local tenant until tenants come from credentials (#1233).
-                PERSISTENCE.open(config).scoped(LOCAL_TENANT),
+                PERSISTENCE.open(config),
             )
         )
     except (OSError, CommandError, SQLAlchemyError, nats.errors.Error):
