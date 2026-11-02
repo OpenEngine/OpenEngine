@@ -7,3 +7,8 @@
 # service = "cxn"
 # table = "connection_routes"
 # reason = "maps (provider, external_id) to its tenant before the tenant is known"
+
+[[tables]]
+service = "cxn"
+table = "connection_routes"
+reason = "maps (provider, external_id) to its tenant before the tenant is known"
