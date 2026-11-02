@@ -204,6 +204,14 @@ function fixtureRepository(root: string): { repository: string; origin: string }
   mkdirSync(repository);
   execFileSync("git", ["init", "--initial-branch=main", repository], { stdio: "pipe" });
   writeFileSync(path.join(repository, "README.md"), "# fixture\n", "utf-8");
+  // Runs must pass the target repository's quality gate before reaching review.
+  writeFileSync(path.join(repository, ".quality.toml"), `version = 1
+
+[[checks]]
+id = "readme"
+command = ["${process.execPath}", "-e", "if (!require('node:fs').readFileSync('README.md', 'utf8').startsWith('# fixture')) process.exit(1)"]
+files = ["README.md"]
+`, "utf-8");
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", repository, ...args], { stdio: "pipe" });
   git("add", "--all");

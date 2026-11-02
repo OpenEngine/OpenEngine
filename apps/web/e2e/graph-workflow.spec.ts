@@ -297,6 +297,7 @@ test("a graph workflow accepts independent stage runners", async ({
     timeout: 60_000,
   }).toEqual([]);
   const run = await graphRun(page, runUrl);
+  expect(run.values.quality_check.passed).toBe(true);
   expect(run.values.inputs).toEqual({
     mode: "connected",
     instruction: "",
