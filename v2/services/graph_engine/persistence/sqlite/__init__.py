@@ -12,11 +12,12 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 from typing import Any
+from weakref import WeakKeyDictionary
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from openengine.persistence import DatabaseStore, TenantDatabase
+from openengine.persistence import Database, DatabaseStore, TenantDatabase
 
 from graph_engine.persistence.schema import command_receipts, graph_revisions, graphs, operations
 from graph_engine.persistence.store import (
@@ -32,6 +33,9 @@ from graph_engine.persistence.store import (
 
 APPLY = "graphs.apply"
 
+# Request stores share the writer queue for the lifetime of their open database.
+_WRITE_LOCKS: WeakKeyDictionary[Database, asyncio.Lock] = WeakKeyDictionary()
+
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
@@ -41,7 +45,7 @@ class SqliteGraphs(DatabaseStore):
     def __init__(self, database: TenantDatabase) -> None:
         super().__init__(database)
         self.database = database
-        self._writing = asyncio.Lock()
+        self._writing = _WRITE_LOCKS.setdefault(database.database, asyncio.Lock())
 
     async def apply(
         self, command: Command, definition: Definition, expected_version: int | None = None,
