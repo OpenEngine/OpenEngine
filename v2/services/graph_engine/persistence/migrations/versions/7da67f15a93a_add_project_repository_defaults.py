@@ -17,6 +17,13 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+class UnsafeTenantDowngrade(RuntimeError):
+    """Tenant registrations must survive a refused downgrade."""
+
+    def __init__(self, table: str) -> None:
+        super().__init__(f"{table} has non-local tenant rows; remove them to downgrade")
+
+
 def upgrade() -> None:
     op.create_table(
         "repositories",
@@ -37,5 +44,5 @@ def downgrade() -> None:
     for name in ("repositories", "graphs", "graph_revisions", "operations", "command_receipts"):
         if bind.scalar(sa.text(f"SELECT COUNT(*) FROM {name} WHERE tenant_id != :local"),
                        {"local": "00000000000070008000000000000001"}):
-            raise RuntimeError(f"{name} has non-local tenant rows; remove them to downgrade")
+            raise UnsafeTenantDowngrade(name)
     op.drop_table("repositories")
