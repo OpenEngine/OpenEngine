@@ -6,11 +6,14 @@ process and checked before any receipt lookup: a wrong runtime is
 the journal. Accepting execute journals its receipt and a `recorded` attempt
 in one transaction before replying; the reply means durable ownership, not
 that work started. Every update is encoded, validated and journaled with its
-sequence before it is sent. Inspect reads without reserving the writer.
+sequence before it is sent. Progress waits while the unacknowledged outbox is
+full, so a fast producer is slowed rather than dropped; terminal updates never
+wait. Inspect reads without reserving the writer.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Mapping
@@ -21,6 +24,7 @@ from uuid import uuid4
 
 from openengine.contracts.runtime import digest, error, validate_wire_message
 
+from workspace_daemon import context as task_context
 from workspace_daemon.executor import ExecutorPort
 from workspace_daemon.initialization import RecoveryRefused, Refusal
 from workspace_daemon.store import TERMINAL, JournalStore
@@ -61,9 +65,10 @@ class UnsendableUpdate(ValueError):
 class Journal:
     def __init__(self, store: JournalStore, binding: dict[str, Any], root: Path,
                  executors: Mapping[str, ExecutorPort], *, max_concurrent_attempts: int = 1,
-                 established: bool = False) -> None:
+                 established: bool = False, max_pending_updates: int = 1000) -> None:
         self.store, self.binding, self.root = store, dict(binding), root
         self.executors, self.max_concurrent_attempts = executors, max_concurrent_attempts
+        self.max_pending_updates, self.backpressure_seconds = max_pending_updates, 0.05
         self.established = established
         self.boot_id = identity("boot_")
         self.updates = f"oe.internal.v1.vcp.runtimes.{binding['runtime_id']}.updates"
@@ -145,6 +150,21 @@ class Journal:
         await self.append(tx, "attempt." + state, payload, attempt, termination)
         await tx.save_attempt(attempt)  # leaving the active states frees its session and capacity
 
+    async def progress(self, attempt_id: str, payload: dict[str, Any]) -> None:
+        """Journal one progress record for a running attempt, waiting while the outbox is full."""
+        while True:
+            async with self.store.read() as tx:
+                if await tx.pending_updates() < self.max_pending_updates:
+                    break
+            await asyncio.sleep(self.backpressure_seconds)
+        async with self.store.transaction() as tx:
+            attempt = await tx.attempt(attempt_id)
+            executor = self.executors[attempt["command"]["payload"]["agent"]["runner"]]
+            if attempt["state"] != "running" or payload["kind"] not in executor.progress_kinds:
+                raise ValueError(payload["kind"])  # only for a running attempt, of an advertised kind
+            await self.append(tx, "attempt.progress", payload, attempt)
+            await tx.save_attempt(attempt)
+
     async def execute(self, subject: str, command: dict[str, Any]) -> dict[str, Any]:
         response = {"command_id": command["command_id"], "target": command["target"], "status": "accepted"}
         if detail := mismatch(self.binding, subject, command, "execute"):
@@ -170,9 +190,13 @@ class Journal:
                 detail = error("SESSION_BUSY", "session has an active attempt")
             elif (payload["session_mode"] == "continue") != (session is not None) or (session and session["agent"] != payload["agent"]):
                 detail = error("INVALID_ARGUMENT", "session mapping does not match this execution")
+            elif session and executor.conversational and not (
+                    session["executor_session_id"] and session["executor_resumable"]):
+                # Never replace a conversation that cannot be loaded with a new one.
+                detail = error("INVALID_ARGUMENT", "the session's executor conversation cannot be resumed")
             else:
                 try:
-                    self._context(payload["context"])
+                    task_context.resolve(self.root, payload["context"])
                     executor.validate(payload)
                 except (OSError, ValueError, RuntimeError):
                     detail = error("INVALID_ARGUMENT", "invalid or unavailable executor context")
@@ -189,14 +213,6 @@ class Journal:
                 await tx.save_attempt({"command": command, "state": "recorded", "launch_count": 0,
                                        "attempt_sequence": 0, "last_event_sequence": 0})
         return response
-
-    def _context(self, context: dict[str, Any]) -> None:
-        if context["references"]:
-            raise ValueError()  # artifact references need an authorized artifact port
-        for value, directory in [(context["working_directory"], True), *((v, False) for v in context["instruction_files"])]:
-            path = (self.root / value).resolve(strict=True)
-            if not path.is_relative_to(self.root) or (not path.is_dir() if directory else not path.is_file()):
-                raise ValueError()  # outside the root, or the wrong type
 
     async def inspect(self, subject: str, request: dict[str, Any]) -> dict[str, Any]:
         response = {"request_id": request["request_id"], "target": request["target"], "status": "ok"}

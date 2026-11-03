@@ -624,14 +624,22 @@ the whole update back and sends no reply, so the daemon retries it. A
 while the owned workspace is still provisioning. Admission already requires
 committed readiness for the current generation.
 
-| Update | Projection (through `Execution.transition`) |
+| Update | Projection (through `Execution.transition` or `Execution.progress`) |
 | -- | -- |
 | `attempt.started` | attempt running; execute succeeds; `task.started` |
+| `attempt.progress` `conversation` | next session history sequence (kept beside the session snapshot); `conversation.message` |
+| `attempt.progress` `usage` | delta added once to the attempt's `usage`; `usage.reported` with its period |
 | `attempt.completed` | attempt completed, session idle, attempt released; `task.completed` |
 | `attempt.failed` | attempt failed, session idle, attempt released; `task.failed`; execute fails only if never started |
 
-Progress, cancellation and steering updates are rejected as `EVENT_CONFLICT`:
-the fake daemon advertises no progress kinds and sends none. `inspect` asks the
+Progress applies only to a running attempt and only for kinds the runtime
+registered in `runtime.ready` (the codex executor registers `conversation` and
+`usage`; `fake` none). A usage period that ends before it starts or overlaps
+the attempt's previous one, an unregistered kind (including `artifact`),
+progress after a terminal record, cancellation and steering are
+`EVENT_CONFLICT` and quarantine the runtime. Deduplication on the update's
+event ID means redelivered progress never repeats history or usage. There is no
+session-history query yet: the public events are the history. `inspect` asks the
 daemon for read-only snapshots and its journal high-water mark.
 
 Delivery, journal identity, sequencing and projection never read a locator,
