@@ -21,12 +21,15 @@ even if only one source file changed; no LLM chooses the files to inspect.
 
 The detector uses pinned jscpd 4.0.5 and its pinned 4.0.1 language tokenizer,
 with a content-window grouping policy in `tools/quality/duplication.cjs`.
-`duplication.json` configures the source extensions, explicit directory/path
-exclusions, and minimum size (initially 100 tokens). All Python and JavaScript /
-TypeScript sources under the repository root are included, including tests,
-subject to the explicit dependency, generated-code, build, fixture, and vendor
-exclusions. Symlinks are not followed. Other languages are outside this initial
-policy; extending the source extensions requires a supported jscpd lexer.
+`duplication.json` configures explicit directory/path exclusions and minimum size
+(initially 100 tokens). All regular UTF-8 text files under the repository root
+are included, regardless of extension, subject to the explicit dependency,
+generated-code, build, fixture, and vendor exclusions. Binary files (NUL bytes
+or invalid UTF-8) are skipped, and symlinks are not followed. Known languages use
+jscpd's lexers automatically. Unknown extensions and extensionless files use a
+generic tokenizer: Unicode letter/number/underscore runs and individual
+non-whitespace characters. This fallback ignores whitespace but preserves comments;
+it provides exact lexical matching for new languages without configuration changes.
 
 Each group shares exactly the same sequence of at least 100 consecutive lexical
 token values, in the same language. Whitespace and comments are ignored;

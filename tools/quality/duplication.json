@@ -1,14 +1,5 @@
 {
   "minTokens": 100,
-  "extensions": [
-    ".py",
-    ".js",
-    ".jsx",
-    ".ts",
-    ".tsx",
-    ".mjs",
-    ".cjs"
-  ],
   "exclude": [
     ".git",
     ".venv",

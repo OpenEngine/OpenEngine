@@ -123,3 +123,20 @@ test('npm prefix resolves both tree arguments from the invocation directory', t 
   assert.equal(direct.status, 1, direct.stderr);
   assert.ok(JSON.parse(direct.stdout).findings.length);
 });
+
+test('all text files participate without an extension allowlist', t => {
+  for (const extension of ['.rs', '.newlanguage', '']) {
+    const files = Object.fromEntries(['a', 'b', 'c'].map(n => [n + extension, block]));
+    const two = tree(t, Object.fromEntries(Object.entries(files).slice(0, 2)));
+    const three = tree(t, files);
+    assert.ok(findings(three, two).length, extension);
+    assert.equal(findings(three, three).length, 0);
+    assert.ok(findings(three, two)[0].context.includes('process'));
+  }
+});
+test('binary files are skipped while text exclusions still apply', t => {
+  for (const source of [Buffer.from(block + '\u0000'), Buffer.concat([Buffer.from(block), Buffer.from([255])])]) {
+    assert.equal(tree(t, {'a.bin': source, 'b.bin': source, 'c.bin': source}).size, 0);
+  }
+  assert.equal(findings(tree(t, {'a.unknown': block, 'b.unknown': block, 'generated/c.unknown': block}), new Map()).length, 0);
+});

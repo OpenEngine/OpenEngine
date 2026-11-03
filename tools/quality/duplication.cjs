@@ -2,8 +2,22 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {createHash} = require('node:crypto');
+const {isUtf8} = require('node:buffer');
 const {tokenize, getFormatByFile} = require('@jscpd/tokenizer');
 const config = require('./duplication.json');
+
+// Unknown languages still receive exact lexical matching without a lexer update.
+function textTokens(source) {
+  const tokens = [];
+  let line = 1, offset = 0;
+  for (const match of source.matchAll(/[\p{L}\p{N}_]+|[^\s]/gu)) {
+    line += (source.slice(offset, match.index).match(/\n/g) || []).length;
+    offset = match.index;
+    tokens.push({value: match[0], range: [offset, offset + match[0].length],
+      loc: {start: {line}, end: {line}}});
+  }
+  return tokens;
+}
 
 function scan(root, options = config) {
   if (!Number.isInteger(options.minTokens) || options.minTokens < 1) throw new Error('minTokens must be a positive integer');
@@ -15,12 +29,15 @@ function scan(root, options = config) {
       const relative = path.relative(root, absolute).split(path.sep).join('/');
       if (options.exclude.includes(entry.name) || options.excludePaths.some(p => relative === p || relative.startsWith(p + '/'))) continue;
       if (entry.isDirectory()) { visit(absolute); continue; }
-      if (!entry.isFile() || !options.extensions.includes(path.extname(entry.name))) continue;
-      const format = getFormatByFile(entry.name);
-      if (!format) throw new Error(`Unsupported source: ${relative}`);
+      if (!entry.isFile()) continue;
+      const format = getFormatByFile(entry.name) || 'text';
       const fileIndex = files.push(relative) - 1;
-      const source = fs.readFileSync(absolute, 'utf8');
-      const tokens = tokenize(source, format).filter(t => !['comment', 'empty', 'new_line'].includes(t.type));
+      const bytes = fs.readFileSync(absolute);
+      // Binary data is not code. Validate UTF-8 rather than matching replacement characters.
+      if (bytes.includes(0) || !isUtf8(bytes)) continue;
+      const source = bytes.toString('utf8');
+      const tokens = format === 'text' ? textTokens(source) :
+        tokenize(source, format).filter(t => !['comment', 'empty', 'new_line'].includes(t.type));
       for (let i = 0; i <= tokens.length - options.minTokens; i++) {
         const block = tokens.slice(i, i + options.minTokens);
         // Values, including identifier and literal spelling, are significant. Token
