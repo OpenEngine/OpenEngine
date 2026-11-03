@@ -670,3 +670,63 @@ def test_a_reload_racing_a_relaunch_is_retryable(binary, tmp_path, database, mon
             await runtime_broker.issue(A, 1)
 
     asyncio.run(scenario())
+
+
+def test_a_credential_probe_never_sends_the_secret_to_an_impostor(binary, tmp_path, database) -> None:
+    async def scenario() -> None:
+        port = free_port()
+        runtime_broker = make(tmp_path, binary, database, port)
+        async with running(runtime_broker):
+            credential = await runtime_broker.issue(A, 1)
+            secret = credential.path.read_text()
+            name, server_id = runtime_broker._server_name, runtime_broker._server_id
+            received = bytearray()
+
+            async def impostor(reader, writer) -> None:
+                # A stale copy of the real INFO, from a listener that is not the live server.
+                writer.write(b"INFO " + json.dumps({"server_id": server_id, "server_name": name, "version": "2.15.1",
+                                                    "proto": 1, "max_payload": 1048576}).encode() + b"\r\n")
+                await writer.drain()
+                with contextlib.suppress(OSError):
+                    while data := await reader.read(4096):
+                        received.extend(data)
+                        writer.write(b"PONG\r\n")
+                writer.close()
+            server = await asyncio.start_server(impostor, "127.0.0.1", 0)
+            original = runtime_broker.endpoint
+            runtime_broker.endpoint = BrokerEndpoint("127.0.0.1", server.sockets[0].getsockname()[1], credential.url)
+            try:
+                # Even while VCP still believes the endpoint verified, the probe's own socket is checked.
+                runtime_broker._server_id = "a-different-live-server"
+                with pytest.raises(BrokerUnavailable):
+                    await runtime_broker._authenticates(credential.user, secret)
+                runtime_broker._server_id = server_id
+                runtime_broker._verified = False
+                with pytest.raises(BrokerUnavailable):
+                    await runtime_broker._authenticates(credential.user, secret)
+            finally:
+                runtime_broker.endpoint, runtime_broker._verified = original, True
+                server.close()
+                server.close_clients()
+            assert secret.encode() not in received and b'"pass"' not in received
+
+    asyncio.run(scenario())
+
+
+def test_the_reverifier_keeps_retrying_after_any_verification_error(binary, tmp_path, database) -> None:
+    async def scenario() -> None:
+        runtime_broker = make(tmp_path, binary, database, free_port())
+        async with running(runtime_broker):
+            identified, failures = runtime_broker._identified, [TimeoutError(), ValueError("bad INFO")]
+
+            async def flaky(run: Path) -> bool:
+                if failures:
+                    raise failures.pop(0)
+                return await identified(run)
+            runtime_broker._identified = flaky
+            runtime_broker._verified = False
+            await runtime_broker._disconnected()
+            await asyncio.wait_for(runtime_broker._reverifier, 10)
+            assert runtime_broker._verified and not failures
+
+    asyncio.run(scenario())

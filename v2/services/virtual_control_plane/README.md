@@ -815,7 +815,11 @@ guards every connection, not only the first: nats-py gets VCP's password only
 while the endpoint is verified, any disconnect clears that until the live
 server (or its relaunch) is identified again, and a reconnect meanwhile is
 refused before CONNECT. A relaunch also rotates the password, so one captured
-from a dead launch is never accepted. Startup (lock, spawn, identity, authenticated
+from a dead launch is never accepted. Runtime credential probes (issuance and revocation
+checks) send a secret only when the endpoint is verified and the INFO on the
+probe's own socket names this launch's `server_name` and the `server_id` its
+loopback monitor reported. Verification failures of any kind are retried
+until the endpoint is identified again. Startup (lock, spawn, identity, authenticated
 connect) is bounded; a server that exits or cannot bind fails promptly. After
 startup, a broker that exits is relaunched on the same endpoint with backoff
 (0.1 to 5 seconds), pending revocations are then finished, and connections

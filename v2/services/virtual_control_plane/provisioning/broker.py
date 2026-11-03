@@ -230,6 +230,7 @@ class RuntimeBroker:
         self._process: asyncio.subprocess.Process | None = None
         self._log = None
         self._server_name = ""
+        self._server_id = ""
         self._password = ""
         self._monitor_url = ""
         self._serialize = asyncio.Lock()
@@ -272,7 +273,7 @@ class RuntimeBroker:
                 if self.running and not self._verified:
                     try:
                         self._verified = await self._identified(self.directory / "run" / self._server_name)
-                    except BrokerUnavailable as error:
+                    except Exception as error:  # noqa: BLE001 -- any failure is retried; the gate stays closed
                         log.warning("runtime broker endpoint not verified: %s", error)
             await asyncio.sleep(0.1)
 
@@ -494,7 +495,8 @@ class RuntimeBroker:
         if urlsplit(monitor).hostname != "127.0.0.1":
             _unavailable("runtime broker monitor is not on loopback")
         self._monitor_url = monitor
-        if (await self._monitor("varz")).get("server_name") != self._server_name:
+        varz = await self._monitor("varz")
+        if varz.get("server_name") != self._server_name:
             _unavailable("runtime broker monitor reports another server")
         target = urlsplit(self.endpoint.client_url)
         try:
@@ -503,13 +505,26 @@ class RuntimeBroker:
             return False
         try:
             line = await asyncio.wait_for(reader.readline(), REQUEST_SECONDS)
+        except (OSError, TimeoutError):
+            return False
         finally:
             writer.close()
         if not line.startswith(b"INFO "):
             return False
-        if json.loads(line[5:]).get("server_name") != self._server_name:
+        try:
+            info = json.loads(line[5:])
+        except ValueError:
+            return False
+        if info.get("server_name") != self._server_name or info.get("server_id") != varz.get("server_id"):
             _unavailable("an unmanaged listener holds the runtime broker endpoint")
+        self._server_id = info["server_id"]
         return True
+
+    def _verified_server(self, client: NATS) -> bool:
+        """Whether the INFO on `client`'s own socket comes from the live, identified server of this launch."""
+        info = client._server_info  # noqa: SLF001 -- the INFO of this very connection, read before CONNECT
+        return (self._verified and self.running and bool(self._server_id)
+                and info.get("server_name") == self._server_name and info.get("server_id") == self._server_id)
 
     async def _monitor(self, path: str) -> dict:
         def get() -> dict:
@@ -575,9 +590,20 @@ class RuntimeBroker:
         log.info("runtime credential retired", extra={"vcp.runtime_id": row.runtime_id})
 
     async def _authenticates(self, user: str, secret: str) -> bool:
+        """Whether the broker accepts `secret`, sent only after this connection's INFO identifies our server."""
+        if not self._verified:
+            _unavailable("runtime broker endpoint is not verified")
+        probe = NATS()
+
+        def password() -> str:
+            # nats-py calls this for CONNECT, after reading the INFO of the same socket.
+            if not self._verified_server(probe):
+                message = "runtime broker probe reached an unverified server"
+                raise ServerUnverified(message)
+            return secret
         try:
-            probe = await nats.connect(self.endpoint.client_url, user=user, password=secret, allow_reconnect=False,
-                                       max_reconnect_attempts=0, connect_timeout=REQUEST_SECONDS, error_cb=_quiet)
+            await probe.connect(self.endpoint.client_url, user=user, password=password, allow_reconnect=False,
+                                max_reconnect_attempts=0, connect_timeout=REQUEST_SECONDS, error_cb=_quiet)
         except nats.errors.Error as error:
             if "authorization violation" in str(error).lower():
                 return False
