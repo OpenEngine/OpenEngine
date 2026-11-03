@@ -124,3 +124,15 @@ def test_list_filters_in_sql_using_legacy_status_index(config: DatabaseConfig, m
             await durable.close()
 
     asyncio.run(scenario())
+
+
+def test_downgrade_keeps_issued_runtime_credentials(config: DatabaseConfig) -> None:
+    """Dropping the rows would forget which credentials were retired."""
+    from virtual_control_plane.persistence.credentials import CredentialRows
+
+    database = PERSISTENCE.database(config)
+    asyncio.run(CredentialRows(database).claim("rt_1", 1, "rt_1"))
+
+    with pytest.raises(RuntimeError, match="runtime broker credentials"):
+        downgrade(PERSISTENCE.migrations, database, "1b2226fa7c9a")
+    assert "runtime_credentials" in inspect(database.migration_engine()).get_table_names()

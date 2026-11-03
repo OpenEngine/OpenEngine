@@ -1,0 +1,99 @@
+---
+title: vcp at 9d5590f3f1a5 (green added, red removed, amber changed)
+config:
+  theme: neutral
+---
+erDiagram
+    direction LR
+    %% REMOVED tables/columns are tombstones, absent from this revision's schema.
+    %% Column changes include type, nullability, default and key membership.
+    %% Table changes also include indexes and constraints.
+    classDef added fill:#dcfce7,stroke:#15803d,color:#14532d
+    classDef removed fill:#fee2e2,stroke:#b91c1c,color:#7f1d1d
+    classDef changed fill:#fef3c7,stroke:#b45309,color:#78350f
+    attempt_bindings["attempt_bindings<br/>Immutable accepted execution identity and generation binding."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    attempts["attempts<br/>Task attempts and their execute operation identity."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    command_receipts["command_receipts<br/>Immutable command identity and original response for idempotent replay."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    history_cursors["history_cursors<br/>Durable opaque history cursors bound to tenant, session and normalized filters."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    operations["operations<br/>Accepted commands' progress and terminal state. (CHANGED)"] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    class operations changed
+    outbox["outbox<br/>Immutable public event envelopes awaiting or recording JetStream publication. (CHANGED)"] {
+        INTEGER sequence PK "not null"
+        VARCHAR(128) workspace_id "not null"
+        VARCHAR(128) event_id "not null"
+        JSON envelope "not null"
+        DATETIME created_at "not null"
+        DATETIME published_at "nullable"
+    }
+    class outbox changed
+    runtime_commands["runtime_commands<br/>Immutable internal commands accepted atomically with attempts, and their delivery outcome. (CHANGED)"] {
+        VARCHAR(128) command_id PK "not null"
+        TEXT subject "not null"
+        BLOB wire "not null"
+        VARCHAR(128) attempt_id FK "not null"
+        VARCHAR(16) status "not null; default: 'pending'"
+        BLOB acknowledgement "nullable"
+    }
+    class runtime_commands changed
+    attempts ||--o{ runtime_commands : "attempt_id"
+    runtime_credentials["runtime_credentials<br/>Internal broker credential ownership and revocation state per runtime; never the secret. (ADDED)"] {
+        VARCHAR(128) runtime_id PK "ADDED; not null"
+        INTEGER generation "ADDED; not null"
+        VARCHAR(128) username UK "ADDED; not null"
+        VARCHAR(16) status "ADDED; not null"
+        DATETIME issued_at "ADDED; not null"
+        DATETIME revoked_at "ADDED; nullable"
+        VARCHAR(64) secret_digest "ADDED; nullable"
+    }
+    class runtime_credentials added
+    runtime_status["runtime_status<br/>Execution readiness, capabilities, journal identity and update high-water mark of an owned runtime."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    runtime_updates["runtime_updates<br/>Committed internal runtime updates, for duplicate and conflict detection."] {
+        VARCHAR(128) runtime_id PK,FK,UK "not null"
+        VARCHAR(128) event_id PK "not null"
+        INTEGER sequence UK "not null"
+        VARCHAR(64) digest "not null"
+    }
+    runtime_status ||--o{ runtime_updates : "runtime_id"
+    session_history["session_history<br/>Ordered conversation and steering outcomes in one session-local sequence."] {
+        VARCHAR(128) session_id PK,FK "not null"
+        INTEGER sequence PK "not null"
+        VARCHAR(16) kind "not null"
+        VARCHAR(128) attempt_id FK "not null"
+        JSON entry "not null"
+    }
+    sessions ||--o{ session_history : "session_id"
+    attempts ||--o{ session_history : "attempt_id"
+    sessions["sessions<br/>Agent conversation snapshots, separate from workspace lifecycle."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    steering_commands["steering_commands<br/>Immutable steering bindings and their terminal projection status."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    workspace_runtimes["workspace_runtimes<br/>Provider ownership, opaque locator, runtime identity and generation."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    workspaces["workspaces<br/>Workspace lifecycle projections, or preserved legacy prototype records."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }

@@ -26,7 +26,14 @@ exclusively locked state directory and checking out only repositories beneath
 have broker credentials (`OE_VCP_RUNTIME_CREDENTIALS`, or the explicit
 test-only `OE_VCP_RUNTIME_LOCAL_TEST_ACCOUNT=1`); VCP then also commits those
 daemons' runtime updates. Otherwise no provider is configured and readiness promises
-request handling, not compute or an executor. See the service README.
+request handling, not compute or an executor.
+
+`OE_VCP_RUNTIME_BROKER_LISTEN` (`host:port`) starts VCP's own internal runtime
+broker from `OE_VCP_RUNTIME_BROKER_BINARY`, separate from `OE_NATS_URL`, with
+scoped per-runtime credentials under `runtime-broker/` in the state directory;
+guests dial `OE_VCP_RUNTIME_BROKER_GUEST_URL`. VCP then also commits runtime
+updates received there. A broker that cannot start within its deadline fails
+startup. See the service README.
 """
 
 from __future__ import annotations
@@ -34,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import signal
 import sys
 from collections.abc import Mapping
@@ -56,7 +64,9 @@ from virtual_control_plane.application.runtime_delivery import RuntimeUpdates
 from virtual_control_plane.exclusion import AlreadyRunning, StateDirectory
 from virtual_control_plane.jetstream import JetStreamEvents
 from virtual_control_plane.persistence import PERSISTENCE
+from virtual_control_plane.persistence.credentials import CredentialRows
 from virtual_control_plane.persistence.durable import DurableStore
+from virtual_control_plane.provisioning.broker import BrokerEndpoint, BrokerUnavailable, EndpointDrift, RuntimeBroker
 from virtual_control_plane.providers import worktree
 from virtual_control_plane.providers.smolvm import DEFAULT_TOOLS, Smolvm
 from virtual_control_plane.runtime_nats import RuntimeUpdateListener
@@ -82,6 +92,9 @@ WORKTREE_DISCARD_VARIABLE = "OE_VCP_WORKTREE_DISCARD_CHANGES"
 WORKTREE_SOURCE_ROOTS_VARIABLE = "OE_VCP_WORKTREE_SOURCE_ROOTS"
 RUNTIME_CREDENTIALS_VARIABLE = "OE_VCP_RUNTIME_CREDENTIALS"
 RUNTIME_LOCAL_TEST_ACCOUNT_VARIABLE = "OE_VCP_RUNTIME_LOCAL_TEST_ACCOUNT"
+RUNTIME_BROKER_LISTEN_VARIABLE = "OE_VCP_RUNTIME_BROKER_LISTEN"
+RUNTIME_BROKER_GUEST_URL_VARIABLE = "OE_VCP_RUNTIME_BROKER_GUEST_URL"
+RUNTIME_BROKER_BINARY_VARIABLE = "OE_VCP_RUNTIME_BROKER_BINARY"
 
 
 def providers(environment: Mapping[str, str] = os.environ) -> dict[str, AllocationProvider]:
@@ -112,6 +125,18 @@ def providers(environment: Mapping[str, str] = os.environ) -> dict[str, Allocati
                 source_roots=[root for root in environment.get(WORKTREE_SOURCE_ROOTS_VARIABLE, "").split(os.pathsep) if root],
                 discard_changes=environment.get(WORKTREE_DISCARD_VARIABLE) == "1")
     return configured
+
+
+def runtime_broker(store: DurableStore, environment: Mapping[str, str] = os.environ) -> RuntimeBroker | None:
+    """VCP's internal runtime broker, if `OE_VCP_RUNTIME_BROKER_LISTEN` configures one."""
+    listen = environment.get(RUNTIME_BROKER_LISTEN_VARIABLE)
+    if not listen:
+        return None
+    host, _, port = listen.rpartition(":")
+    endpoint = BrokerEndpoint(host.strip("[]"), int(port), environment.get(RUNTIME_BROKER_GUEST_URL_VARIABLE, f"nats://{listen}"))
+    binary = environment.get(RUNTIME_BROKER_BINARY_VARIABLE, "nats-server")
+    return RuntimeBroker(_state_directory(environment) / "runtime-broker", Path(shutil.which(binary) or binary),
+                         endpoint, CredentialRows(store.database))
 
 
 async def _health(healthy, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -161,8 +186,18 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
     # no execute route is served, so nothing is delivered to them yet (#1055).
     updates = (RuntimeUpdateListener(connection, RuntimeUpdates(store, execution))
                if worktree.PROVIDER in lifecycle.providers else None)
+    broker = runtime_broker(store)
+    internal = internal_updates = None
     health = None
     try:
+        if broker is not None:
+            try:
+                internal = await broker.start()
+            except (BrokerUnavailable, EndpointDrift):
+                log.exception("internal runtime broker did not start")
+                return EXIT_FAILED
+            internal_updates = RuntimeUpdateListener(internal, RuntimeUpdates(store, execution))
+            await internal_updates.start()
         await server.start()
         if updates is not None:
             await updates.start()
@@ -195,7 +230,13 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
                     await updates.close()
                 await publisher.close(OUTBOX_CLOSE_SECONDS)
                 await server.close()
+                if internal_updates is not None:
+                    await internal_updates.close()
+                if internal is not None:
+                    await internal.close()
             finally:
+                if broker is not None:
+                    await broker.close()
                 if health is not None:
                     # Do not wait on health clients during shutdown; the event
                     # loop cancels them before main releases owned resources.

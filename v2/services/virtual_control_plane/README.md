@@ -746,3 +746,72 @@ mixed history/filter pagination and cursor isolation. Its NATS test uses the
 fake daemon subprocess and reuses history cursors after VCP restart. None of this
 establishes authenticated model execution; real steering and restoration remain
 outside this slice. Production startup keeps the existing execution opt-in boundary.
+
+## Internal runtime broker (#1122, part 1)
+
+`provisioning/broker.py` gives VCP its own nats-server for the internal
+workspace-runtime protocol, separate from the public `OE_NATS_URL` broker. It
+is opt-in: `OE_VCP_RUNTIME_BROKER_LISTEN=host:port` starts it from
+`OE_VCP_RUNTIME_BROKER_BINARY` (an operator path, or `nats-server` on `PATH`;
+the supervisor's pinned 2.15.1 build works), and guests dial
+`OE_VCP_RUNTIME_BROKER_GUEST_URL` (default `nats://{listen}`). VCP connects
+as `vcp`, registers the runtime update listener on that connection, and fails
+startup if the broker cannot start within 10 seconds. Runtime credentials
+are not yet issued by any provider: the smolvm guest bootstrap that issues
+them on `provision`/`ensure` and retires them after confirmed destruction is
+the second part of #1122.
+
+**Users and permissions.** `vcp` may publish `oe.internal.v1.runtime.runtimes.>`
+and subscribe to `oe.internal.v1.vcp.runtimes.*.updates` and its own
+`_INBOX.oe.vcp.{instance}.>`; its password is regenerated on every launch.
+Each runtime is a user named by its runtime ID with exactly the contract's
+permission block (`packages/contracts/internal/workspace_runtime/v1/README.md`
+§Authentication): its own command subjects and `_INBOX.oe.runtime.{runtime_id}.>`,
+publish to its own updates subject, and one response within 10 seconds to
+each request it receives. No runtime has `_INBOX.>`, the VCP inbox, another
+runtime's subjects or any `oe.v1.*` subject. Runtime IDs must be a single
+subject token (`[A-Za-z0-9_-]{1,64}`).
+
+**Custody.** A runtime's password is 32 random bytes. The `runtime_credentials`
+row (runtime, generation, user, `active|revoking|retired`, issue and revocation
+times, a SHA-256 digest -- never the secret) is written before the secret,
+which lives only in `runtime-broker/credentials/{runtime_id}` (0600, in a 0700
+directory, written atomically and fsynced) and in the 0600 broker
+configuration generated from it. Neither appears in argv, logs, runtime
+command wires, outbox events or locators. Credentials are stable across VCP
+and broker restarts; a missing or tampered secret is never granted.
+
+**Revocation.** `revoke` marks the row `revoking`, regenerates the
+configuration from `active` rows only, reloads the broker through its control
+pipe, then confirms that `/varz` `config_load_time` advanced, that no
+connection of the user remains after a 5-second cutoff (nats-server 2.15.1
+closes them on reload) and that a probe with the revoked secret is refused.
+Only then is the row `retired` and the secret deleted. Any failure leaves it
+`revoking` and raises a retryable error; a restart finishes it, and since no
+configuration ever includes a non-`active` row, a restart can never restore
+retired authority. Revocation proves only that the broker refuses the
+credential, never that compute stopped: callers must confirm termination
+before treating a runtime as replaceable.
+
+**Process ownership.** `python -I provisioning/broker_process.py` owns the
+server. It inherits the `broker.lock` flock and holds it until it has reaped
+the server; VCP holds the only write end of its stdin. EOF -- including after
+VCP is SIGKILLed -- terminates the server (SIGKILL after 3 seconds) and frees
+the port and lock; the next VCP waits for the lock and reuses the persisted
+endpoint (`endpoint.json`), refusing a changed one as endpoint drift. Each
+launch uses a random `server_name`; VCP accepts the broker only when its
+loopback monitor and the client port's INFO both report it, so a foreign
+listener is never adopted or signalled, and no PID is ever read from disk.
+Startup (lock, spawn, identity, authenticated connect) is bounded; a server
+that exits or cannot bind fails promptly. After startup, connections
+reconnect indefinitely. If the broker child itself is SIGKILLed, its server
+is orphaned until killed by the operator; the next start then fails on the
+occupied port rather than adopting it.
+
+**Trust limits.** The broker is plaintext, so `host` must be a trusted local
+transport until TLS-first connection verification (#1221/#1222) lands behind
+`BrokerEndpoint`. The host account running VCP can read every secret and is
+trusted. No host model credential is involved. Public callers (#1051), tool
+grants (#1075) and host backends (#1054/#1055; the worktree adapter still
+shares one credential file) are separate; #1202/#1204 and host backends must
+qualify their own boundaries.
