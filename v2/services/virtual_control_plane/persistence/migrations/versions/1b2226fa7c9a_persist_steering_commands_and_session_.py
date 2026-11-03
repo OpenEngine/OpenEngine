@@ -70,7 +70,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     # Even settled identities fence late updates and receipt retries.
     if op.get_bind().execute(sa.text("SELECT 1 FROM steering_commands LIMIT 1")).first():
-        raise RuntimeError("Cannot downgrade after accepting steering commands")
+        message = "Cannot downgrade after accepting steering commands"
+        raise RuntimeError(message)
     # Settled steering is no longer deliverable; preserve that on rollback.
     op.execute("UPDATE runtime_commands SET status = 'rejected' WHERE status = 'settled'")
     with op.batch_alter_table("runtime_commands") as batch:
