@@ -22,7 +22,9 @@
     "vendored"
   ],
   "excludePaths": [
-    "tools/quality/duplication.test.cjs"
+    "tools/quality/duplication.test.cjs",
+    "docs/schema",
+    "v2/docs/schema"
   ],
   "exceptions": []
 }

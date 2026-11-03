@@ -24,7 +24,9 @@ with a content-window grouping policy in `tools/quality/duplication.cjs`.
 `duplication.json` configures explicit directory/path exclusions and minimum size
 (initially 100 tokens). All regular UTF-8 text files under the repository root
 are included, regardless of extension, subject to the explicit dependency,
-generated-code, build, fixture, and vendor exclusions. Binary files (NUL bytes
+generated-code, build, fixture, and vendor exclusions. The generated schema
+outputs `docs/schema` and `v2/docs/schema` are explicitly excluded; other
+documentation remains scanned. Binary files (NUL bytes
 or invalid UTF-8) are skipped, and symlinks are not followed. Known languages use
 jscpd's lexers automatically. Unknown extensions and extensionless files use a
 generic tokenizer: Unicode letter/number/underscore runs and individual

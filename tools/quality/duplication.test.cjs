@@ -155,3 +155,18 @@ test('rolling fingerprint collisions do not merge distinct token windows', t => 
   assert.deepEqual(groups.get(id).locations.map(l => l.file), ['a.unknown', 'b.unknown']);
   assert.equal(findings(groups, new Map()).length, 0);
 });
+
+test('generated schema revisions are excluded without excluding other documentation', t => {
+  for (const directory of ['docs/schema', 'v2/docs/schema']) {
+    const base = tree(t, {...copies(['a', 'b']), [`${directory}/old/revision.py`]: block});
+    const current = tree(t, {...copies(['a', 'b']),
+      [`${directory}/old/revision.py`]: block, [`${directory}/new/revision.py`]: block});
+    assert.equal(findings(current, base).length, 0);
+    for (const group of current.values()) {
+      assert.deepEqual(group.locations.map(l => l.file), ['a.py', 'b.py']);
+    }
+  }
+  for (const directory of ['docs/guides', 'v2/docs/guides', 'docs/schema-examples']) {
+    assert.ok(findings(tree(t, {...copies(['a', 'b']), [`${directory}/example.py`]: block}), new Map()).length);
+  }
+});
