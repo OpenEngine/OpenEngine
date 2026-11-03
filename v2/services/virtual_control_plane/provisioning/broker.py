@@ -13,8 +13,8 @@ directory, written atomically); its ownership row (`runtime_credentials`) is
 written first and stores only a digest, and the generated broker
 configuration holds only bcrypt hashes. The configuration is generated from
 `active` rows alone, so a `revoking` or `retired` credential is never granted
-again, even after a restart. `vcp`'s own password is regenerated for every
-start of VCP; runtime user names are prefixed so none can be `vcp`.
+again, even after a restart. Runtime user names are prefixed so none can be
+`vcp`.
 
 `broker_process.py` owns the server through a control pipe and `broker.lock`;
 see its docstring. VCP accepts only the server it launched: the per-launch
@@ -23,9 +23,15 @@ client port, so an unmanaged listener is never adopted or signalled. That INFO
 is sent to anyone, so it identifies the server only because the broker listens
 on one specific address, which no other process can also bind: a wildcard
 listen address is refused, since BSD lets another process bind a more specific
-address under it and relay the INFO to collect credentials. If the broker
-exits after startup it is relaunched on the same endpoint, and VCP's
-connection reconnects to it.
+address under it and relay the INFO to collect credentials. The host must be
+an IP literal, normalized, and never an unspecified address in any spelling.
+
+The same check guards every later connection, not just the first: VCP's
+password is handed to nats-py only while the endpoint is verified. Any
+disconnect clears that until the live server is identified again (or, after
+it exited, until its relaunch is), so a reconnect to a freed port is refused
+before CONNECT. `vcp`'s password is also regenerated for every launch, so one
+captured from a dead launch is never accepted by the next.
 
 `BrokerEndpoint` is the seam where connection verification (TLS-first, #1222)
 can be adopted later; until then the broker is plaintext and must stay on a
@@ -38,6 +44,7 @@ import asyncio
 import contextlib
 import fcntl
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -71,7 +78,6 @@ CHILD = Path(__file__).with_name("broker_process.py")
 # Subject tokens and NATS user names: never `.`, `*`, `>` or whitespace.
 RUNTIME_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 RUNTIME_USER_PREFIX = "runtime-"
-WILDCARD_HOSTS = ("", "0.0.0.0", "::")
 
 log = logging.getLogger(__name__)
 _OPENER = build_opener(ProxyHandler({}))
@@ -99,6 +105,25 @@ class CredentialConflict(RuntimeError):
     pass
 
 
+class ServerUnverified(nats.errors.Error):
+    """Raised instead of sending VCP's password to an endpoint not yet identified; nats-py retries later."""
+
+
+def _listen_host(host: str) -> str:
+    """The normalized IP literal to bind; never an unspecified (wildcard) address."""
+    try:
+        address = ipaddress.ip_address(host.strip("[]"))
+    except ValueError:
+        message = f"the runtime broker must listen on an IP address, not {host!r}"
+        raise ValueError(message) from None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    if address.is_unspecified:
+        message = "the runtime broker must listen on a specific address, not a wildcard"
+        raise ValueError(message)
+    return str(address)
+
+
 @dataclass(frozen=True)
 class BrokerEndpoint:
     """Where the broker listens and the URL a guest dials to reach it."""
@@ -108,9 +133,7 @@ class BrokerEndpoint:
     guest_url: str
 
     def __post_init__(self) -> None:
-        if self.host in WILDCARD_HOSTS:
-            message = "the runtime broker must listen on a specific address, not a wildcard"
-            raise ValueError(message)
+        object.__setattr__(self, "host", _listen_host(self.host))
 
     @property
     def address(self) -> str:
@@ -212,6 +235,8 @@ class RuntimeBroker:
         self._serialize = asyncio.Lock()
         self._credentials_lock = asyncio.Lock()
         self._supervisor: asyncio.Task | None = None
+        self._verified = False
+        self._reverifier: asyncio.Task | None = None
 
     @property
     def running(self) -> bool:
@@ -222,10 +247,34 @@ class RuntimeBroker:
 
     def vcp_options(self) -> dict:
         """nats-py options for VCP: its own inbox prefix, reconnecting indefinitely, across broker relaunches too."""
-        return {"user": VCP_USER, "password": self._password, "name": "vcp-runtime-broker",
+        return {"user": VCP_USER, "password": self._verified_password, "name": "vcp-runtime-broker",
                 "inbox_prefix": f"_INBOX.oe.vcp.{self.instance}", "connect_timeout": REQUEST_SECONDS,
                 "allow_reconnect": True, "max_reconnect_attempts": -1, "reconnect_time_wait": 0.5,
-                "error_cb": _quiet}
+                "error_cb": _quiet, "disconnected_cb": self._disconnected}
+
+    def _verified_password(self) -> str:
+        """nats-py calls this for each CONNECT; only an identified endpoint ever receives the password."""
+        if not self._verified:
+            message = "runtime broker endpoint is not verified"
+            raise ServerUnverified(message)
+        return self._password
+
+    async def _disconnected(self) -> None:
+        # Whatever answers next may not be our server until it is identified again.
+        self._verified = False
+        if self._reverifier is None or self._reverifier.done():
+            self._reverifier = asyncio.create_task(self._reverify())
+
+    async def _reverify(self) -> None:
+        """Re-identify the live server after a disconnect; a relaunch verifies itself."""
+        while not self._verified:
+            async with self._serialize:
+                if self.running and not self._verified:
+                    try:
+                        self._verified = await self._identified(self.directory / "run" / self._server_name)
+                    except BrokerUnavailable as error:
+                        log.warning("runtime broker endpoint not verified: %s", error)
+            await asyncio.sleep(0.1)
 
     async def start(self) -> NATS:
         """Launch the owned broker and connect as `vcp`, within `startup_seconds` overall."""
@@ -233,7 +282,6 @@ class RuntimeBroker:
             message = "runtime broker already started"
             raise RuntimeError(message)
         self._prepare()
-        self._password = secrets.token_urlsafe(32)
         try:
             async with asyncio.timeout(self.startup_seconds):
                 await self._launch()
@@ -319,14 +367,16 @@ class RuntimeBroker:
 
     async def close(self) -> None:
         """Stop relaunching, then close the control pipe; the child terminates its server and releases the lock."""
-        if self._supervisor is not None:
-            self._supervisor.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._supervisor
-            self._supervisor = None
+        for task in (self._supervisor, self._reverifier):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+        self._supervisor = self._reverifier = None
         await self._stop()
 
     async def _stop(self) -> None:
+        self._verified = False
         process, self._process = self._process, None
         try:
             if process is not None:
@@ -382,10 +432,12 @@ class RuntimeBroker:
             log.error("runtime broker exited with status %s; relaunching", process.returncode)
             delay = RESTART_SECONDS[0]
             while True:
-                await self._stop()
                 try:
-                    async with self._serialize, asyncio.timeout(self.startup_seconds):
-                        await self._launch()
+                    # Replacing the process excludes a concurrent reload of the old one.
+                    async with self._serialize:
+                        await self._stop()
+                        async with asyncio.timeout(self.startup_seconds):
+                            await self._launch()
                     break
                 except (BrokerUnavailable, TimeoutError, OSError) as error:
                     log.warning("runtime broker relaunch failed: %s", error)
@@ -407,6 +459,8 @@ class RuntimeBroker:
         lock = await self._acquire()
         try:
             self._server_name = f"oe-runtime-broker-{secrets.token_hex(8)}"
+            # A password captured from an earlier launch is never accepted by this one.
+            self._password = secrets.token_urlsafe(32)
             shutil.rmtree(self.directory / "run", ignore_errors=True)
             run = self.directory / "run" / self._server_name
             _private_directory(run)
@@ -424,6 +478,7 @@ class RuntimeBroker:
             if self._process.returncode is not None:
                 _unavailable(f"runtime broker exited during startup with status {self._process.returncode}")
             if await self._identified(run):
+                self._verified = True
                 return
             await asyncio.sleep(0.05)
 
@@ -490,10 +545,14 @@ class RuntimeBroker:
         async with self._serialize:
             if not self.running:
                 _unavailable("runtime broker is not running")
+            process = self._process
             before = (await self._monitor("varz")).get("config_load_time")
             await self._write_config(self.directory / "run" / self._server_name)
-            self._process.stdin.write(b"R")
-            await self._process.stdin.drain()
+            try:
+                process.stdin.write(b"R")
+                await process.stdin.drain()
+            except (BrokenPipeError, ConnectionResetError) as error:
+                _unavailable(f"runtime broker control pipe closed: {type(error).__name__}")
             deadline = asyncio.get_running_loop().time() + RELOAD_SECONDS
             while (await self._monitor("varz")).get("config_load_time") == before:
                 if asyncio.get_running_loop().time() > deadline:

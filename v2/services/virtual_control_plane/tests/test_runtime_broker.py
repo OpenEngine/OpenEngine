@@ -11,6 +11,7 @@ Linux; no VM is involved.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import fcntl
 import json
 import os
@@ -527,12 +528,15 @@ def test_a_runtime_named_vcp_gets_its_own_user(binary, tmp_path, database) -> No
     asyncio.run(scenario())
 
 
-def test_wildcard_listen_addresses_are_refused_and_ipv6_is_bracketed() -> None:
-    for host in ("", "0.0.0.0", "::"):
+def test_wildcard_listen_addresses_are_refused_in_every_spelling_and_ipv6_is_bracketed() -> None:
+    for host in ("0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0", "[::]", "::ffff:0.0.0.0"):
         with pytest.raises(ValueError, match="specific address"):
             BrokerEndpoint(host, 4300, "nats://192.0.2.1:4300")
-    endpoint = BrokerEndpoint("::1", 4300, "nats://[::1]:4300")
-    assert endpoint.address == "[::1]:4300" and endpoint.client_url == "nats://[::1]:4300"
+    for host in ("", "localhost", "broker.internal"):
+        with pytest.raises(ValueError, match="IP address"):
+            BrokerEndpoint(host, 4300, "nats://192.0.2.1:4300")
+    endpoint = BrokerEndpoint("0:0:0:0:0:0:0:1", 4300, "nats://[::1]:4300")
+    assert endpoint.host == "::1" and endpoint.address == "[::1]:4300" and endpoint.client_url == "nats://[::1]:4300"
 
 
 def test_a_crashed_broker_is_relaunched_and_still_revokes(binary, tmp_path, database, monkeypatch) -> None:
@@ -555,5 +559,114 @@ def test_a_crashed_broker_is_relaunched_and_still_revokes(binary, tmp_path, data
             await runtime_broker.revoke(A)
             with pytest.raises(nats.errors.Error, match="Authorization Violation"):
                 await nats.connect(credential.url, user=credential.user, password="x", allow_reconnect=False)
+
+    asyncio.run(scenario())
+
+
+def kill_server(runtime_broker: RuntimeBroker) -> Path:
+    """SIGKILL the running nats-server (not its owning child) and return its ports file."""
+    ports = next((runtime_broker.directory / "run").glob("*/*.ports"))
+    os.kill(int(ports.stem.rsplit("_", 1)[1]), signal.SIGKILL)
+    return ports
+
+
+def test_a_reconnect_never_sends_the_password_to_an_unverified_listener(binary, tmp_path, database) -> None:
+    async def scenario() -> None:
+        port = free_port()
+        runtime_broker = make(tmp_path, binary, database, port)
+        async with running(runtime_broker) as vcp:
+            password, name = runtime_broker._password, runtime_broker._server_name
+
+            async def never(*_args) -> None:
+                _ = broker_module._unavailable("relaunch held back by the test")
+            runtime_broker._launch = never
+            kill_server(runtime_broker)
+
+            # An impostor takes the freed port and relays the real server's INFO.
+            received, accepted = bytearray(), []
+
+            async def impostor(reader, writer) -> None:
+                accepted.append(True)
+                writer.write(b"INFO " + json.dumps({"server_id": "x", "server_name": name, "version": "2.15.1",
+                                                    "proto": 1, "max_payload": 1048576, "headers": True}).encode()
+                             + b"\r\n")
+                await writer.drain()
+                with contextlib.suppress(OSError):
+                    while data := await reader.read(4096):
+                        received.extend(data)
+                        writer.write(b"PONG\r\n")
+                writer.close()
+            deadline = time.monotonic() + 10
+            while True:
+                try:
+                    server = await asyncio.start_server(impostor, "127.0.0.1", port)
+                    break
+                except OSError:
+                    assert time.monotonic() < deadline, "the killed server's port was not freed"
+                    await asyncio.sleep(0.02)
+            try:
+                deadline = time.monotonic() + 10
+                while len(accepted) < 2:
+                    assert time.monotonic() < deadline, "VCP did not try to reconnect"
+                    await asyncio.sleep(0.05)
+                await asyncio.sleep(0.3)
+            finally:
+                server.close()
+                server.close_clients()
+            assert password.encode() not in received and b'"pass"' not in received
+            assert not vcp.is_connected
+
+    asyncio.run(scenario())
+
+
+def test_a_relaunch_rotates_the_vcp_password_and_reverifies(binary, tmp_path, database, monkeypatch) -> None:
+    monkeypatch.setattr(broker_module, "RESTART_SECONDS", (0.05, 0.2))
+
+    async def scenario() -> None:
+        runtime_broker = make(tmp_path, binary, database, free_port())
+        async with running(runtime_broker) as vcp:
+            before = runtime_broker._password
+            ports = kill_server(runtime_broker)
+            deadline = time.monotonic() + 15
+            while ports.exists() or not (runtime_broker.running and vcp.is_connected):
+                assert time.monotonic() < deadline, "the runtime broker was not relaunched"
+                await asyncio.sleep(0.05)
+            assert runtime_broker._password != before
+            with pytest.raises(nats.errors.Error, match="Authorization Violation"):
+                await nats.connect(runtime_broker.endpoint.client_url, user="vcp", password=before, allow_reconnect=False)
+
+    asyncio.run(scenario())
+
+
+def test_a_reload_racing_a_relaunch_is_retryable(binary, tmp_path, database, monkeypatch) -> None:
+    monkeypatch.setattr(broker_module, "RESTART_SECONDS", (0.05, 0.2))
+
+    async def scenario() -> None:
+        runtime_broker = make(tmp_path, binary, database, free_port())
+        async with running(runtime_broker) as vcp:
+            gate, entered = asyncio.Event(), asyncio.Event()
+            write_config = runtime_broker._write_config
+
+            async def held(run: Path) -> None:
+                entered.set()
+                await gate.wait()
+                await write_config(run)
+            runtime_broker._write_config = held
+            reload = asyncio.create_task(runtime_broker._reload())
+            await entered.wait()
+            child = runtime_broker._process
+            kill_server(runtime_broker)
+            await asyncio.wait_for(child.wait(), 10)
+            await asyncio.sleep(0.2)  # the supervisor has noticed the exit and waits for the reload
+            runtime_broker._write_config = write_config
+            gate.set()
+            with pytest.raises(BrokerUnavailable):
+                await reload
+
+            deadline = time.monotonic() + 15
+            while not (runtime_broker.running and vcp.is_connected):
+                assert time.monotonic() < deadline, "the runtime broker was not relaunched"
+                await asyncio.sleep(0.05)
+            await runtime_broker.issue(A, 1)
 
     asyncio.run(scenario())

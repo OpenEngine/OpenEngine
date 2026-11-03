@@ -763,7 +763,7 @@ the second part of #1122.
 
 **Users and permissions.** `vcp` may publish `oe.internal.v1.runtime.runtimes.>`
 and subscribe to `oe.internal.v1.vcp.runtimes.*.updates` and its own
-`_INBOX.oe.vcp.{instance}.>`; its password is regenerated on every VCP start.
+`_INBOX.oe.vcp.{instance}.>`; its password is regenerated for every broker launch.
 Because `vcp` may publish to every runtime's subjects, it answers an update
 only when the reply subject is under the sender's own
 `_INBOX.oe.runtime.{runtime_id}.`; any other reply is dropped. Each runtime is
@@ -807,9 +807,15 @@ loopback monitor and the client port's INFO both report it, so a foreign
 listener is never adopted or signalled, and no PID is ever read from disk.
 That INFO is sent to any client, so it proves identity only because the
 broker listens on one specific address that no other process can also bind;
-a wildcard listen host (`0.0.0.0`, `::`) is refused, since BSD would let a
-more specific bind under it relay the INFO and collect credentials. IPv6
-hosts are written `[::1]:port`. Startup (lock, spawn, identity, authenticated
+the host must be an IP literal, and an unspecified address in any spelling
+(`0.0.0.0`, `::`, `::0`, `0:0:0:0:0:0:0:0`, `::ffff:0.0.0.0`) is refused, since
+BSD would let a more specific bind under it relay the INFO and collect
+credentials. IPv6 hosts are normalized and written `[::1]:port`. The check
+guards every connection, not only the first: nats-py gets VCP's password only
+while the endpoint is verified, any disconnect clears that until the live
+server (or its relaunch) is identified again, and a reconnect meanwhile is
+refused before CONNECT. A relaunch also rotates the password, so one captured
+from a dead launch is never accepted. Startup (lock, spawn, identity, authenticated
 connect) is bounded; a server that exits or cannot bind fails promptly. After
 startup, a broker that exits is relaunched on the same endpoint with backoff
 (0.1 to 5 seconds), pending revocations are then finished, and connections
