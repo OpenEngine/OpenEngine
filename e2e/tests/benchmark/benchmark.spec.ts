@@ -2,12 +2,12 @@ import { randomBytes } from "node:crypto"
 import { expect } from "@playwright/test"
 import { withDocMeta } from "@test2doc/playwright/DocMeta"
 import { Terminal, test } from "../../fixtures/terminal.ts"
-import { BENCH_REPO, BENCH_TOPIC, containerSession, getRepo, gh, whoami } from "../../support/benchmark.ts"
-import { issues } from "../../fixtures/calculator/issues.ts"
+import { BENCH_REPO, BENCH_TOPIC, containerSession, daemonLog, ENGINE_WEB, getRepo, gh, inContainer, webhookLog, whoami } from "../../support/benchmark.ts"
+import { assignedIssue, issueBody, issues } from "../../fixtures/calculator/issues.ts"
 import { milestone } from "../../fixtures/calculator/milestone.ts"
-import { driveMilestone, type Budget } from "../../support/driver.ts"
+import { driveMilestone, listRuns, type Budget } from "../../support/driver.ts"
 import { show, step } from "../../support/show.ts"
-import { changelogNames, expectDisplay, key, makesRelease, press, README_COVERS, SEMVER_TAG } from "../../support/verifier.ts"
+import { changelogNames, expectDisplay, key, makesRelease, press, README_COVERS, SEMVER_TAG, workflowsIdle } from "../../support/verifier.ts"
 import { launchQuickTunnel } from "../../support/quick-tunnel.ts"
 import { benchmarkCategory } from "../docCategories"
 
@@ -87,6 +87,43 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               `to the config directory of the account to use, so that both agree: GH_CONFIG_DIR=~/.config/gh-bench npm run oe-benchmark`,
           ).toBe(owner)
           // Nothing of this check on screen in the screenshots that follow.
+          await terminal.run("clear")
+        })
+
+        await step(`Before you start, install the tools this guide uses. Each is a command you run in the terminal. On macOS with [Homebrew](https://brew.sh/), \`brew install git node uv gh cloudflared\` installs most of them. On other systems, use the links.
+
+- [Git](https://git-scm.com/downloads), to download OpenEngine and your projects.
+- [Node.js](https://nodejs.org/en/download) (22.22.2 or later, 24.15 or later, or 26 or later), which includes \`npm\`, and [uv](https://docs.astral.sh/uv/getting-started/installation/). The installer uses both to build OpenEngine.
+- The [GitHub CLI](https://github.com/cli/cli#installation), \`gh\`, which OpenEngine uses to talk to GitHub. Sign in with \`gh auth login\`.
+- [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/), which gives OpenEngine a temporary public address for GitHub to reach.
+- The coding agents OpenEngine runs, [Claude Code](https://code.claude.com/docs/en/setup) and [Codex](https://developers.openai.com/codex/cli). Follow each one's install page, or install both at once with \`npm install -g @anthropic-ai/claude-code @openai/codex\`. Each needs its own sign-in, which two steps below check.
+- A text editor. This guide uses \`vim\`.
+
+\`openssl\` comes with most systems. Check that everything is installed: each command prints a version, and one that is missing says \`command not found\`.
+
+\`\`\`sh
+git --version
+node --version
+npm --version
+uv --version
+gh --version
+cloudflared --version
+claude --version
+codex --version
+openssl version
+vim --version | head -1
+\`\`\``, async () => {
+          await terminal.run("git --version")
+          await terminal.run("node --version")
+          await terminal.run("npm --version")
+          await terminal.run("uv --version")
+          await terminal.run("gh --version")
+          await terminal.run("cloudflared --version")
+          await terminal.run("claude --version")
+          await terminal.run("codex --version")
+          await terminal.run("openssl version")
+          await terminal.run("vim --version | head -1")
+          await show("benchmark__terminal--tools.png", terminal, testInfo, await terminal.row(/cloudflared version/), "Every tool is installed")
           await terminal.run("clear")
         })
 
@@ -295,7 +332,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "Your project lives in a GitHub repository. Create one with the `gh` command from the last step. It is created under the account `gh` is signed in as.\n\n" +
+            "Your project lives in a GitHub repository. Create one with `gh`, the GitHub tool OpenEngine is connected to. It is created under the account `gh` is signed in as.\n\n" +
               "```sh\ngh repo create " + BENCH_REPO + " --public --add-readme --description \"A calculator, built by OpenEngine.\"\n```",
             async () => {
               await terminal.run(`gh repo create ${BENCH_REPO} --public --add-readme --description "A calculator, built by OpenEngine."`)
@@ -304,8 +341,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "Give it a topic, a label GitHub shows on the repository. OpenEngine's benchmark uses it to recognise this repository as its own.\n\n" +
-              "```sh\ngh repo edit <your-account>/" + BENCH_REPO + " --add-topic " + BENCH_TOPIC + "\n```",
+            "[nodoc] The repository gets a topic, which the benchmark's teardown uses to recognise it as its own",
             async () => {
               await terminal.run(`gh repo edit ${repo} --add-topic ${BENCH_TOPIC}`)
               expect((await getRepo(owner, BENCH_REPO))?.topics, "GitHub lists the topic").toContain(BENCH_TOPIC)
@@ -337,7 +373,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "OpenEngine's deploy workflow will publish the calculator with GitHub Pages, so turn Pages on, with GitHub Actions as its source.\n\n" +
+            "The first issue asks OpenEngine to add a workflow that publishes the calculator with GitHub Pages, GitHub's free hosting for web pages. Turn Pages on, with GitHub Actions as its source, so that workflow can publish.\n\n" +
               "```sh\ngh api -X POST repos/<your-account>/" + BENCH_REPO + "/pages -f build_type=workflow --jq .build_type\n```",
             async () => {
               await terminal.run("clear")
@@ -349,7 +385,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "The workflows OpenEngine adds need to write to the repository, to publish releases, and to open pull requests. Allow both.\n\n" +
+            "The workflows OpenEngine adds need two permissions on GitHub: to write to the repository, which publishing a release takes, and to open pull requests. Turn both on.\n\n" +
               "```sh\ngh api -X PUT repos/<your-account>/" + BENCH_REPO + "/actions/permissions/workflow \\\n  -f default_workflow_permissions=write -F can_approve_pull_request_reviews=true\ngh api repos/<your-account>/" + BENCH_REPO + "/actions/permissions/workflow\n```",
             async () => {
               await terminal.run("clear")
@@ -378,7 +414,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "OpenEngine works from GitHub issues. To give it something to build, this guide uses an example: a small calculator app, written as a milestone called Calculator with an issue for each piece of it. Each issue depends on the one before, in its text and as a link GitHub shows as blocked by, so OpenEngine takes them in order. With your own project you would use your own issues. List the example ones with:\n\n" +
+            "OpenEngine works from GitHub issues. To give it something to build, this guide uses an example: a small calculator app, written as a milestone called Calculator with an issue for each piece of it. Every issue is written out in [the example's source](https://github.com/OpenEngine/OpenEngine/blob/main/e2e/fixtures/calculator/issues.ts): to follow along, create the same ones in your repository, in a milestone called Calculator. Each issue depends on the one before, in its text and as a link GitHub shows as blocked by, so OpenEngine takes them in order. With your own project you would use your own issues. List the example ones with:\n\n" +
               "```sh\ngh issue list --repo <your-account>/" + BENCH_REPO + " --milestone " + milestone.title + "\n```",
             async () => {
               const number = (await gh("api", `${api}/milestones`, "-f", `title=${milestone.title}`, "-f", `description=${milestone.description}`, "--jq", ".number")).trim()
@@ -386,12 +422,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               const numbers: string[] = []
               let previousId = ""
               for (const issue of issues.slice(0, SEEDED)) {
-                const body = [
-                  ...issue.description,
-                  "## Acceptance criteria",
-                  issue.criteria.map((criterion) => `- [ ] ${criterion}`).join("\n"),
-                  ...(numbers.length ? [`Depends on #${numbers.at(-1)}`] : []),
-                ].join("\n\n")
+                const body = issueBody(issue, numbers.length ? [`Depends on #${numbers.at(-1)}`] : [])
                 const created = JSON.parse(await gh("api", `${api}/issues`, "-f", `title=${issue.title}`, "-f", `body=${body}`, "-F", `milestone=${number}`)) as { number: number; id: number }
                 // The text above is what OpenEngine reads; the link is what GitHub shows, as "Blocked by #N" on the issue.
                 if (previousId) await gh("api", "-X", "POST", `${api}/issues/${created.number}/dependencies/blocked_by`, "-F", `issue_id=${previousId}`)
@@ -419,7 +450,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           const hook = await step(
-            "Now point the repository at that address. This is a webhook: GitHub sends a message to a web address whenever something happens in the repository, such as a comment or a merged pull request. The messages are signed with a shared secret, so OpenEngine can tell GitHub sent them. The secret is the one from the `.env` file; here it is still in the environment variable. The command prints the webhook's number.\n\n" +
+            "Now tell GitHub to send its messages to your tunnel's address. This is a webhook: GitHub sends a message to a web address whenever something happens in the repository, such as a comment or a merged pull request. The messages are signed with a shared secret, so OpenEngine can tell GitHub sent them. The command takes the secret from the `ENGINE_GITHUB_WEBHOOK_SECRET` variable, the same one saved in the `.env` file, and prints the webhook's number.\n\n" +
               "```sh\ngh api repos/<your-account>/" + BENCH_REPO + "/hooks -f name=web -F active=true \\\n" +
               "  -f 'config[url]=https://<your tunnel address>/api/github/events' \\\n" +
               "  -f 'config[content_type]=json' -f 'config[secret]='\"$ENGINE_GITHUB_WEBHOOK_SECRET\" \\\n" +
@@ -535,9 +566,111 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             },
           )
 
+          // While OpenEngine restarts, nothing answers the tunnel, so a delivery then is refused by no fault of OpenEngine's.
+          const restart = { from: 0, to: 0 }
+          await step(
+            "So far you started each run yourself. OpenEngine can also take work straight from GitHub: when an issue is assigned to the account it uses, it starts on it. First tell it which graph to use for an assigned issue, the `" + GRAPH + "` graph you made, then restart it so it reads the change.\n\n" +
+              "```sh\nprintf '\\n[work_orders]\\nworkflow = \"" + GRAPH + "\"\\n' >> ~/.config/openengine/engine.toml\noe daemon stop\noe daemon start\n```",
+            async () => {
+              await terminal.run("clear")
+              // Not set before now: OpenEngine refuses to start when the graph it names is not registered yet.
+              await terminal.run(`printf '\\n[work_orders]\\nworkflow = "${GRAPH}"\\n' >> ~/.config/openengine/engine.toml`)
+              restart.from = Date.now()
+              await terminal.run("oe daemon stop", { timeout: 120_000 })
+              await terminal.run("oe daemon start", { timeout: 120_000 })
+              restart.to = Date.now()
+              await terminal.run("tail -n 2 ~/.config/openengine/engine.toml")
+              await show("benchmark__terminal--work-orders.png", terminal, testInfo, await terminal.row(/^workflow = /), "An assigned issue starts the calculator graph")
+            },
+          )
+
+          await step("[nodoc] OpenEngine acts on GitHub as the harness's account, with write access to the repository", async () => {
+            // An assignment counts only when it names the account OpenEngine resolves from its own login, so check that
+            // login is the one the harness assigns. `engine-web --check` reports it and exits; it reads the same files the
+            // daemon does.
+            const check = await inContainer("sh", "-c", `"${ENGINE_WEB}" --check 2>&1 || true`)
+            expect(check, `engine-web --check names ${owner} as its GitHub account:\n${check}`).toMatch(new RegExp(`authenticated=True account=${owner}\\b`, "i"))
+            expect(check, `engine-web --check finds write access to ${repo}:\n${check}`).toMatch(new RegExp(`github ${repo}: write access`, "i"))
+          })
+
+          // The runs there were before the assignment: any other is one the assignment started. Every run, not the graph's:
+          // the daemon lists a run under its graph only when the CLI or a loop started it.
+          const before = new Set((await listRuns()).map((run) => run.runId))
+          const assigned = await step(
+            "Assign an issue to OpenEngine, and it picks it up and starts working on it. Here the issue asks for a style pass: make the calculator look good, without changing what it does. Its text is `assignedIssue` in [the same file](https://github.com/OpenEngine/OpenEngine/blob/main/e2e/fixtures/calculator/issues.ts). Create it in the Calculator milestone as you would any issue, then assign it. `@me` is the account `gh` is signed in as, which is also the account OpenEngine uses. GitHub tells OpenEngine about the assignment through the webhook, so there is nothing to run.\n\n" +
+              "```sh\ngh issue edit <issue number> --repo <your-account>/" + BENCH_REPO + " --add-assignee @me\ngh issue view <issue number> --repo <your-account>/" + BENCH_REPO + " --json assignees --jq '.assignees[].login'\n```",
+            async () => {
+              const milestoneNumber = (await gh("api", `${api}/milestones`, "--jq", `.[] | select(.title == "${milestone.title}") | .number`)).trim()
+              const { number } = JSON.parse(await gh("api", `${api}/issues`, "-f", `title=${assignedIssue.title}`, "-f", `body=${issueBody(assignedIssue)}`, "-F", `milestone=${milestoneNumber}`)) as { number: number }
+              await terminal.run("clear")
+              await terminal.run(`gh issue edit ${number} --repo ${repo} --add-assignee @me`)
+              await terminal.run(`gh issue view ${number} --repo ${repo} --json assignees --jq '.assignees[].login'`)
+              await show("benchmark__terminal--issue-assigned.png", terminal, testInfo, await terminal.row(new RegExp(`^${owner}$`)), "The issue is assigned to OpenEngine's account")
+              return number
+            },
+          )
+
+          await step("[nodoc] The assignment starts a run, with nothing else asking for one", async () => {
+            try {
+              await expect
+                .poll(async () => (await listRuns()).some((run) => !before.has(run.runId)), { timeout: 5 * 60_000, intervals: [10_000] })
+                .toBe(true)
+            } catch {
+              // Why not, as far as GitHub and OpenEngine can say: GitHub's answer to the delivery, and what OpenEngine logged.
+              const answers = await gh("api", `${hookPath}/deliveries?per_page=100`, "--jq", '[.[] | select(.event == "issues" and .action == "assigned") | .status_code] | join(", ")')
+              throw new Error(`Assigning #${assigned} started no run in five minutes. GitHub's answers to the assignment: ${answers.trim() || "none listed"}. OpenEngine's log:\n${await webhookLog()}`)
+            }
+          })
+
+          const fromAssignment = await step("[nodoc] The assigned issue's run is worked to the end", async () => {
+            const driven = await driveMilestone({ repo, milestone: milestone.title, budget: BUDGET, until: "milestone-done", onProgress: (line) => console.log(`[assigned] ${line}`) })
+            // The driver sees the earlier runs again; only the new ones are this phase's.
+            const runIds = new Set(driven.runs.map((run) => run.runId).filter((runId) => !before.has(runId)))
+            return { runs: driven.runs.filter((run) => runIds.has(run.runId)), failures: driven.failures.filter((failure) => ![...before].some((runId) => failure.startsWith(`${runId}:`))) }
+          })
+          expect(fromAssignment.failures, "the assigned issue's run failed").toEqual([])
+
+          await step(
+            "OpenEngine reports on the issue as it goes: when the review is done, and when the work is finished. Read the issue's comments.\n\n" +
+              "```sh\ngh issue view <issue number> --repo <your-account>/" + BENCH_REPO + " --comments\n```",
+            async () => {
+              const comments = async () => (JSON.parse(await gh("api", `${api}/issues/${assigned}/comments`)) as { body: string }[]).map((comment) => comment.body)
+              await expect
+                .poll(comments, { timeout: 120_000, message: `OpenEngine says on #${assigned} that the review and the work finished` })
+                .toEqual(expect.arrayContaining([expect.stringContaining("Review finished."), expect.stringContaining("Work order finished.")]))
+              await terminal.run("clear")
+              await terminal.run(`gh issue view ${assigned} --repo ${repo} --comments`)
+              await show("benchmark__terminal--issue-progress.png", terminal, testInfo, await terminal.row(/Work order finished\./), "OpenEngine's progress, on the issue")
+            },
+          )
+
+          await step("[nodoc] OpenEngine accepted every webhook delivery GitHub sent, and they woke the runs waiting on CI", async () => {
+            // GitHub's log of every delivery and OpenEngine's answer. Anything but 200 is work OpenEngine did not take:
+            // a 503 is a delivery it could not act on, such as one it could not tell was for its own account.
+            type Delivery = { event: string; action: string | null; status_code: number; delivered_at: string }
+            const pages = JSON.parse(await gh("api", "--paginate", "--slurp", `${hookPath}/deliveries?per_page=100`)) as Delivery[][]
+            // GitHub's clock and this computer's differ by a little, so the restart's window is widened by a few seconds.
+            const duringRestart = ({ delivered_at }: Delivery) => Date.parse(delivered_at) >= restart.from - 5_000 && Date.parse(delivered_at) <= restart.to + 5_000
+            const deliveries = pages.flat().filter((delivery) => !duringRestart(delivery))
+            const refused = deliveries.filter((delivery) => delivery.status_code !== 200).map((delivery) => `${delivery.delivered_at} ${delivery.event}.${delivery.action ?? "-"} ${delivery.status_code}`)
+            testInfo.annotations.push({ type: "webhook-deliveries", description: String(deliveries.length) }, { type: "webhook-refused", description: String(refused.length) })
+            expect(refused, `OpenEngine refused webhook deliveries. Its log:\n${await webhookLog()}`).toEqual([])
+            // A run waiting on CI is woken by GitHub's check events, and falls back to polling without them. Each CI event
+            // OpenEngine takes for this repository logs how many steps it woke. The calculator's CI takes seconds, so it is
+            // usually done before a run starts waiting, and none needs waking: the count is reported, not required.
+            const ciEvents = await daemonLog(new RegExp(`for ${repo}@[0-9a-f]+ woke \\d+ CI steps?`, "i"))
+            const ignored = await daemonLog(/not a configured repository/)
+            testInfo.annotations.push(
+              { type: "ci-events", description: String(ciEvents.length) },
+              { type: "ci-wakes", description: String(ciEvents.filter((line) => !/woke 0 /.test(line)).length) },
+            )
+            expect(ignored, `OpenEngine ignored CI events as from a repository it doesn't answer:\n${ignored.join("\n")}`).toEqual([])
+            expect(ciEvents, `no CI event reached the steps waiting on CI. OpenEngine's log:\n${await webhookLog()}`).not.toHaveLength(0)
+          })
+
           // What the work cost and how it went, for the report.
-          // The second phase sees the first run again, so a run counts once, as the later phase last saw it.
-          const runs = [...new Map([...first.runs, ...rest.runs].map((run) => [run.runId, run])).values()]
+          // Later phases see earlier runs again, so a run counts once, as the latest phase last saw it.
+          const runs = [...new Map([...first.runs, ...rest.runs, ...fromAssignment.runs].map((run) => [run.runId, run])).values()]
           testInfo.annotations.push(
             { type: "runs", description: String(runs.length) },
             { type: "rate-limited-runs", description: String(runs.filter((run) => run.status === "rate-limited").length) },
@@ -545,7 +678,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             { type: "total-cost-usd", description: runs.reduce((sum, run) => sum + run.costUsd, 0).toFixed(2) },
           )
           await testInfo.attach("runs.json", { body: JSON.stringify(runs, null, 2), contentType: "application/json" })
-          expect([...first.failures, ...rest.failures], "no run failed or went over budget").toEqual([])
+          expect([...first.failures, ...rest.failures, ...fromAssignment.failures], "no run failed or went over budget").toEqual([])
         } finally {
           // Stopped here as well as by teardown, so a run that passes leaves nothing running.
           await terminal.run("oe daemon stop", { timeout: 120_000 }).catch(() => {})
@@ -556,7 +689,9 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
       // never shown to the agents. It checks that the guide's run worked, so none of its steps are in the guide. It runs
       // right after the journey, and only if the journey passed, since the next run's setup deletes the repository.
       test("Verify the calculator", { tag: ["@verify"] }, async ({ page }) => {
-        const url = `https://${await whoami()}.github.io/${BENCH_REPO}/`
+        const owner = await whoami()
+        const repo = `${owner}/${BENCH_REPO}`
+        const url = `https://${owner}.github.io/${BENCH_REPO}/`
 
         await step("The calculator is deployed with all its keys", async () => {
           // The deploy follows the last merge by a minute or so. The last key to be built is ÷, so wait until the page has it.
@@ -564,6 +699,11 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
             await page.goto(url)
             await expect(key(page, "÷")).toBeVisible({ timeout: 2_000 })
           }).toPass({ timeout: 10 * 60_000, intervals: [20_000] })
+          // The last change of all is the assigned issue's style pass, which adds no text to wait for. Wait until the
+          // repository's workflows (the deploy, and the release that follows a merge) have all finished, so the cases below
+          // run against the styled page.
+          await workflowsIdle(repo)
+          await page.goto(url)
         })
 
         await step("It adds", async () => {
@@ -602,6 +742,21 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           await page.goto(url)
           await press(page, "77C")
           await expectDisplay(page, "0")
+        })
+      })
+
+      test("Verify the issues and pull requests", { tag: ["@verify"] }, async () => {
+        const repo = `${await whoami()}/${BENCH_REPO}`
+
+        await step("Every issue in the milestone was closed by the pull request that worked it", async () => {
+          // GitHub links an issue to the pull request whose merge closed it. The harness closes an issue a merged pull
+          // request should have closed but didn't, and an issue it closed has no such link.
+          const listed = JSON.parse(
+            await gh("issue", "list", "--repo", repo, "--milestone", milestone.title, "--state", "all", "--limit", "100", "--json", "number,title,state,closedByPullRequestsReferences"),
+          ) as { number: number; title: string; state: string; closedByPullRequestsReferences: { number: number }[] }[]
+          expect(listed, "the milestone has issues").not.toHaveLength(0)
+          const unlinked = listed.filter((issue) => issue.state !== "CLOSED" || issue.closedByPullRequestsReferences.length === 0)
+          expect(unlinked.map(({ number, title, state }) => `#${number} ${title} (${state})`), "issues no pull request closed").toEqual([])
         })
       })
 

@@ -125,3 +125,28 @@ export const issues: { title: string; description: string[]; criteria: string[] 
     ],
   },
 ]
+
+/**
+ * The issue the journey hands OpenEngine by assigning it, after the milestone is done, to show that an assignment on
+ * GitHub starts the work. It asks only for a change to how the page looks, so it can be worked however many of the other
+ * issues were seeded. The verifier cannot see a style, so what it checks of this one is that the calculator still works.
+ */
+export const assignedIssue: { title: string; description: string[]; criteria: string[] } = {
+  title: "Style the calculator",
+  description: [
+    "Make the calculator look good. It works, but it is plain. Style it with CSS, in the page or in a stylesheet: a display that stands out, keys that are easy to see and press, and a layout that works on a phone as well as on a desktop.",
+    "This is a style change only. The calculator must work exactly as before, so do not change what the heading or any key says, or what a key does.",
+  ],
+  criteria: [
+    "The calculator is centred on the page, and the display stands out from the keys.",
+    "The digits, the operators and `C` are easy to tell apart, for example by colour.",
+    "The keys keep a familiar calculator layout: the digits in a three-by-three grid with `0` below them, and the operators together in a column.",
+    "The keys are large enough to press on a phone, and nothing runs off the edge of a narrow screen.",
+    "Every key still does what it did, and the heading and the keys' labels are unchanged.",
+    "An automated test checks something that shows the styling is there, such as a viewport setting and a rule for the keys, and the existing tests still pass.",
+  ],
+}
+
+/** An issue's body, as the journey writes it on GitHub: its description, then its acceptance criteria as a checklist. */
+export const issueBody = (issue: { description: string[]; criteria: string[] }, extra: string[] = []) =>
+  [...issue.description, "## Acceptance criteria", issue.criteria.map((criterion) => `- [ ] ${criterion}`).join("\n"), ...extra].join("\n\n")

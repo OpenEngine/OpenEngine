@@ -41,7 +41,11 @@ async function daemon<T>(path: string, body?: unknown): Promise<T> {
 }
 
 export const getRun = (runId: string) => daemon<Run>(`/runs/${runId}`)
-export const listRuns = async (graph: string) => (await daemon<{ runs: Run[] }>(`/runs?graph=${graph}`)).runs
+/**
+ * The runs of `graph`, or every run when no graph is named. The daemon ties a run to its graph only when `oe graph run` or a
+ * loop started it, so a run a webhook started (an assigned issue's) is listed only without the filter.
+ */
+export const listRuns = async (graph?: string) => (await daemon<{ runs: Run[] }>(graph ? `/runs?graph=${graph}` : "/runs")).runs
 const approve = (run: Run, approval: PendingApproval) => daemon(`/runs/${run.runId}/approvals/${approval.approvalId}`, { decision: "accept" })
 const cancel = (runId: string) => daemon(`/runs/${runId}/cancel`, {})
 
@@ -90,7 +94,7 @@ export type Driven = { runs: RunRecord[]; totalUsd: number; failures: string[] }
  * The approval comes before the merge: this account merges as the one OpenEngine uses, and OpenEngine ignores a
  * merge by its own login, so that merge would not release the review.
  */
-export async function driveMilestone({ repo, milestone, graph, budget, until, onProgress }: { repo: string; milestone: string; graph: string; budget: Budget; until: "first-run-done" | "milestone-done"; onProgress?: (line: string) => void }): Promise<Driven> {
+export async function driveMilestone({ repo, milestone, graph, budget, until, onProgress }: { repo: string; milestone: string; graph?: string; budget: Budget; until: "first-run-done" | "milestone-done"; onProgress?: (line: string) => void }): Promise<Driven> {
   const records = new Map<string, RunRecord>()
   const approved = new Set<string>()
   const merged = new Set<number>()
