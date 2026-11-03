@@ -19,7 +19,8 @@ jobs:
           path: base
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: 'lts/*'
+          check-latest: true
           cache: npm
           cache-dependency-path: current/tools/quality/package-lock.json
       - run: npm ci --ignore-scripts
