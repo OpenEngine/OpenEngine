@@ -37,8 +37,9 @@ non-whitespace characters. This fallback ignores whitespace but preserves commen
 it provides exact lexical matching for new languages without configuration changes.
 
 Each group shares exactly the same sequence of at least 100 consecutive lexical
-token values, in the same language. Whitespace and comments are ignored;
-identifier and literal spelling remain significant. Renamed variables and semantic
+token values, in the same language. Whitespace-only tokens and comments are ignored regardless of lexer token type;
+formatting is left to linters and formatters.
+Identifier and literal spelling remain significant. Renamed variables and semantic
 duplication are not detected. Syntax similarity does not establish shared
 responsibility: review the context before choosing an abstraction. The JSON
 contains a stable SHA-256 content identifier, shared source context, and **all**

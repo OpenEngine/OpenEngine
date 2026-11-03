@@ -76,7 +76,7 @@ export function scan(root: string, options: Options = config) {
       if (bytes.includes(0) || !isUtf8(bytes)) continue;
       const source = bytes.toString('utf8');
       const tokens = format === 'text' ? textTokens(source) :
-        tokenize(source, format).filter(t => !['comment', 'empty', 'new_line'].includes(t.type || 'default'));
+        tokenize(source, format).filter(t => !['comment', 'empty', 'new_line'].includes(t.type || 'default') && /\S/u.test(t.value));
       const sequence = Uint32Array.from(tokens, token => {
         if (!vocabulary.has(token.value)) {
           vocabulary.set(token.value, values.length);
