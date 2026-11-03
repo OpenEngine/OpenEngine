@@ -402,7 +402,36 @@ def test_steering_and_history_cursor_survive_vcp_restart_over_real_nats(binary, 
     asyncio.run(scenario())
 
 
-def test_migration_preserves_preexisting_published_conversation_history(tmp_path):
+def test_history_cursor_retention_is_bounded_and_survives_restart(tmp_path, monkeypatch):
+    import sqlalchemy as sa
+    from virtual_control_plane.persistence import durable
+
+    monkeypatch.setattr(durable, "HISTORY_CURSOR_LIMIT", 2)
+
+    async def scenario():
+        flow = await SteeringFlow().start(tmp_path)
+        await flow.running()
+        await append_message(flow, "msg_one")
+        await append_message(flow, "msg_two")
+        cursors = [(await flow.history(limit=1))["result"]["next_cursor"] for _ in range(3)]
+        async with flow.store.database.connect() as connection:
+            assert (await connection.execute(sa.text("SELECT count(*) FROM history_cursors"))).scalar_one() == 2
+        assert (await flow.history(cursor=cursors[0]))["error"]["code"] == "INVALID_CURSOR"
+        # A failed cursor insertion must not evict a usable cursor.
+        with pytest.raises(RuntimeError):
+            async with flow.store.transaction() as tx:
+                await tx.save_history_cursor("v1_" + "0" * 32, {"scope": {}, "after": 1})
+                raise RuntimeError("rollback")
+        await flow.reopen_vcp(tmp_path)
+        for cursor in cursors[1:]:
+            page = (await flow.history(cursor=cursor))["result"]
+            assert [entry["sequence"] for entry in page["items"]] == [2]
+        await flow.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("history_sequence", [None, 10])
+def test_migration_preserves_preexisting_published_conversation_history(tmp_path, history_sequence):
     from openengine.persistence.migrations import downgrade
 
     async def scenario():
@@ -411,6 +440,14 @@ def test_migration_preserves_preexisting_published_conversation_history(tmp_path
         await append_message(flow, "msg_old")
         await append_message(flow, "msg_old_second")
         expected = (await flow.history())["result"]["items"]
+        # A downgrade alone retains the field absent in pre-upgrade documents.
+        async with flow.store.transaction() as tx:
+            stored = await tx.get("sessions", flow.session_id)
+            if history_sequence is None:
+                del stored["history_sequence"]
+            else:
+                stored["history_sequence"] = history_sequence
+            await tx.put("sessions", flow.session_id, stored)
         for event in await flow.store.pending_events(100):
             await flow.store.mark_published(event.sequence)
         await flow.worker.close()
@@ -421,7 +458,12 @@ def test_migration_preserves_preexisting_published_conversation_history(tmp_path
         await flow.reopen_vcp(tmp_path)
         assert (await flow.history())["result"]["items"] == expected
         await append_message(flow, "msg_new")
-        assert [entry["sequence"] for entry in (await flow.history())["result"]["items"]] == [1, 2, 3]
+        next_sequence = max(history_sequence or 0, 2) + 1
+        assert [entry["sequence"] for entry in (await flow.history())["result"]["items"]] == [1, 2, next_sequence]
+        await flow.steer()
+        await drain(flow.dispatcher, flow.outbox)
+        sequences = [entry["sequence"] for entry in (await flow.history())["result"]["items"]]
+        assert sequences == [1, 2, next_sequence, next_sequence + 1]
         await flow.close()
     asyncio.run(scenario())
 

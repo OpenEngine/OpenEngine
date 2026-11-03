@@ -729,7 +729,10 @@ Late updates cannot reverse steering outcomes or append another history entry.
 `sessions.{session_id}.events.list` pages conversation and steering entries in
 ascending session sequence, with kind and attempt filters. Opaque versioned cursors
 persist in the service database, bound to the authenticated tenant, session and
-normalized filters. Each page uses bounded index seeks in one database snapshot.
+normalized filters. Retention is capped at the newest 10,000 cursor records across
+the service database; evicted cursors return `INVALID_CURSOR`, and clients must
+restart pagination. Issuing a cursor evicts excess records in the same transaction.
+Each page uses bounded index seeks in one database snapshot.
 The service-owned migration backfills conversation entries from retained outbox
 envelopes, including already published messages. Usage/tool-call production is unchanged.
 

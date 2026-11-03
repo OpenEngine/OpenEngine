@@ -79,6 +79,7 @@ def _identity(subject: str, command: Document) -> str:
 
 # Accepted bindings are written once.
 IMMUTABLE = ("attempt_bindings", "history_cursors")
+HISTORY_CURSOR_LIMIT = 10_000
 
 
 def _collection(collection: Collection) -> sa.Table:
@@ -103,6 +104,14 @@ class Transaction:
             return
         statement = insert(table).values(key=key, body=value)
         await self._connection.execute(statement.on_conflict_do_update(index_elements=["key"], set_={"body": value}))
+
+    async def save_history_cursor(self, key: str, value: Document) -> None:
+        # Evict in the same writer transaction, including on abandoned/retried pages.
+        await self.put("history_cursors", key, value)
+        await self._connection.execute(sa.text(
+            "DELETE FROM history_cursors WHERE rowid IN "
+            "(SELECT rowid FROM history_cursors ORDER BY rowid DESC LIMIT -1 OFFSET :limit)"
+        ), {"limit": HISTORY_CURSOR_LIMIT})
 
     async def delete(self, collection: Collection, key: str) -> None:
         if collection in IMMUTABLE:

@@ -58,6 +58,14 @@ def upgrade() -> None:
         connection.execute(history.insert().values(session_id=resources["session_id"], sequence=payload["sequence"],
                                                    kind="message", attempt_id=resources["attempt_id"], entry=entry))
 
+    # Older documents lack history_sequence. Preserve counters already ahead.
+    connection.execute(sa.text("""
+        UPDATE sessions SET body = json_set(body, '$.history_sequence', max(
+            coalesce(json_extract(body, '$.history_sequence'), 0),
+            (SELECT max(sequence) FROM session_history WHERE session_id = sessions.key)))
+        WHERE EXISTS (SELECT 1 FROM session_history WHERE session_id = sessions.key)
+    """))
+
 
 def downgrade() -> None:
     # Settled steering is no longer deliverable; preserve that on rollback.

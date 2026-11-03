@@ -141,5 +141,5 @@ class Steering:
         if len(entries) > limit:
             cursor = identity("v1_")
             async with self.store.transaction() as tx:
-                await tx.put("history_cursors", cursor, {"scope": scope, "after": page[-1]["sequence"]})
+                await tx.save_history_cursor(cursor, {"scope": scope, "after": page[-1]["sequence"]})
         return {"items": page, "next_cursor": cursor}
