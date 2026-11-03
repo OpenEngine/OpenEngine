@@ -23,8 +23,9 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import nats
+from openengine.messaging.deployment import Deployment
 from alembic.util import CommandError
-from openengine.messaging import LocalOperator, Server, listen_address
+from openengine.messaging import Server, listen_address
 from openengine.messaging.server import is_loopback
 from openengine.persistence import DatabaseConfig, OpenPersistence
 from openengine.telemetry import configure
@@ -59,11 +60,12 @@ async def _health(healthy, reader: asyncio.StreamReader, writer: asyncio.StreamW
 
 
 async def serve(nats_url: str, health_port: int, ready_file: Path | None, store: OpenPersistence[Graphs]) -> int:
+    deployment = Deployment.from_environment()
     stopping = asyncio.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(signum, stopping.set)
     connecting = asyncio.ensure_future(
-        nats.connect(nats_url, name="ge", connect_timeout=CONNECT_TIMEOUT_SECONDS, max_reconnect_attempts=-1)
+        nats.connect(nats_url, name="ge", connect_timeout=CONNECT_TIMEOUT_SECONDS, max_reconnect_attempts=-1, **deployment.connection_options())
     )
     # nats-py retries a first connection forever, so a SIGTERM must be able to end the wait.
     stopped = asyncio.ensure_future(stopping.wait())
@@ -80,14 +82,14 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
         return EXIT_FAILED
     listener = listen_address(connection)
     log.info("nats connected", extra={"server.address": nats_url, "server.listen": listener})
-    if not is_loopback(urlsplit(listener).hostname):
+    if deployment.authorization == "local" and not is_loopback(urlsplit(listener).hostname):
         log.warning("NATS listens beyond loopback; local-operator mode refuses every request",
                     extra={"server.listen": listener})
     # One authorizer for every request, and again for the project each one reaches.
-    authorizer = LocalOperator()
+    authorizer = deployment.authorizer()
     registry = Registry(store, authorizer)
     server = Server(
-        connection, "ge", listener, queries=registry.queries(), commands=registry.commands(), authorizer=authorizer,
+        connection, "ge", listener, queries=registry.queries(), commands=registry.commands(), authorizer=authorizer, tenancy=deployment.tenancy,
     )
     health = None
     try:
@@ -153,7 +155,7 @@ def main() -> int:
                 PERSISTENCE.open(config),
             )
         )
-    except (OSError, CommandError, SQLAlchemyError, nats.errors.Error):
+    except (ValueError, OSError, CommandError, SQLAlchemyError, nats.errors.Error):
         # An outage can close cleanly; a failed final close must remain a failure.
         log.exception("failed")
         return EXIT_FAILED

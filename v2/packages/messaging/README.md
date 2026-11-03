@@ -117,3 +117,13 @@ preempt them. Forced transport abort is covered for TCP, not WebSockets.
 Local-operator mode assumes a trusted managed broker with no remote ingress.
 Its listener check is not publisher identity; authenticated remote callers and
 broker permissions are tracked in #1051.
+
+### Deployment configuration
+
+`deployment.Deployment.from_environment()` validates trusted service settings,
+selects Dedicated or Shared with a cached configured account resolver, and
+provides credential connection options and an explicit authorizer choice. See
+[deployment settings](../../ARCHITECTURE.md#public-request-tenancy). Its
+`public_client(connection, request)` refuses an unverified request and binds
+the outbound client to the same principal and mode. Credentials require the
+installed `nats-py[nkeys]` signing extra.
