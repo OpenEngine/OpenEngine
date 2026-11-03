@@ -1,0 +1,15 @@
+# Both revisions are scanned using this policy. No changed-file filter.
+roots = ["."]
+min_tokens = 100
+exclude_dirs = [".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".next", ".astro", ".engine", ".agents", ".claude", ".codex", "dist", "build", "coverage", "htmlcov", "target", "vendor", "playwright-report", "test-results"]
+exclude_paths = ["tests/fixtures", "tools/quality/fixtures", "site/static/v2", "scripts/code_graph_report.html", "docs/schema", "v2/docs/schema"]
+
+# Exceptions must name a content fingerprint, exact file paths and exact copy
+# counts, plus a nonempty rationale. Growth and stale exceptions fail closed.
+exceptions = []
+
+# Pinned TSX grammar misparses original<typeof import("./api")>(). This exact
+# file is reported as unscanned in JSON; any edit requires revisiting the waiver.
+[parse_exceptions."apps/web/src/loops.test.tsx"]
+sha256 = "7bea596a94e90f41f3478a2b1b940309358a335556709c7fec82e3d1fcecfb56"
+rationale = "Grammar 0.10.0 rejects a valid generic call in the mock factory; keep this single existing file visible as unscanned until grammar upgrade."

@@ -48,6 +48,8 @@ fit together.
    CI baselines for lint and types are described in
    [docs/ruff-baseline.md](docs/ruff-baseline.md) and
    [docs/pyright.md](docs/pyright.md).
+   Run the [whole-repository duplication gate](docs/duplication.md) against the
+   intended base checkout; a new third-file clone requires extraction or a scoped exception.
 3. Write commit messages as [Conventional Commits](https://www.conventionalcommits.org/)
    (`feat:`, `fix:`, `docs:`, `chore:`, with an optional scope such as
    `feat(cli):`). Release Please builds the changelog and version from them, so
