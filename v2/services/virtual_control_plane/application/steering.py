@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import re
+import time
 from copy import deepcopy
 
-from openengine.messaging import ErrorCode, ServiceError
+from openengine.messaging import ErrorCode, ServiceError, envelopes
 
 from virtual_control_plane.application.lifecycle import SCHEMAS, accepted, identity, new_operation, now
 
@@ -131,14 +132,21 @@ class Steering:
         after = 0
         if cursor := params.get("cursor"):
             stored = await self.store.read("history_cursors", cursor) if CURSOR.fullmatch(cursor) else None
-            if not stored or stored["scope"] != scope:
+            if not stored or stored["scope"] != scope or stored.get("expires_at", float("inf")) < time.time():
                 raise ServiceError(ErrorCode.INVALID_CURSOR, "invalid session history cursor", details={"reason": "malformed"})
             after = stored["after"]
         await self.lifecycle._read("sessions", session_id)
         limit = int(params.get("limit", 50))
         entries = await self.store.history_page(session_id, filters, after, limit + 1)
-        page, cursor = entries[:limit], None
-        if len(entries) > limit:
+        # Reserve ample space for the query envelope below NATS's default 1 MiB.
+        page, size, cursor = [], 0, None
+        for entry in entries[:limit]:
+            encoded_size = len(envelopes.encode(entry)) + 1
+            if size + encoded_size > 900 * 1024:
+                break
+            page.append(entry)
+            size += encoded_size
+        if len(entries) > len(page):
             cursor = identity("v1_")
             async with self.store.transaction() as tx:
                 await tx.save_history_cursor(cursor, {"scope": scope, "after": page[-1]["sequence"]})

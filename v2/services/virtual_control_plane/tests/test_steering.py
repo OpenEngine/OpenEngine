@@ -406,7 +406,8 @@ def test_history_cursor_retention_is_bounded_and_survives_restart(tmp_path, monk
     import sqlalchemy as sa
     from virtual_control_plane.persistence import durable
 
-    monkeypatch.setattr(durable, "HISTORY_CURSOR_LIMIT", 2)
+    timestamp = [1000000.0]
+    monkeypatch.setattr(durable.time, "time", lambda: timestamp[0])
 
     async def scenario():
         flow = await SteeringFlow().start(tmp_path)
@@ -415,7 +416,10 @@ def test_history_cursor_retention_is_bounded_and_survives_restart(tmp_path, monk
         await append_message(flow, "msg_two")
         cursors = [(await flow.history(limit=1))["result"]["next_cursor"] for _ in range(3)]
         async with flow.store.database.connect() as connection:
-            assert (await connection.execute(sa.text("SELECT count(*) FROM history_cursors"))).scalar_one() == 2
+            assert (await connection.execute(sa.text("SELECT count(*) FROM history_cursors"))).scalar_one() == 3
+        assert (await flow.history(cursor=cursors[0]))["result"]["items"]
+        timestamp[0] += 24 * 60 * 60 + 1
+        await flow.history(limit=1)
         assert (await flow.history(cursor=cursors[0]))["error"]["code"] == "INVALID_CURSOR"
         # A failed cursor insertion must not evict a usable cursor.
         with pytest.raises(RuntimeError):
@@ -423,7 +427,7 @@ def test_history_cursor_retention_is_bounded_and_survives_restart(tmp_path, monk
                 await tx.save_history_cursor("v1_" + "0" * 32, {"scope": {}, "after": 1})
                 raise RuntimeError("rollback")
         await flow.reopen_vcp(tmp_path)
-        for cursor in cursors[1:]:
+        for cursor in [(await flow.history(limit=1))["result"]["next_cursor"]]:
             page = (await flow.history(cursor=cursor))["result"]
             assert [entry["sequence"] for entry in page["items"]] == [2]
         await flow.close()
@@ -489,5 +493,43 @@ def test_history_filter_combinations_use_ordered_index_seeks(tmp_path):
                 plan = " ".join(str(row) for row in rows)
                 assert "SEARCH session_history USING INDEX " + index in plan
                 assert "SCAN" not in plan and "TEMP B-TREE" not in plan
+        await flow.close()
+    asyncio.run(scenario())
+
+
+def test_history_pages_bound_encoded_bytes(tmp_path):
+    async def scenario():
+        flow = await SteeringFlow().start(tmp_path)
+        await flow.running()
+        for i in range(17):
+            async with flow.store.transaction() as tx:
+                await flow.execution.progress(tx, flow.attempt_id, {
+                    "kind": "conversation", "message_id": f"msg_{i}", "role": "agent", "text": "😀" * 65536})
+        sequences, cursor = [], None
+        while True:
+            response = await flow.history(**({"cursor": cursor} if cursor else {}))
+            assert len(envelopes.encode(response)) < 1024 * 1024
+            page = response["result"]
+            sequences.extend(item["sequence"] for item in page["items"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+        assert sequences == list(range(1, 18))
+        await flow.close()
+    asyncio.run(scenario())
+
+
+def test_downgrade_refuses_accepted_steering(tmp_path):
+    from openengine.persistence.migrations import downgrade
+
+    async def scenario():
+        flow = await SteeringFlow().start(tmp_path)
+        await flow.running()
+        reply = await flow.steer()
+        with pytest.raises(RuntimeError, match="Cannot downgrade"):
+            downgrade(PERSISTENCE.migrations, PERSISTENCE.database(
+                DatabaseConfig(sqlite_directory=tmp_path / "vcp")), "cfed9cf520fd")
+        await drain(flow.dispatcher, flow.outbox)
+        await assert_outcome(flow, reply, "applied")
         await flow.close()
     asyncio.run(scenario())

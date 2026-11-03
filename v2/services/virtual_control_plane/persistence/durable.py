@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -79,7 +80,7 @@ def _identity(subject: str, command: Document) -> str:
 
 # Accepted bindings are written once.
 IMMUTABLE = ("attempt_bindings", "history_cursors")
-HISTORY_CURSOR_LIMIT = 10_000
+HISTORY_CURSOR_LIFETIME = 24 * 60 * 60
 
 
 def _collection(collection: Collection) -> sa.Table:
@@ -106,12 +107,11 @@ class Transaction:
         await self._connection.execute(statement.on_conflict_do_update(index_elements=["key"], set_={"body": value}))
 
     async def save_history_cursor(self, key: str, value: Document) -> None:
-        # Evict in the same writer transaction, including on abandoned/retried pages.
-        await self.put("history_cursors", key, value)
+        timestamp = time.time()
+        await self.put("history_cursors", key, {**value, "expires_at": timestamp + HISTORY_CURSOR_LIFETIME})
         await self._connection.execute(sa.text(
-            "DELETE FROM history_cursors WHERE rowid IN "
-            "(SELECT rowid FROM history_cursors ORDER BY rowid DESC LIMIT -1 OFFSET :limit)"
-        ), {"limit": HISTORY_CURSOR_LIMIT})
+            "DELETE FROM history_cursors WHERE json_extract(body, '$.expires_at') < :timestamp"
+        ), {"timestamp": timestamp})
 
     async def delete(self, collection: Collection, key: str) -> None:
         if collection in IMMUTABLE:
