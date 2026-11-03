@@ -125,7 +125,10 @@ stop (`cancel`; Codex sends ACP `session/cancel`, or skips a prompt not yet
 sent) and waits for the work to end, both under one deadline (5 s) that also
 covers acquiring the ACP write lock and draining stdin, so a blocked pipe or a
 full progress outbox cannot hold it. Then it cancels the attempt's task, whose
-executor fences the process tree. The terminal record is journaled only after
+executor fences the process tree. A fence already running is never interrupted;
+the deadline restarts after it, so final progress blocked on a full outbox is
+cancelled too and the attempt is fenced again (idempotently) and recorded. The
+terminal record is journaled only after
 a confirmed fence; failed fencing, an exception or a failed terminal write
 leaves the attempt `cancelling` and owned, and fencing is retried with backoff.
 

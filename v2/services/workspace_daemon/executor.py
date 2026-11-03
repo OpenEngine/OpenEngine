@@ -17,10 +17,12 @@ daemon keeps the attempt, its session and its capacity.
 
 A `cancelling` attempt is stopped in two steps. The executor is first asked to
 stop gracefully (`cancel`), and the work may then end on its own; that request,
-including any write it makes, shares one deadline (`cancel_seconds`) that ends
-once the agent exited (`exited`) or its outcome is returned. Fencing and journaling
-after that point are never interrupted. At the deadline the worker cancels the
-attempt's task instead, whose executor fences its own process tree.
+including any write it makes, shares one deadline (`cancel_seconds`). A fence
+the executor is running (`fencing`) is never cut short, and the deadline then
+restarts for what follows it (final progress and terminal journaling), so a full
+outbox cannot hold the attempt either. At the deadline the worker cancels the
+attempt's task, whose executor fences its own process tree; work cancelled
+after its fence is fenced again, idempotently, before it is recorded.
 Neither step is evidence of termination: the attempt stays `cancelling` until a
 terminal record is journaled after a confirmed fence (retried with backoff
 like any uncertain attempt), and only then frees its session and capacity.
@@ -80,8 +82,8 @@ class ExecutorPort(Protocol):
         """Ask the attempt's work to stop on its own. Best effort: never proof of termination; the caller bounds it."""
         ...
 
-    def exited(self, attempt_id: str) -> bool:
-        """True once `wait` has stopped waiting for the agent and only fences and reports. Not proof of termination."""
+    def fencing(self, attempt_id: str) -> bool:
+        """True while `launch` or `wait` fences the attempt's process tree, which must not be interrupted."""
         ...
 
     async def fence(self, attempt: dict[str, Any]) -> bool:
@@ -145,8 +147,8 @@ class FakeExecutor:
     async def cancel(self, attempt_id: str) -> None:
         self.stopping.setdefault(attempt_id, asyncio.Event()).set()
 
-    def exited(self, attempt_id: str) -> bool:
-        return False  # `wait` returns as soon as its work ends
+    def fencing(self, attempt_id: str) -> bool:
+        return False  # it has no process tree
 
     async def fence(self, attempt: dict[str, Any]) -> bool:
         self.stopping.pop(attempt["command"]["target"]["attempt_id"], None)
@@ -162,7 +164,6 @@ class ExecutionWorker:
         self.tasks: dict[str, asyncio.Task] = {}
         self.stopping: dict[str, asyncio.Task] = {}
         self.launches: set[str] = set()
-        self.exited: set[str] = set()
         self.backoff = Backoff(initial=1.0, maximum=30.0)
         self._worker: asyncio.Task | None = None
 
@@ -238,40 +239,39 @@ class ExecutionWorker:
             await tx.save_attempt(attempt)
         state, payload, termination = await executor.wait(
             attempt_id, handle, lambda value: journal.progress(attempt_id, value))
-        self.exited.add(attempt_id)
-        try:
-            async with journal.store.transaction() as tx:
-                await journal.finish(tx, await tx.attempt(attempt_id), state, payload, termination)
-        finally:
-            self.exited.discard(attempt_id)
+        async with journal.store.transaction() as tx:
+            await journal.finish(tx, await tx.attempt(attempt_id), state, payload, termination)
 
     async def _stop(self, attempt_id: str, task: asyncio.Task) -> None:
         """Graceful cancellation within one deadline, then the task is cancelled so its executor fences."""
         evidence = {"daemon.attempt_id": attempt_id}
+        clock = asyncio.get_running_loop().time
+        deadline, executor = clock() + self.cancel_seconds, None
         try:
             async with self.journal.store.read() as tx:
                 attempt = await tx.attempt(attempt_id)
             executor = self.journal.executors.get(attempt["command"]["payload"]["agent"]["runner"])
-            # The deadline covers the request (a blocked write included) and the wait for the agent to exit,
-            # but not the fencing and journaling that follow it.
+            # The request, a blocked write lock or pipe drain included, is bounded by the deadline.
             async with asyncio.timeout(self.cancel_seconds):
                 if executor is not None:
                     await executor.cancel(attempt_id)
-                while not task.done() and not self._exited(attempt_id, executor):
-                    await asyncio.wait({task}, timeout=self.poll_seconds)
-            await asyncio.wait({task})
         except TimeoutError:
-            log.warning("graceful cancellation timed out; fencing", extra=evidence)
+            log.warning("graceful cancellation request timed out", extra=evidence)
         except Exception:
-            log.exception("graceful cancellation failed; fencing", extra=evidence)
+            log.exception("graceful cancellation request failed", extra=evidence)
+        try:
+            while not task.done():
+                if executor is not None and executor.fencing(attempt_id):
+                    # Never cut a fence short; what follows it (progress, journaling) gets a fresh deadline.
+                    deadline = clock() + self.cancel_seconds
+                elif clock() >= deadline:
+                    log.warning("graceful cancellation timed out; fencing", extra=evidence)
+                    task.cancel()  # checked and cancelled in one step: no fence can have begun in between
+                    break
+                await asyncio.wait({task}, timeout=min(self.poll_seconds, max(deadline - clock(), 0)))
         finally:
-            if not task.done():
-                task.cancel()
             # Not confirmation: an unjournaled outcome is resolved by fencing in `run_once`.
             await asyncio.gather(task, return_exceptions=True)
-
-    def _exited(self, attempt_id: str, executor) -> bool:
-        return attempt_id in self.exited or (executor is not None and executor.exited(attempt_id))
 
     async def _resolve(self, attempt_id: str) -> None:
         """Fence an attempt whose outcome is uncertain; never launch it again."""

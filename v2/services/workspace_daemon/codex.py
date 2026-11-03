@@ -75,7 +75,7 @@ class CodexExecutor:
         self.running: dict[str, tuple[ACPClient, str]] = {}
         self.prompting: dict[str, ACPClient] = {}
         self.cancelled: set[str] = set()
-        self.ended: set[str] = set()
+        self.fences: set[str] = set()
 
     def validate(self, payload: dict[str, Any]) -> None:
         if payload["agent"].get("settings"):
@@ -116,12 +116,6 @@ class CodexExecutor:
         return {"executor_session_id": session_id, "resumable": resumable}
 
     async def wait(self, attempt_id: str, handle: dict[str, Any], progress: Progress) -> Outcome:
-        try:
-            return await self._wait(attempt_id, handle, progress)
-        finally:
-            self.ended.discard(attempt_id)
-
-    async def _wait(self, attempt_id: str, handle: dict[str, Any], progress: Progress) -> Outcome:
         client, prompt = self.running.pop(attempt_id)
         self.prompting[attempt_id] = client
         pending, summary = "", ""
@@ -167,12 +161,17 @@ class CodexExecutor:
         finally:
             self.prompting.pop(attempt_id, None)
             self.cancelled.discard(attempt_id)
-            self.ended.add(attempt_id)  # the turn is over; the fence below is not cut short by the cancel deadline
             # A finished turn is not evidence that the agent's tools stopped.
             # Cancellation still fences here, and then skips the journaling below.
-            if not await self._stop(handle, client, client.process):
+            self.fences.add(attempt_id)  # the cancel deadline never interrupts this fence
+            try:
+                fenced = await self._stop(handle, client, client.process)
+            finally:
+                self.fences.discard(attempt_id)
+            if not fenced:
                 raise UnconfirmedTermination
         # Only once the tree is fenced may journaling wait for outbox capacity: the agent cannot outlive its deadline.
+        # A cancel deadline may still interrupt that wait; the attempt is then fenced again and recorded.
         try:
             await flush(1)  # text the agent already streamed is kept even if the turn failed
             if reported is not None:
@@ -189,8 +188,8 @@ class CodexExecutor:
         if (client := self.prompting.get(attempt_id)) is not None:
             await client.cancel()
 
-    def exited(self, attempt_id: str) -> bool:
-        return attempt_id in self.ended
+    def fencing(self, attempt_id: str) -> bool:
+        return attempt_id in self.fences
 
     async def fence(self, attempt: dict[str, Any]) -> bool:
         attempt_id = attempt["command"]["target"]["attempt_id"]

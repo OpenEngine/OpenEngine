@@ -176,21 +176,24 @@ def test_running_fake_attempt_is_cancelled_gracefully_or_at_the_deadline(tmp_pat
     asyncio.run(scenario())
 
 
-def test_the_deadline_does_not_cut_short_fencing_after_the_agent_exited(tmp_path):
+def test_the_deadline_does_not_cut_short_a_fence_in_progress(tmp_path):
     class SlowFence(FakeExecutor):
         def __init__(self):
             super().__init__()
-            self.ended, self.fenced = set(), False
+            self.fences, self.fenced = set(), False
 
         async def wait(self, attempt_id, handle, progress):
             outcome = await super().wait(attempt_id, handle, progress)
-            self.ended.add(attempt_id)
-            await asyncio.sleep(0.6)  # a slow post-exit fence, longer than the deadline
+            self.fences.add(attempt_id)
+            try:
+                await asyncio.sleep(0.6)  # a slow post-exit fence, longer than the deadline
+            finally:
+                self.fences.discard(attempt_id)
             self.fenced = True
             return outcome
 
-        def exited(self, attempt_id):
-            return attempt_id in self.ended
+        def fencing(self, attempt_id):
+            return attempt_id in self.fences
 
     async def scenario():
         journal, vcp, outbox = await setup(tmp_path)
@@ -335,6 +338,37 @@ def test_full_progress_outbox_cannot_prevent_cancellation(tmp_path):
     asyncio.run(scenario())
 
 
+def test_final_progress_blocked_after_the_fence_cannot_stall_cancellation(tmp_path):
+    async def scenario():
+        fence = GroupFence()
+        # attempt.started fills the outbox: the turn's buffered text can never be journaled.
+        journal, vcp, outbox = await codex_setup(tmp_path, codex(tmp_path, "cancellable", fence), max_pending_updates=1)
+        assert (await journal.execute(EXECUTE, task()))["status"] == "accepted"
+        worker = ExecutionWorker(journal, cancel_seconds=0.3)
+        await worker.run_once()
+        await running(journal)
+        for _ in range(500):
+            if (tmp_path / "acp.child").exists():
+                break
+            await asyncio.sleep(0.01)
+        assert (await journal.cancel(CANCEL, cancel(task())))["status"] == "accepted"
+        started = time.monotonic()
+        attempt = await settle(worker, "attempt_1", journal)
+        assert attempt["state"] == "cancelled" and time.monotonic() - started < 5
+        assert fence.fenced and all(p.returncode is not None for p in fence.processes.values())
+        child = int((tmp_path / "acp.child").read_text())
+        for _ in range(100):
+            if gone(child):
+                break
+            await asyncio.sleep(0.02)
+        else:
+            pytest.fail("the agent's child outlived fencing")
+        await drain(outbox)
+        assert len(updates(vcp, "attempt.cancelled")) == 1
+        await journal.store.close()
+    asyncio.run(scenario())
+
+
 def test_failed_fencing_keeps_cancelling_ownership_until_confirmed(tmp_path):
     async def scenario():
         fence = GroupFence()
@@ -438,25 +472,36 @@ def test_cancel_receipts_and_updates_survive_a_journal_reopen(tmp_path):
     asyncio.run(scenario())
 
 
-def test_downgrade_drops_tombstones_and_hands_cancelling_attempts_to_fencing(tmp_path):
+def test_downgrade_is_refused_while_a_cancellation_is_journaled(tmp_path):
     async def scenario():
         journal, vcp, outbox = await setup(tmp_path)
-        assert (await journal.cancel(CANCEL, cancel(command("attempt_0", "rtc_0"), "rtc_cancel_0")))["status"] == "accepted"
-        assert (await journal.execute(EXECUTE, command(delay_seconds=30)))["status"] == "accepted"
-        worker = ExecutionWorker(journal)
-        await worker.run_once()
-        await running(journal)
-        assert (await journal.cancel(CANCEL, cancel(command())))["status"] == "accepted"
-        await worker.close()  # interrupted while cancelling, as a crash would leave it
-        assert (await state(journal))["state"] == "cancelling"
+        assert (await journal.cancel(CANCEL, cancel(command(), "rtc_cancel_0")))["status"] == "accepted"
+        await journal.store.close()
+        database = journal_store.database(tmp_path / "journal")
+        with pytest.raises(RuntimeError, match="cannot downgrade"):
+            downgrade(journal_store.MIGRATIONS, database, "2b6e990cf980")
+        # The tombstone survived the refused downgrade: the delayed execute is still never launched.
+        restarted = Journal(journal_store.JournalStore(database), BINDING_TARGET, journal.root, journal.executors,
+                            established=True)
+        await restarted.recover()
+        assert (await restarted.execute(EXECUTE, command()))["status"] == "accepted"
+        assert await ExecutionWorker(restarted).run_once() == 0
+        assert (await state(restarted))["state"] == "cancelled"
+        await restarted.store.close()
+    asyncio.run(scenario())
+
+
+def test_a_journal_without_cancellations_still_downgrades(tmp_path):
+    async def scenario():
+        journal, vcp, outbox = await setup(tmp_path)
+        assert (await journal.execute(EXECUTE, command()))["status"] == "accepted"
+        await settle(ExecutionWorker(journal), "attempt_1", journal)
         await journal.store.close()
     asyncio.run(scenario())
     database = journal_store.database(tmp_path / "journal")
     downgrade(journal_store.MIGRATIONS, database, "2b6e990cf980")
     engine = sa.create_engine(f"sqlite:///{database.path}")
     with engine.connect() as connection:
-        attempts = connection.exec_driver_sql("SELECT attempt_id, state FROM journal_attempts").all()
-        orphaned = connection.exec_driver_sql("SELECT count(*) FROM journal_updates WHERE attempt_id = 'attempt_0'").scalar()
+        assert connection.exec_driver_sql("SELECT state FROM journal_attempts").all() == [("completed",)]
     engine.dispose()
-    assert attempts == [("attempt_1", "running")] and orphaned == 0
     upgrade(journal_store.MIGRATIONS, database)
