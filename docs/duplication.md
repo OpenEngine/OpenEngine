@@ -28,7 +28,8 @@ generated-code, build, fixture, and vendor exclusions. The generated schema
 outputs `docs/schema` and `v2/docs/schema` are explicitly excluded; other
 documentation remains scanned. Binary files (NUL bytes
 or invalid UTF-8) are skipped, and symlinks are not followed. Known languages use
-jscpd's lexers automatically. Unknown extensions and extensionless files use a
+jscpd's available lexers automatically. Recognized formats whose grammars are
+unavailable, unknown extensions, and extensionless files use a
 generic tokenizer: Unicode letter/number/underscore runs and individual
 non-whitespace characters. This fallback ignores whitespace but preserves comments;
 it provides exact lexical matching for new languages without configuration changes.

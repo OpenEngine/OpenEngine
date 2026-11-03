@@ -188,3 +188,19 @@ test('append-only tokenizer preserves pinned lexer tokens and locations', () => 
   assert.equal(tokens.at(-1).range[1], source.length);
   assert.equal(tokens.at(-1).loc.end.line, 8000);
 });
+
+
+test('recognized formats without loaded grammars use generic matching', t => {
+  const {getFormatByFile} = require('@jscpd/tokenizer');
+  for (const extension of ['.elm', '.cr']) {
+    assert.ok(getFormatByFile('source' + extension));
+    const files = Object.fromEntries(['a', 'b', 'c'].map(n => [n + extension, block]));
+    const base = tree(t, Object.fromEntries(Object.entries(files).slice(0, 2)));
+    const current = tree(t, {...files, 'unrelated.py': 'value = 1'});
+    const result = findings(current, base);
+    assert.ok(result.length, extension);
+    assert.deepEqual(result[0].locations.map(l => l.file), ['a', 'b', 'c'].map(n => n + extension));
+    assert.match(result[0].context, /process/);
+    assert.equal(findings(current, current).length, 0);
+  }
+});

@@ -67,7 +67,9 @@ export function scan(root: string, options: Options = config) {
       if (options.exclude.includes(entry.name) || options.excludePaths.some(p => relative === p || relative.startsWith(p + '/'))) continue;
       if (entry.isDirectory()) { visit(absolute); continue; }
       if (!entry.isFile()) continue;
-      const format = getFormatByFile(entry.name) || 'text';
+      const detectedFormat = getFormatByFile(entry.name);
+      const format = detectedFormat && prism.languages[FORMATS[detectedFormat]?.parent || detectedFormat]
+        ? detectedFormat : 'text';
       const fileIndex = files.push(relative) - 1;
       const bytes = fs.readFileSync(absolute);
       // Binary data is not code. Validate UTF-8 rather than matching replacement characters.
