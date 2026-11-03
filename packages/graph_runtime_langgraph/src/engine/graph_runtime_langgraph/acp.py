@@ -1115,6 +1115,7 @@ class ACPNode:
         execution = turn.execution
         said: list[str] = []
         cancelled = False
+        reported_usage = False
         pending: list[str] = []
         thinking: list[str] = []
 
@@ -1147,7 +1148,7 @@ class ACPNode:
         turn.approval_requested = False
 
         async def consume() -> None:
-            nonlocal cancelled
+            nonlocal cancelled, reported_usage
             async for event in session.prompt(prompt):
                 if event.type == ACPEventType.PROMPT_COMPLETED:
                     cancelled = event.data.get("stopReason") == "cancelled"
@@ -1166,7 +1167,8 @@ class ACPNode:
                                 await flush_thinking(whole_lines=True)
                     continue
                 await flush_thinking()
-                await self._republish(execution, event)
+                if await self._republish(execution, event):
+                    reported_usage = True
                 if event.type == ACPEventType.MESSAGE_DELTA:
                     block = event.data.get("content")
                     if isinstance(block, Mapping) and block.get("type") == "text":
@@ -1174,6 +1176,14 @@ class ACPNode:
                         if isinstance(text, str):
                             pending.append(text)
             await flush()
+            if not reported_usage:
+                # An agent that reports nothing is unknown, not free: naming
+                # the session keeps the node in the rollup, incomplete.
+                await execution.emit(EventKind.USAGE_UPDATED, {
+                    "agent": self.agent,
+                    "model": str((self.session_config or {}).get("model") or ""),
+                    "sessionId": session.session_id,
+                })
 
         steering_id = steering_id_of(prompt)
         if steering_id:
@@ -1216,11 +1226,13 @@ class ACPNode:
         # carries forward does not change with where the words were published.
         return _TurnResult("".join(said), cancelled=cancelled)
 
-    async def _republish(self, execution: NodeExecution, event: Any) -> None:
+    async def _republish(self, execution: NodeExecution, event: Any) -> bool:
+        """Publish `event`; whether it was a `usage.updated`."""
         if event.type in (ACPEventType.USAGE_UPDATED, ACPEventType.PROMPT_COMPLETED):
             usage = self._usage(event)
             if usage is not None:
                 await execution.emit(EventKind.USAGE_UPDATED, usage)
+                return True
         elif event.type == ACPEventType.TOOL_STARTED:
             await execution.emit(
                 EventKind.TOOL_CALL,
@@ -1239,6 +1251,7 @@ class ACPNode:
                     "result": str(event.data.get("status") or "updated"),
                 },
             )
+        return False
 
     def _usage(self, event: Any) -> dict[str, object] | None:
         """This event's usage as a `usage.updated` payload, if it reported any.
