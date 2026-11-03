@@ -17,6 +17,7 @@ import json
 import os
 import signal
 import socket
+import ssl
 import stat
 import subprocess
 import sys
@@ -26,13 +27,19 @@ from pathlib import Path
 
 import nats
 import pytest
+import sqlalchemy as sa
+from nats.aio.client import Client as NATS
 from openengine.persistence import DatabaseConfig
-
 from virtual_control_plane.persistence import PERSISTENCE
 from virtual_control_plane.persistence.credentials import CredentialRows
 from virtual_control_plane.provisioning import broker as broker_module
 from virtual_control_plane.provisioning.broker import (
-    BrokerEndpoint, BrokerUnavailable, CredentialRetired, EndpointDrift, RuntimeBroker, runtime_user,
+    BrokerEndpoint,
+    BrokerUnavailable,
+    CredentialRetired,
+    EndpointDrift,
+    RuntimeBroker,
+    runtime_user,
 )
 from virtual_control_plane.runtime_nats import RuntimeUpdateListener
 from virtual_control_plane.tests.test_lifecycle import broker as public_broker
@@ -67,7 +74,7 @@ async def running(runtime_broker: RuntimeBroker):
     try:
         yield vcp
     finally:
-        await vcp.close()
+        await broker_module.close_connection(vcp)
         await runtime_broker.close()
 
 
@@ -346,8 +353,11 @@ def test_vcp_sigkill_leaves_no_broker_port_or_lock_and_restart_reuses_the_endpoi
                 while alive(server):
                     assert time.monotonic() < deadline, "nats-server outlived VCP"
                     await asyncio.sleep(0.05)
+                # Bound as nats-server binds: TIME_WAIT left by its closed sessions is no listener.
                 with socket.socket() as probe:
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                     probe.bind(("127.0.0.1", port))
+                    probe.listen()
                 with open(directory / "broker.lock", "a") as lock:
                     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 endpoint = (directory / "endpoint.json").read_text()
@@ -672,43 +682,79 @@ def test_a_reload_racing_a_relaunch_is_retryable(binary, tmp_path, database, mon
     asyncio.run(scenario())
 
 
-def test_a_credential_probe_never_sends_the_secret_to_an_impostor(binary, tmp_path, database) -> None:
+def test_a_credential_probe_never_sends_the_secret_to_an_impostor_replaying_the_exact_identity(
+        binary, tmp_path, database) -> None:
     async def scenario() -> None:
-        port = free_port()
-        runtime_broker = make(tmp_path, binary, database, port)
+        runtime_broker = make(tmp_path, binary, database, free_port())
         async with running(runtime_broker):
             credential = await runtime_broker.issue(A, 1)
             secret = credential.path.read_text()
-            name, server_id = runtime_broker._server_name, runtime_broker._server_id
+            # Exactly what the live server advertises to anyone, replayed verbatim.
+            info = json.dumps({"server_id": runtime_broker._server_id, "server_name": runtime_broker._server_name,
+                               "version": "2.15.1", "proto": 1, "max_payload": 1048576, "auth_required": True,
+                               "tls_available": True}).encode()
             received = bytearray()
 
             async def impostor(reader, writer) -> None:
-                # A stale copy of the real INFO, from a listener that is not the live server.
-                writer.write(b"INFO " + json.dumps({"server_id": server_id, "server_name": name, "version": "2.15.1",
-                                                    "proto": 1, "max_payload": 1048576}).encode() + b"\r\n")
-                await writer.drain()
                 with contextlib.suppress(OSError):
+                    writer.write(b"INFO " + info + b"\r\n")
+                    await writer.drain()
                     while data := await reader.read(4096):
                         received.extend(data)
-                        writer.write(b"PONG\r\n")
+                        writer.write(b"+OK\r\nPONG\r\n")
                 writer.close()
-            server = await asyncio.start_server(impostor, "127.0.0.1", 0)
+            # One impostor speaks plaintext; the other TLS with a certificate of its own for the same address.
+            key_pem, certificate_pem = broker_module._certificate("127.0.0.1")
+            (tmp_path / "impostor.key").write_bytes(key_pem)
+            (tmp_path / "impostor.pem").write_bytes(certificate_pem)
+            own_tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            own_tls.load_cert_chain(tmp_path / "impostor.pem", tmp_path / "impostor.key")
             original = runtime_broker.endpoint
-            runtime_broker.endpoint = BrokerEndpoint("127.0.0.1", server.sockets[0].getsockname()[1], credential.url)
-            try:
-                # Even while VCP still believes the endpoint verified, the probe's own socket is checked.
-                runtime_broker._server_id = "a-different-live-server"
-                with pytest.raises(BrokerUnavailable):
-                    await runtime_broker._authenticates(credential.user, secret)
-                runtime_broker._server_id = server_id
-                runtime_broker._verified = False
-                with pytest.raises(BrokerUnavailable):
-                    await runtime_broker._authenticates(credential.user, secret)
-            finally:
-                runtime_broker.endpoint, runtime_broker._verified = original, True
-                server.close()
-                server.close_clients()
-            assert secret.encode() not in received and b'"pass"' not in received
+            for server_tls in (None, own_tls):
+                server = await asyncio.start_server(impostor, "127.0.0.1", 0, ssl=server_tls)
+                # The crash/rebind race: VCP's state still says verified and running.
+                runtime_broker.endpoint = BrokerEndpoint("127.0.0.1", server.sockets[0].getsockname()[1], credential.url)
+                try:
+                    assert runtime_broker._verified and runtime_broker.running
+                    with pytest.raises(BrokerUnavailable):
+                        await runtime_broker._authenticates(credential.user, secret)
+                    vcp = NATS()
+                    with pytest.raises(Exception):  # noqa: B017 -- any failure, as long as nothing is sent
+                        await vcp.connect(runtime_broker.endpoint.client_url,
+                                          **{**runtime_broker.vcp_options(), "allow_reconnect": False})
+                finally:
+                    runtime_broker.endpoint = original
+                    server.close()
+                    server.close_clients()
+            assert secret.encode() not in received and runtime_broker._password.encode() not in received
+            assert b"CONNECT" not in received
+
+    asyncio.run(scenario())
+
+
+def test_a_database_error_during_relaunch_is_retried(binary, tmp_path, database, monkeypatch) -> None:
+    monkeypatch.setattr(broker_module, "RESTART_SECONDS", (0.05, 0.2))
+
+    async def scenario() -> None:
+        runtime_broker = make(tmp_path, binary, database, free_port())
+        async with running(runtime_broker) as vcp:
+            await runtime_broker.issue(A, 1)
+            with_status, failures = runtime_broker.rows.with_status, [2]
+
+            async def locked(*statuses: str):
+                if failures[0]:
+                    failures[0] -= 1
+                    raise sa.exc.OperationalError("SELECT", {}, Exception("database is locked"))
+                return await with_status(*statuses)
+            runtime_broker.rows.with_status = locked
+            ports = kill_server(runtime_broker)
+            deadline = time.monotonic() + 15
+            while ports.exists() or not (runtime_broker.running and vcp.is_connected):
+                assert time.monotonic() < deadline, "the runtime broker was not relaunched"
+                assert not runtime_broker._supervisor.done(), "supervision stopped"
+                await asyncio.sleep(0.05)
+            assert failures == [0]
+            await (await Runtime().connect(runtime_broker, A)).close()
 
     asyncio.run(scenario())
 

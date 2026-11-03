@@ -67,7 +67,9 @@ from virtual_control_plane.jetstream import JetStreamEvents
 from virtual_control_plane.persistence import PERSISTENCE
 from virtual_control_plane.persistence.credentials import CredentialRows
 from virtual_control_plane.persistence.durable import DurableStore
-from virtual_control_plane.provisioning.broker import BrokerEndpoint, BrokerUnavailable, EndpointDrift, RuntimeBroker
+from virtual_control_plane.provisioning.broker import (
+    BrokerEndpoint, BrokerUnavailable, EndpointDrift, RuntimeBroker, close_connection,
+)
 from virtual_control_plane.providers import worktree
 from virtual_control_plane.providers.smolvm import DEFAULT_TOOLS, Smolvm
 from virtual_control_plane.runtime_nats import RuntimeUpdateListener
@@ -236,7 +238,7 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
                 if internal_updates is not None:
                     await internal_updates.close()
                 if internal is not None:
-                    await internal.close()
+                    await close_connection(internal)
             finally:
                 if broker is not None:
                     await broker.close()

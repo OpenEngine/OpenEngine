@@ -19,23 +19,24 @@ again, even after a restart. Runtime user names are prefixed so none can be
 `broker_process.py` owns the server through a control pipe and `broker.lock`;
 see its docstring. VCP accepts only the server it launched: the per-launch
 random `server_name` must match both its loopback `/varz` and the INFO of the
-client port, so an unmanaged listener is never adopted or signalled. That INFO
-is sent to anyone, so it identifies the server only because the broker listens
-on one specific address, which no other process can also bind: a wildcard
-listen address is refused, since BSD lets another process bind a more specific
-address under it and relay the INFO to collect credentials. The host must be
-an IP literal, normalized, and never an unspecified address in any spelling.
+client port, so an unmanaged listener is never adopted or signalled. The
+listen host must be an IP literal, normalized, and never an unspecified
+address in any spelling.
 
-The same check guards every later connection, not just the first: VCP's
-password is handed to nats-py only while the endpoint is verified. Any
-disconnect clears that until the live server is identified again (or, after
-it exited, until its relaunch is), so a reconnect to a freed port is refused
-before CONNECT. `vcp`'s password is also regenerated for every launch, so one
-captured from a dead launch is never accepted by the next.
+INFO is public, so it is not what proves identity before a secret is sent.
+Every connection that carries one -- VCP's own, each reconnect, and every
+runtime credential probe -- opens TLS first and verifies a certificate pinned
+to a private key that only this state directory holds (`tls/`, 0600,
+generated once for the endpoint), before the server sends INFO and before
+CONNECT. A listener that replays the exact advertised name and ID still
+cannot complete that handshake, so it never receives a password. VCP's
+password is in addition handed to nats-py only while the endpoint is verified
+and regenerated for every launch.
 
-`BrokerEndpoint` is the seam where connection verification (TLS-first, #1222)
-can be adopted later; until then the broker is plaintext and must stay on a
-trusted local transport.
+Guests may still connect in plaintext (`allow_non_tls`, after a 100 ms TLS
+grace) until TLS-first verification for runtimes (#1222) is adopted behind
+`BrokerEndpoint`; until then the guest path must stay on a trusted local
+transport.
 """
 
 from __future__ import annotations
@@ -51,8 +52,10 @@ import os
 import re
 import secrets
 import shutil
+import ssl
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import NoReturn
 from urllib.parse import urlsplit
@@ -60,6 +63,11 @@ from urllib.request import ProxyHandler, build_opener
 
 import bcrypt
 import nats
+import sqlalchemy as sa
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 from nats.aio.client import Client as NATS
 
 from virtual_control_plane.persistence.credentials import CredentialRow, CredentialRows
@@ -214,6 +222,40 @@ def _private_directory(directory: Path) -> None:
     directory.chmod(0o700)
 
 
+def _certificate(host: str) -> tuple[bytes, bytes]:
+    """A self-signed P-256 key and certificate for `host`, PEM-encoded; its own trust anchor."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "openengine runtime broker")])
+    now = datetime.now(UTC)
+    public = key.public_key()
+    certificate = (
+        x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(public)
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=5)).not_valid_after(now + timedelta(days=3650))
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(host))]), critical=False)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(x509.KeyUsage(digital_signature=True, key_cert_sign=True, content_commitment=False,
+                                     key_encipherment=False, data_encipherment=False, key_agreement=False,
+                                     crl_sign=False, encipher_only=False, decipher_only=False), critical=True)
+        .add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(public), critical=False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(public), critical=False)
+        .sign(key, hashes.SHA256()))
+    return (key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                              serialization.NoEncryption()),
+            certificate.public_bytes(serialization.Encoding.PEM))
+
+
+async def close_connection(connection: NATS) -> None:
+    """Close a broker connection within `CLOSE_SECONDS`.
+
+    nats-py can wait forever on the transport of a TLS handshake that a
+    non-broker listener refused, so the close is bounded rather than trusted.
+    """
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(connection.close(), CLOSE_SECONDS)
+
+
 async def _quiet(error: Exception) -> None:
     log.warning("runtime broker connection error: %s", type(error).__name__)
 
@@ -226,6 +268,8 @@ class RuntimeBroker:
         self.startup_seconds, self.revocation_cutoff_seconds = startup_seconds, revocation_cutoff_seconds
         self.credentials = directory / "credentials"
         self.config = directory / "nats.conf"
+        self.tls = directory / "tls"
+        self._tls: ssl.SSLContext | None = None
         self.instance: str | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._log = None
@@ -251,7 +295,11 @@ class RuntimeBroker:
         return {"user": VCP_USER, "password": self._verified_password, "name": "vcp-runtime-broker",
                 "inbox_prefix": f"_INBOX.oe.vcp.{self.instance}", "connect_timeout": REQUEST_SECONDS,
                 "allow_reconnect": True, "max_reconnect_attempts": -1, "reconnect_time_wait": 0.5,
-                "error_cb": _quiet, "disconnected_cb": self._disconnected}
+                "error_cb": _quiet, "disconnected_cb": self._disconnected, **self._tls_options()}
+
+    def _tls_options(self) -> dict:
+        """TLS before INFO and CONNECT, verified against the pinned certificate: what proves the server."""
+        return {"tls": self._tls, "tls_handshake_first": True, "tls_hostname": self.endpoint.host}
 
     def _verified_password(self) -> str:
         """nats-py calls this for each CONNECT; only an identified endpoint ever receives the password."""
@@ -409,6 +457,16 @@ class RuntimeBroker:
             recorded = {**self.endpoint.record(), "instance": secrets.token_hex(8)}
             write_private(recorded_path, json.dumps(recorded).encode())
         self.instance = recorded["instance"]
+        _private_directory(self.tls)
+        key, certificate = self.tls / "key.pem", self.tls / "cert.pem"
+        if not (key.exists() and certificate.exists()):
+            key_pem, certificate_pem = _certificate(self.endpoint.host)
+            write_private(key, key_pem)
+            write_private(certificate, certificate_pem)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_verify_locations(cadata=certificate.read_text())
+        self._tls = context
 
     async def _acquire(self) -> int:
         # A previous owner's child may still be reaping its server after VCP died.
@@ -440,12 +498,20 @@ class RuntimeBroker:
                         async with asyncio.timeout(self.startup_seconds):
                             await self._launch()
                     break
-                except (BrokerUnavailable, TimeoutError, OSError) as error:
-                    log.warning("runtime broker relaunch failed: %s", error)
+                except (BrokerUnavailable, TimeoutError, OSError, sa.exc.DBAPIError) as error:
+                    # A database that is briefly locked or unavailable is retried like the broker itself.
+                    log.warning("runtime broker relaunch failed: %s", type(error).__name__)
+                except Exception:
+                    # Anything else is logged loudly but never ends supervision.
+                    log.exception("runtime broker relaunch failed unexpectedly")
                 await asyncio.sleep(delay)
                 delay = min(delay * 2, RESTART_SECONDS[1])
             log.info("runtime broker relaunched", extra={"server.address": self.endpoint.client_url})
-            await self._finish_pending()
+            try:
+                await self._finish_pending()
+            except Exception:
+                # The revocations stay `revoking`; the next start or relaunch finishes them.
+                log.exception("pending runtime credential revocations not finished")
 
     async def _finish_pending(self) -> None:
         async with self._credentials_lock:
@@ -498,10 +564,11 @@ class RuntimeBroker:
         varz = await self._monitor("varz")
         if varz.get("server_name") != self._server_name:
             _unavailable("runtime broker monitor reports another server")
-        target = urlsplit(self.endpoint.client_url)
         try:
-            reader, writer = await asyncio.open_connection(target.hostname, target.port)
-        except OSError:
+            reader, writer = await asyncio.wait_for(asyncio.open_connection(
+                self.endpoint.host, self.endpoint.port, ssl=self._tls, server_hostname=self.endpoint.host),
+                REQUEST_SECONDS)
+        except (OSError, TimeoutError):
             return False
         try:
             line = await asyncio.wait_for(reader.readline(), REQUEST_SECONDS)
@@ -541,8 +608,12 @@ class RuntimeBroker:
             if (secret := self._secret(row)) is not None:
                 users.append({"user": row.username, "password": password_hash(secret),
                               "permissions": runtime_permissions(row.runtime_id)})
-        config = {"server_name": self._server_name, "listen": self.endpoint.address,
-                  "http": "127.0.0.1:-1", "ports_file_dir": str(run), "authorization": {"users": users}}
+        # TLS-first clients (VCP) verify the pinned certificate; plaintext guests get INFO after the grace.
+        tls = {"cert_file": str(self.tls / "cert.pem"), "key_file": str(self.tls / "key.pem"),
+               "handshake_first": "100ms"}
+        config = {"server_name": self._server_name, "listen": self.endpoint.address, "tls": tls,
+                  "allow_non_tls": True, "http": "127.0.0.1:-1", "ports_file_dir": str(run),
+                  "authorization": {"users": users}}
         write_private(self.config, json.dumps(config, indent=2).encode())
 
     def _secret(self, row: CredentialRow) -> str | None:
@@ -603,7 +674,8 @@ class RuntimeBroker:
             return secret
         try:
             await probe.connect(self.endpoint.client_url, user=user, password=password, allow_reconnect=False,
-                                max_reconnect_attempts=0, connect_timeout=REQUEST_SECONDS, error_cb=_quiet)
+                                max_reconnect_attempts=0, connect_timeout=REQUEST_SECONDS, error_cb=_quiet,
+                                **self._tls_options())
         except nats.errors.Error as error:
             if "authorization violation" in str(error).lower():
                 return False

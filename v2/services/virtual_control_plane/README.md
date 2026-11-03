@@ -815,11 +815,17 @@ guards every connection, not only the first: nats-py gets VCP's password only
 while the endpoint is verified, any disconnect clears that until the live
 server (or its relaunch) is identified again, and a reconnect meanwhile is
 refused before CONNECT. A relaunch also rotates the password, so one captured
-from a dead launch is never accepted. Runtime credential probes (issuance and revocation
-checks) send a secret only when the endpoint is verified and the INFO on the
-probe's own socket names this launch's `server_name` and the `server_id` its
-loopback monitor reported. Verification failures of any kind are retried
-until the endpoint is identified again. Startup (lock, spawn, identity, authenticated
+from a dead launch is never accepted. INFO is public, so a listener could replay
+the exact advertised `server_name` and `server_id`; what proves the server
+before any secret is sent is TLS. VCP's connection, every reconnect, every
+runtime credential probe (issuance and revocation checks) and the identity
+check itself open TLS first (`tls_handshake_first`) and verify a self-signed
+P-256 certificate pinned to a key that only `runtime-broker/tls/` (0600,
+generated once for the endpoint) holds, before INFO and before CONNECT. A
+listener without that key cannot finish the handshake and receives no
+password. Verification failures of any kind are retried until the endpoint is
+identified again, and a database error during a relaunch is retried with the
+same backoff. Startup (lock, spawn, identity, authenticated
 connect) is bounded; a server that exits or cannot bind fails promptly. After
 startup, a broker that exits is relaunched on the same endpoint with backoff
 (0.1 to 5 seconds), pending revocations are then finished, and connections
@@ -827,8 +833,10 @@ reconnect indefinitely; `/healthz` is 503 while VCP is disconnected from it. If 
 is orphaned until killed by the operator; the next start then fails on the
 occupied port rather than adopting it.
 
-**Trust limits.** The broker is plaintext, so `host` must be a trusted local
-transport until TLS-first connection verification (#1221/#1222) lands behind
+**Trust limits.** VCP's own connections are pinned TLS, but guests still
+connect in plaintext (`allow_non_tls`; the server sends them INFO after a
+100 ms TLS grace), so `host` must be a trusted local transport for guests
+until TLS-first verification for runtimes (#1221/#1222) lands behind
 `BrokerEndpoint`. The host account running VCP can read every secret and is
 trusted. No host model credential is involved. Public callers (#1051), tool
 grants (#1075) and host backends (#1054/#1055; the worktree adapter still
