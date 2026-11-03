@@ -120,7 +120,9 @@ class Journal:
             if meta["blocked"]:
                 evidence.append({"journal_id": meta["journal_id"], "decision": "blocked", **meta["blocked"]})
             sequence = await self.append(tx, "runtime.ready", {
-                "executors": sorted(self.executors), "max_concurrent_attempts": self.max_concurrent_attempts,
+                "executors": sorted(self.executors),
+                "steering_executors": [name for name, executor in sorted(self.executors.items())
+                                       if name == "fake" and getattr(executor, "steering", False)], "max_concurrent_attempts": self.max_concurrent_attempts,
                 "progress_kinds": sorted({kind for e in self.executors.values() for kind in e.progress_kinds}),
                 "journal_id": meta["journal_id"]})
             meta = await tx.runtime()
@@ -158,6 +160,15 @@ class Journal:
         if cancel := attempt["cancel"]:
             # Cancellation was journaled first, so it decides the outcome.
             state, payload = "cancelled", cancel["payload"]
+        if state == "completed" and attempt["command"]["payload"]["agent"]["runner"] == "fake":
+            messages = (attempt.get("executor_handle") or {}).get("steering", [])
+            if messages:
+                payload = {**payload, "result": {**payload["result"], "summary": payload["result"]["summary"]
+                           + "\n" + "\n".join(item["message"] for item in messages)}}
+                summary = payload["result"]["summary"]
+                if len(summary) > 65536:
+                    suffix = "\n[steering sha256:" + digest(messages) + "]"
+                    payload["result"]["summary"] = summary[:65536 - len(suffix)] + suffix
         attempt["state"] = state
         await self.append(tx, "attempt." + state, payload, attempt, termination, cancel)
         await tx.save_attempt(attempt)  # leaving the active states frees its session and capacity
@@ -266,6 +277,45 @@ class Journal:
             else:
                 attempt["state"] = "cancelling"  # ownership is kept until the worker confirms termination
                 await tx.save_attempt(attempt)
+        return response
+
+    async def steer(self, subject: str, command: dict[str, Any]) -> dict[str, Any]:
+        """Apply only to the exact running fake attempt, in the receipt/update transaction."""
+        response = {"command_id": command["command_id"], "target": command["target"], "status": "accepted"}
+        if detail := mismatch(self.binding, subject, command, "steer"):
+            return {**response, "status": "rejected", "error": detail}
+        fingerprint = digest([subject, command])
+        async with self.store.transaction() as tx:
+            if previous := await tx.receipt(command["command_id"]):
+                if previous["digest"] == fingerprint:
+                    return previous["response"]
+                return {**response, "status": "rejected", "error": error("COMMAND_ID_CONFLICT", "command identity changed")}
+            attempt = await tx.attempt(command["target"]["attempt_id"])
+            detail = None
+            if (not attempt or attempt["command"]["target"] != command["target"]
+                    or attempt["command"]["execution"] != command["execution"]):
+                detail = error("ATTEMPT_CONFLICT", "steering names another execution")
+            else:
+                runner = attempt["command"]["payload"]["agent"]["runner"]
+                executor = self.executors.get(runner)
+                if runner != "fake" or not getattr(executor, "steering", False):
+                    detail = error("UNSUPPORTED_CAPABILITY", "executor does not support steering")
+            if detail:
+                response.update(status="rejected", error=detail)
+            await tx.remember(command, fingerprint, response)
+            if detail:
+                return response
+            payload = {"command_id": command["command_id"], "cause": command["cause"]}
+            if attempt["state"] != "running":
+                payload["error"] = {"code": "INVALID_STATE", "message": "attempt is no longer running", "retryable": False,
+                                    "details": {"resource_type": "attempt", "resource_id": command["target"]["attempt_id"],
+                                                "current_state": attempt["state"], "allowed_states": ["running"]}}
+                outcome = "failed"
+            else:
+                executor.apply_steering(attempt["executor_handle"], command)
+                outcome = "applied"
+            await self.append(tx, "steering." + outcome, payload, attempt)
+            await tx.save_attempt(attempt)
         return response
 
     async def inspect(self, subject: str, request: dict[str, Any]) -> dict[str, Any]:

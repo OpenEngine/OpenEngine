@@ -29,6 +29,7 @@ from openengine.messaging.errors import invalid_argument
 from virtual_control_plane.application.lifecycle import Lifecycle, SCHEMAS, accepted, identity, new_operation, now
 from virtual_control_plane.application.ports import ExecutionContextPort
 from virtual_control_plane.application.transactions import CommandIdConflict
+from virtual_control_plane.application.steering import Steering
 
 
 CANCEL = f"{SCHEMAS}/commands.schema.json#/$defs/cancel_command"
@@ -43,17 +44,20 @@ class Execution:
     def __init__(self, lifecycle: Lifecycle, context: ExecutionContextPort | None = None, *, enabled: bool = False):
         self.lifecycle, self.store = lifecycle, lifecycle.store
         self.context, self.enabled = context, enabled
+        self.steering = Steering(self)
 
     def commands(self):
         if not self.enabled:
             return {}
         return {"workspaces.{workspace_id}.execute": Route(self.execute, receipts=True),
-                "workspaces.{workspace_id}.cancel": Route(self.cancel, receipts=True)}
+                "workspaces.{workspace_id}.cancel": Route(self.cancel, receipts=True),
+                "workspaces.{workspace_id}.steer": Route(self.steering.steer, receipts=True)}
 
     def queries(self):
         return {key: Route(handler, f"{SCHEMAS}/queries.schema.json#/$defs/{schema}")
                 for key, handler, schema in [
                     ("sessions.{session_id}.get", self.get, "get_session_query"),
+                    ("sessions.{session_id}.events.list", self.steering.history, "list_session_events_query"),
                     ("workspaces.{workspace_id}.sessions.list", self.list, "list_sessions_query")]}
 
     async def execute(self, request: Request):
@@ -282,7 +286,10 @@ class Execution:
         session_record = await tx.get("sessions", binding["session_id"])
         session = session_record["snapshot"]
         if payload["kind"] == "conversation":
-            session_record["history_sequence"] = sequence = session_record.get("history_sequence", 0) + 1
+            sequence = await tx.append_history(binding["session_id"], {
+                "kind": "message", "attempt_id": attempt_id, "occurred_at": timestamp,
+                **{key: payload[key] for key in ("message_id", "role", "text")}})
+            session_record["history_sequence"] = sequence
             event = {"event_type": "conversation.message", "resources": {**resources, "message_id": payload["message_id"]},
                      "payload": {"role": payload["role"], "text": payload["text"], "sequence": sequence}}
         elif payload["kind"] == "usage":
@@ -335,6 +342,8 @@ class Execution:
         runtime = await tx.get("workspace_runtimes", binding["workspace_id"])
         if not runtime or runtime["runtime_id"] != binding["runtime_id"] or runtime["generation"] != binding["runtime_generation"]:
             raise InvalidTransition()
+        if state in TERMINAL:
+            await self.steering.terminate(tx, attempt_id)
         timestamp = now()
         workspace_record = await tx.get("workspaces", binding["workspace_id"])
         workspace = workspace_record["snapshot"]

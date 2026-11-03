@@ -114,6 +114,7 @@ class RuntimeUpdates:
             payload = message["payload"]
             if status.get("journal_id") not in (None, payload["journal_id"]):
                 raise Rejected("IDENTITY_MISMATCH", "runtime journal was replaced", quarantine=True)
+            status["steering_executors"] = payload.get("steering_executors", [])
             status.update(workspace_id=target["workspace_id"], generation=target["runtime_generation"], ready=True,
                           **{key: payload[key] for key in ("executors", "max_concurrent_attempts", "progress_kinds", "journal_id")})
         elif not status.get("journal_id"):
@@ -137,10 +138,16 @@ class RuntimeUpdates:
             raise Rejected("EVENT_CONFLICT", "attempt sequence is not contiguous", quarantine=True)
         state, payload = STATES.get(message["kind"]), message["payload"]
         progress = message["kind"] == "attempt.progress" and payload["kind"] in progress_kinds
-        if state is None and not progress:
+        steering = message["kind"] in ("steering.applied", "steering.failed")
+        if state is None and not progress and not steering:
             raise Rejected("EVENT_CONFLICT", "update kind was not registered by this runtime", quarantine=True)
         try:
-            if progress:
+            if steering:
+                if not await self.execution.steering.project(
+                        tx, payload["command_id"], message["kind"].split(".")[1], payload.get("error"),
+                        target=target, cause=payload["cause"]):
+                    raise Rejected("IDENTITY_MISMATCH", "unknown steering command or cause")
+            elif progress:
                 await self.execution.progress(tx, attempt_id, payload)
             else:
                 # A cancelled update must name the winning cancel VCP accepted; transition checks it.
@@ -225,6 +232,9 @@ class RuntimeCommands:
                     status = "rejected"
                 except InvalidTransition:
                     pass
+            if status == "blocked" and request["kind"] == "steer":
+                await self.execution.steering.project(tx, command.command_id, "failed")
+                status = "rejected"
             await tx.settle_runtime_command(command.command_id, status, reply)
         # Identity, generation and conflict rejections are not evidence that no
         # executor exists: the attempt stays active until reconciled.
