@@ -1182,7 +1182,7 @@ class ACPNode:
                 await execution.emit(EventKind.USAGE_UPDATED, {
                     "agent": self.agent,
                     "model": str((self.session_config or {}).get("model") or ""),
-                    "sessionId": session.session_id,
+                    "sessionId": turn.session_id,
                 })
 
         steering_id = steering_id_of(prompt)
