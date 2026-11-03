@@ -562,3 +562,25 @@ def test_history_single_entry_above_page_budget(tmp_path, limit):
         assert sequences == [1, 2, 3]
         await flow.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("limit", [1, 50])
+def test_history_entry_exceeding_transport_returns_small_error(tmp_path, limit):
+    async def scenario():
+        flow = await SteeringFlow().start(tmp_path)
+        await flow.running()
+        await append_message(flow, "msg_before")
+        async with flow.store.transaction() as tx:
+            await flow.execution.progress(tx, flow.attempt_id, {
+                "kind": "conversation", "message_id": "msg_oversized", "role": "agent", "text": "\U0001f600" * 90000})
+        await append_message(flow, "msg_after")
+        first = (await flow.history(limit=limit))["result"]
+        assert [item["sequence"] for item in first["items"]] == [1]
+        assert first["next_cursor"]
+        for _ in range(2):
+            response = await flow.history(limit=limit, cursor=first["next_cursor"])
+            assert len(envelopes.encode(response)) < 4096
+            assert response["error"]["code"] == "INVALID_STATE"
+            assert response["error"]["details"]["current_state"] == "history_entry_too_large"
+        await flow.close()
+    asyncio.run(scenario())

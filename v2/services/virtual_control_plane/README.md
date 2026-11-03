@@ -732,7 +732,9 @@ persist in the service database, bound to the authenticated tenant, session and
 normalized filters. Cursors remain valid for at least 24 hours. Expired records are reclaimed
 when issuing cursors; legacy cursors without expiration remain valid.
 Pages use a 900 KiB encoded-entry budget. A single transport-sized entry above
-that budget is returned alone so pagination can advance past it.
+that budget is returned alone so pagination can advance past it. Entries exceeding
+1 MiB minus 4 KiB of envelope headroom return a small `INVALID_STATE` error
+(`history_entry_too_large`); entries are never silently skipped or truncated.
 Each page uses bounded index seeks in one database snapshot.
 The service-owned migration backfills conversation entries from retained outbox
 envelopes, including already published messages. Usage/tool-call production is unchanged.

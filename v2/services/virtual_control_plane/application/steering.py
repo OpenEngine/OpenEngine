@@ -142,6 +142,14 @@ class Steering:
         page, size, cursor = [], 0, None
         for entry in entries[:limit]:
             encoded_size = len(envelopes.encode(entry)) + 1
+            # Keep a hard ceiling even for the first entry, reserving 4 KiB
+            # for the response envelope and continuation cursor.
+            if encoded_size > 1024 * 1024 - 4096:
+                if page:
+                    break
+                raise ServiceError(ErrorCode.INVALID_STATE, "history entry exceeds the transport size limit",
+                                   details={"resource_type": "session", "resource_id": session_id,
+                                            "current_state": "history_entry_too_large", "allowed_states": []})
             # The page budget is soft for a single entry: returning it alone
             # lets clients advance past transport-sized entries above the budget.
             if page and size + encoded_size > 900 * 1024:
