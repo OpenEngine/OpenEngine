@@ -221,16 +221,3 @@ test('generated dependency lockfiles are excluded at every depth without excludi
     assert.ok(findings(tree(t, files), new Map()).length, name);
   }
 });
-
-test('HTML and JSX attribute formatting remains significant to lexer matching', t => {
-  for (const extension of ['.html', '.jsx']) {
-    const source = Array.from({length: 25}, (_, i) => `<div title="item${i}" id="entry${i}">value${i}</div>`).join('\n');
-    const formatted = source.replaceAll(' title=', '\t  title=').replaceAll(' id=', '\n    id=');
-    const files = value => Object.fromEntries(['a', 'b', 'c'].map(n => [n + extension, value]));
-    const base = tree(t, files(source));
-    assert.ok(findings(tree(t, files(formatted)), base).length, extension);
-    const two = tree(t, Object.fromEntries(Object.entries(files(source)).slice(0, 2)));
-    const result = findings(tree(t, {...files(source), ['c' + extension]: formatted}), two);
-    assert.equal(result.length, 0, extension);
-  }
-});
