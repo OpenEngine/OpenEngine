@@ -731,8 +731,8 @@ ascending session sequence, with kind and attempt filters. Opaque versioned curs
 persist in the service database, bound to the authenticated tenant, session and
 normalized filters. Cursors remain valid for at least 24 hours. Expired records are reclaimed
 when issuing cursors; legacy cursors without expiration remain valid.
-Pages are also bounded to 900 KiB of encoded entries, leaving envelope space
-under the default NATS payload limit.
+Pages use a 900 KiB encoded-entry budget. A single transport-sized entry above
+that budget is returned alone so pagination can advance past it.
 Each page uses bounded index seeks in one database snapshot.
 The service-owned migration backfills conversation entries from retained outbox
 envelopes, including already published messages. Usage/tool-call production is unchanged.

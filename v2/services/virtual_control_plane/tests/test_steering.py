@@ -533,3 +533,32 @@ def test_downgrade_refuses_accepted_steering(tmp_path):
         await assert_outcome(flow, reply, "applied")
         await flow.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("limit", [1, 50])
+def test_history_single_entry_above_page_budget(tmp_path, limit):
+    async def scenario():
+        flow = await SteeringFlow().start(tmp_path)
+        await flow.running()
+        await append_message(flow, "msg_before")
+        async with flow.store.transaction() as tx:
+            await flow.execution.progress(tx, flow.attempt_id, {
+                "kind": "conversation", "message_id": "msg_large", "role": "agent", "text": "😀" * 80000})
+        await append_message(flow, "msg_after")
+        sequences, cursor = [], None
+        while True:
+            response = await flow.history(limit=limit, **({"cursor": cursor} if cursor else {}))
+            assert len(envelopes.encode(response)) < 1024 * 1024
+            page = response["result"]
+            assert page["items"]
+            if any(item["message_id"] == "msg_large" for item in page["items"]):
+                assert len(page["items"]) == 1
+                assert len(envelopes.encode(page["items"][0])) > 900 * 1024
+                assert page["items"][0]["text"] == "😀" * 80000
+            sequences.extend(item["sequence"] for item in page["items"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+        assert sequences == [1, 2, 3]
+        await flow.close()
+    asyncio.run(scenario())

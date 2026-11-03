@@ -142,11 +142,13 @@ class Steering:
         page, size, cursor = [], 0, None
         for entry in entries[:limit]:
             encoded_size = len(envelopes.encode(entry)) + 1
-            if size + encoded_size > 900 * 1024:
+            # The page budget is soft for a single entry: returning it alone
+            # lets clients advance past transport-sized entries above the budget.
+            if page and size + encoded_size > 900 * 1024:
                 break
             page.append(entry)
             size += encoded_size
-        if len(entries) > len(page):
+        if page and len(entries) > len(page):
             cursor = identity("v1_")
             async with self.store.transaction() as tx:
                 await tx.save_history_cursor(cursor, {"scope": scope, "after": page[-1]["sequence"]})
