@@ -7,7 +7,9 @@ beside it, so a restarted agent can load them. MODE selects one behavior:
 `normal`, `no_resume`, `no_read_only`, `exit` (crash mid-prompt), `partial_exit`
 (crash after streaming some text), `partial_hang` (stream some text, then hang), `hang` (never
 answers the prompt), `stop_reading` (stops reading stdin after set_mode),
-`flood` (many chunks), `child` (leaves a grandchild running).
+`flood` (many chunks), `child` (leaves a grandchild running), `cancellable`
+(streams some text, leaves a grandchild running and ends the turn only on
+`session/cancel`), `slow_start` (answers initialize after a second).
 """
 
 import json
@@ -51,6 +53,8 @@ while True:
     request = receive()
     method, params, result = request.get("method"), request.get("params", {}), {}
     if method == "initialize":
+        if mode == "slow_start":
+            time.sleep(1)
         result = {"protocolVersion": 1, "agentCapabilities": {"loadSession": mode != "no_resume"}}
     elif method in ("session/new", "session/load"):
         known = json.loads(sessions.read_text()) if sessions.exists() else []
@@ -79,6 +83,14 @@ while True:
             chunk(session_id, "Partial answer")
         if mode in ("hang", "partial_hang"):
             time.sleep(3600)
+        if mode == "cancellable":
+            chunk(session_id, "Partial answer")
+            child = subprocess.Popen(["/bin/sleep", "300"])
+            log.with_suffix(".child").write_text(str(child.pid))
+            while receive().get("method") != "session/cancel":
+                pass
+            send({"id": request["id"], "result": {"stopReason": "cancelled"}})
+            continue
         send({"id": "permission_1", "method": "session/request_permission", "params": {
             "sessionId": session_id, "toolCall": {"toolCallId": "call_1", "title": "Write a file"},
             "options": [{"optionId": "allow", "name": "Allow", "kind": "allow_once"},

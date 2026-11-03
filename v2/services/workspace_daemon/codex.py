@@ -9,7 +9,8 @@ model if the adapter offers it. Wait sends one prompt, journals agent message
 chunks as `conversation` progress and the turn's explicit token usage as one
 `usage` delta, then fences the whole process tree before reporting an outcome.
 Cumulative `usage_update` notifications are not deltas and are ignored; no
-cost or artifact is ever reported.
+cost or artifact is ever reported. Cancel sends `session/cancel` during a
+prompt, or skips a prompt not sent yet; the worker bounds it and then fences.
 """
 
 from __future__ import annotations
@@ -72,6 +73,9 @@ class CodexExecutor:
         self.executable, self.supervisor, self.prompt_timeout = executable, supervisor, prompt_timeout
         self.spawn = asyncio.create_subprocess_exec
         self.running: dict[str, tuple[ACPClient, str]] = {}
+        self.prompting: dict[str, ACPClient] = {}
+        self.cancelled: set[str] = set()
+        self.fences: set[str] = set()
 
     def validate(self, payload: dict[str, Any]) -> None:
         if payload["agent"].get("settings"):
@@ -101,15 +105,19 @@ class CodexExecutor:
                                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_FRAME + 1)
             client = ACPClient(process)
             session_id, resumable = await client.open(cwd, previous=previous, model=payload["agent"].get("model"))
-        except Exception as error:
+        except BaseException as error:
+            # A cancelled launch fences too, before the cancellation propagates.
             if not await self._stop(handle, client, process):
                 raise UnconfirmedTermination from error
+            if not isinstance(error, Exception):
+                raise
             raise LaunchFailed(error, "never_started" if process is None else "killed") from error
         self.running[attempt_id] = (client, prompt)
         return {"executor_session_id": session_id, "resumable": resumable}
 
     async def wait(self, attempt_id: str, handle: dict[str, Any], progress: Progress) -> Outcome:
         client, prompt = self.running.pop(attempt_id)
+        self.prompting[attempt_id] = client
         pending, summary = "", ""
 
         async def flush(size: int) -> None:
@@ -134,6 +142,8 @@ class CodexExecutor:
                                                  "retryable": False}, "reason": "executor_failed"}, "killed")
         reported: dict[str, Any] | None = None
         try:
+            if attempt_id in self.cancelled:
+                return outcome  # cancelled while launching: never prompted, and fenced below first
             started = now()
             result = await client.prompt(prompt, update, self.prompt_timeout)
             usage = result.get("usage") or {}
@@ -149,11 +159,19 @@ class CodexExecutor:
             # Once the tree is fenced this is a known failure, not a lost executor.
             log.exception("ACP prompt failed unexpectedly", extra={"daemon.attempt_id": attempt_id})
         finally:
+            self.prompting.pop(attempt_id, None)
+            self.cancelled.discard(attempt_id)
             # A finished turn is not evidence that the agent's tools stopped.
             # Cancellation still fences here, and then skips the journaling below.
-            if not await self._stop(handle, client, client.process):
+            self.fences.add(attempt_id)  # the cancel deadline never interrupts this fence
+            try:
+                fenced = await self._stop(handle, client, client.process)
+            finally:
+                self.fences.discard(attempt_id)
+            if not fenced:
                 raise UnconfirmedTermination
         # Only once the tree is fenced may journaling wait for outbox capacity: the agent cannot outlive its deadline.
+        # A cancel deadline may still interrupt that wait; the attempt is then fenced again and recorded.
         try:
             await flush(1)  # text the agent already streamed is kept even if the turn failed
             if reported is not None:
@@ -165,8 +183,17 @@ class CodexExecutor:
                                          "retryable": False}, "reason": "executor_failed"}, "killed")
         return outcome
 
+    async def cancel(self, attempt_id: str) -> None:
+        self.cancelled.add(attempt_id)
+        if (client := self.prompting.get(attempt_id)) is not None:
+            await client.cancel()
+
+    def fencing(self, attempt_id: str) -> bool:
+        return attempt_id in self.fences
+
     async def fence(self, attempt: dict[str, Any]) -> bool:
         attempt_id = attempt["command"]["target"]["attempt_id"]
+        self.cancelled.discard(attempt_id)
         client = self.running.pop(attempt_id, (None, ""))[0]
         return await self._stop(attempt["executor_handle"], client, client and client.process)
 

@@ -5,6 +5,14 @@ workspace context. The application validates wire structure and filesystem paths
 before its first acceptance write. Runtime readiness is committed by the
 daemon's `runtime.ready` update (`runtime_delivery.py`), which also delivers the
 accepted command bytes and projects ordered updates through `transition`.
+
+Cancel atomically writes its receipt, a pending `workspaces.cancel` operation,
+the attempt's `cancelling` state and one immutable internal cancel command.
+The attempt stays in `active_attempt_ids`, so its session, capacity and the
+workspace's destroy guard are kept until the daemon's terminal update confirms
+termination. Later cancels of a cancelling attempt are coalesced onto the first
+(winning) command; a cancel of an ended attempt succeeds at once with its
+outcome. The terminal projection settles every pending cancel operation.
 """
 from __future__ import annotations
 
@@ -23,6 +31,10 @@ from virtual_control_plane.application.ports import ExecutionContextPort
 from virtual_control_plane.application.transactions import CommandIdConflict
 
 
+CANCEL = f"{SCHEMAS}/commands.schema.json#/$defs/cancel_command"
+TERMINAL = ("completed", "failed", "cancelled")
+
+
 class InvalidTransition(ValueError):
     """An unknown, stale or terminal attempt cannot make this transition."""
 
@@ -33,7 +45,10 @@ class Execution:
         self.context, self.enabled = context, enabled
 
     def commands(self):
-        return {"workspaces.{workspace_id}.execute": Route(self.execute, receipts=True)} if self.enabled else {}
+        if not self.enabled:
+            return {}
+        return {"workspaces.{workspace_id}.execute": Route(self.execute, receipts=True),
+                "workspaces.{workspace_id}.cancel": Route(self.cancel, receipts=True)}
 
     def queries(self):
         return {key: Route(handler, f"{SCHEMAS}/queries.schema.json#/$defs/{schema}")
@@ -126,15 +141,10 @@ class Execution:
         operation = new_operation(body, "workspaces.execute", workspace_id, timestamp)
         operation["resources"] = {key: value for key, value in binding.items() if key.endswith("_id")}
         message = {"command_id": command_id, "kind": "execute", "target": binding,
-                   "execution": {"command_id": command_id, "cause": {
-                       "operation": {key: operation[key] for key in ("operation_id", "command_id")},
-                       "causal_path": body["causal_path"]}},
+                   "execution": {"command_id": command_id, "cause": self._cause(operation, body)},
                    "payload": {"agent": payload["agent"], "task": payload["task"],
                                "session_mode": selection["mode"], "context": context}}
-        subject = f"oe.internal.v1.runtime.runtimes.{runtime['runtime_id']}.execute"
-        wire = envelopes.encode(message)
-        if errors := validate_wire_message("execute", wire, subject):
-            raise invalid_argument([("context", "; ".join(errors))])
+        runtime_command = self._runtime_command(message, attempt_id, "context")
         attempt = {key: binding[key] for key in ("workspace_id", "session_id", "attempt_id", "runtime_generation")}
         attempt.update(state="starting", instruction=payload["task"]["instruction"])
         session.update(state="active", updated_at=timestamp, attempts=[attempt, *session["attempts"]][:20])
@@ -148,7 +158,71 @@ class Execution:
         await tx.put("attempt_bindings", attempt_id, {**binding, "execution": message["execution"], "session_mode": selection["mode"]})
         await tx.put("operations", operation["operation_id"], {"snapshot": operation, "causal_path": body["causal_path"]})
         await tx.put("workspaces", workspace_id, record)
-        await tx.append_runtime_command(command_id, attempt_id, subject, wire)
+        await tx.append_runtime_command(*runtime_command)
+        return accepted(body, operation["operation_id"], attempt_id)
+
+    @staticmethod
+    def _cause(operation, body):
+        return {"operation": {key: operation[key] for key in ("operation_id", "command_id")},
+                "causal_path": body["causal_path"]}
+
+    @staticmethod
+    def _runtime_command(message, attempt_id, field):
+        """Validated `append_runtime_command` arguments for one immutable internal runtime command."""
+        subject = f"oe.internal.v1.runtime.runtimes.{message['target']['runtime_id']}.{message['kind']}"
+        wire = envelopes.encode(message)
+        if errors := validate_wire_message(message["kind"], wire, subject):
+            raise invalid_argument([(field, "; ".join(errors))])
+        return message["command_id"], attempt_id, subject, wire
+
+    @staticmethod
+    def _replace_attempt(session, attempt, timestamp):
+        session.update(updated_at=timestamp, attempts=[attempt if a["attempt_id"] == attempt["attempt_id"] else a
+                                                       for a in session["attempts"]])
+
+    async def cancel(self, request: Request):
+        return await self.lifecycle._command(request, self._cancel)
+
+    async def _cancel(self, tx, request):
+        body = request.body
+        self.lifecycle._validate(body, CANCEL)
+        workspace_id, _, _ = await self.lifecycle._load_workspace(tx, request)
+        attempt_id = body["payload"]["attempt_id"]
+        record, binding = await tx.get("attempts", attempt_id), await tx.get("attempt_bindings", attempt_id)
+        if not record or not binding or binding["workspace_id"] != workspace_id:
+            raise ServiceError(ErrorCode.NOT_FOUND, "attempt does not exist in this workspace",
+                               details={"resource_type": "attempt", "resource_id": attempt_id})
+        attempt, timestamp = record["snapshot"], now()
+        operation = new_operation(body, "workspaces.cancel", workspace_id, timestamp)
+        operation["resources"] = {key: binding[key] for key in ("workspace_id", "runtime_id", "session_id", "attempt_id")}
+        if attempt["state"] in TERMINAL:
+            # It ended first and keeps its outcome; there is nothing to stop.
+            operation.update(status="succeeded", result={"attempt_id": attempt_id, "final_state": attempt["state"]})
+        elif record.get("cancel"):
+            record["cancel"]["operation_ids"].append(operation["operation_id"])  # coalesced onto the winning cancel
+        else:
+            runtime = await tx.get("workspace_runtimes", workspace_id)
+            if not runtime or runtime["runtime_id"] != binding["runtime_id"] or runtime["generation"] != binding["runtime_generation"]:
+                raise ServiceError(ErrorCode.INVALID_STATE, "the attempt's runtime is no longer owned",
+                                   details={"resource_type": "attempt", "resource_id": attempt_id,
+                                            "current_state": attempt["state"], "allowed_states": ["starting", "running"]})
+            command_id = identity("rtc_")
+            cause = self._cause(operation, body)
+            message = {"command_id": command_id, "kind": "cancel",
+                       "target": {key: binding[key] for key in ("workspace_id", "runtime_id", "runtime_generation",
+                                                                 "session_id", "attempt_id")},
+                       "execution": binding["execution"], "cause": cause,
+                       "payload": {key: body["payload"][key] for key in ("reason",) if key in body["payload"]}}
+            runtime_command = self._runtime_command(message, attempt_id, "payload")
+            record["cancel"] = {"command_id": command_id, "cause": cause, "operation_ids": [operation["operation_id"]]}
+            attempt["state"] = "cancelling"
+            session_record = await tx.get("sessions", binding["session_id"])
+            session = session_record["snapshot"]
+            self._replace_attempt(session, attempt, timestamp)
+            await tx.put("sessions", binding["session_id"], session_record)
+            await tx.append_runtime_command(*runtime_command)
+        await tx.put("attempts", attempt_id, record)
+        await tx.put("operations", operation["operation_id"], {"snapshot": operation, "causal_path": body["causal_path"]})
         return accepted(body, operation["operation_id"], attempt_id)
 
     @staticmethod
@@ -200,7 +274,7 @@ class Execution:
         attempt's previous one. Nothing is projected for artifacts here.
         """
         record = await tx.get("attempts", attempt_id)
-        if record is None or record["snapshot"]["state"] != "running":
+        if record is None or record["snapshot"]["state"] not in ("running", "cancelling") or "started_at" not in record["snapshot"]:
             raise InvalidTransition()
         binding = await tx.get("attempt_bindings", attempt_id)
         attempt, timestamp, event_id = record["snapshot"], now(), identity("evt_")
@@ -226,27 +300,36 @@ class Execution:
         else:
             raise InvalidTransition()
         operation_record = await tx.get("operations", record["operation_id"])
-        session.update(updated_at=timestamp, attempts=[attempt if a["attempt_id"] == attempt_id else a for a in session["attempts"]])
+        self._replace_attempt(session, attempt, timestamp)
         await tx.append_event({"event_id": event_id, "occurred_at": timestamp, "producer": "vcp",
                                "causal_path": [*operation_record["causal_path"], event_id], **event})
         await tx.put("attempts", attempt_id, record)
         await tx.put("sessions", binding["session_id"], session_record)
 
-    async def transition(self, tx, attempt_id, state, *, error=None, result=None):
+    async def transition(self, tx, attempt_id, state, *, error=None, result=None, cancel=None):
         """Trusted projection primitive, not a runtime message handler.
 
         `RuntimeUpdates` fences, orders and deduplicates updates before invoking
         this in its update transaction. An acknowledgement has no transition:
-        only attempt.started projects task.started and succeeds execute.
+        only attempt.started projects task.started and succeeds execute. A
+        cancelling attempt that starts stays cancelling; it ends cancelled only
+        with the winning cancel's `cancel` (internal command ID and cause), or
+        keeps the completed/failed outcome the daemon reached first.
         """
         record = await tx.get("attempts", attempt_id)
         if record is None:
             raise InvalidTransition()
         attempt = record["snapshot"]
-        allowed = {"starting": {"running", "failed"}, "running": {"completed", "failed"}}
+        allowed = {"starting": {"running", "failed"}, "running": {"completed", "failed"},
+                   "cancelling": {"running", "completed", "failed", "cancelled"}}
         if state not in allowed.get(attempt["state"], set()):
             raise InvalidTransition()
         if (state == "failed" and error is None) or (state == "completed" and result is None):
+            raise InvalidTransition()
+        winning = record.get("cancel")
+        if (state == "running" and "started_at" in attempt) or (state == "cancelled" and (
+                not winning or not cancel or {key: cancel.get(key) for key in ("command_id", "cause")}
+                != {key: winning[key] for key in ("command_id", "cause")})):
             raise InvalidTransition()
         binding = await tx.get("attempt_bindings", attempt_id)
         runtime = await tx.get("workspace_runtimes", binding["workspace_id"])
@@ -259,8 +342,9 @@ class Execution:
         session = session_record["snapshot"]
         operation_record = await tx.get("operations", record["operation_id"])
         operation = operation_record["snapshot"]
-        attempt["state"] = state
+        attempt["state"] = "cancelling" if state == "running" and winning else state
         payload = {"operation": binding["execution"]["cause"]["operation"]}
+        causal_path = operation_record["causal_path"]
         if state == "running":
             attempt["started_at"] = timestamp
             operation.update(status="succeeded", updated_at=timestamp, result={
@@ -275,16 +359,29 @@ class Execution:
             if result is not None:
                 attempt["result"] = result
                 payload["result"] = result
+            if state == "cancelled":
+                payload["cancelled_by"] = winning["cause"]["operation"]
+                if reason := cancel.get("reason"):
+                    payload["reason"] = reason
+                causal_path = winning["cause"]["causal_path"]
+                error = {"code": "INVALID_STATE", "message": "attempt was cancelled before it started", "retryable": False,
+                         "details": {"resource_type": "attempt", "resource_id": attempt_id,
+                                     "current_state": "cancelled", "allowed_states": ["running"]}}
             if operation["status"] == "pending":
                 operation.update(status="failed", updated_at=timestamp, error=error)
+            for cancel_id in (winning or {}).get("operation_ids", []):
+                cancel_record = await tx.get("operations", cancel_id)
+                cancel_record["snapshot"].update(status="succeeded", updated_at=timestamp,
+                                                 result={"attempt_id": attempt_id, "final_state": state})
+                await tx.put("operations", cancel_id, cancel_record)
             session["state"] = "idle"
             workspace["active_attempt_ids"].remove(attempt_id)
             workspace.update(version=workspace["version"] + 1, updated_at=timestamp)
-        session.update(updated_at=timestamp, attempts=[attempt if a["attempt_id"] == attempt_id else a for a in session["attempts"]])
+        self._replace_attempt(session, attempt, timestamp)
         event_id = identity("evt_")
         await tx.append_event({"event_id": event_id, "event_type": "task." + ("started" if state == "running" else state),
                                "occurred_at": timestamp, "producer": "vcp",
-                               "causal_path": [*operation_record["causal_path"], event_id],
+                               "causal_path": [*causal_path, event_id],
                                "resources": {key: binding[key] for key in ("workspace_id", "session_id", "attempt_id")},
                                "payload": payload})
         await tx.put("attempts", attempt_id, record)

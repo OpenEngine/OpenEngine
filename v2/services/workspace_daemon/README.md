@@ -15,8 +15,9 @@ uv run --project v2 python -m workspace_daemon --nats-url nats://127.0.0.1:4222 
 ```
 
 The deterministic `fake` executor runs no agent, model or ACP subprocess:
-`agent.settings` may set `outcome` (`completed`/`failed`) and `delay_seconds`
-(0-60). `--fake-effects` records each launch, as test evidence. The real
+`agent.settings` may set `outcome` (`completed`/`failed`), `delay_seconds`
+(0-60) and `ignore_cancel` (work that only stops when fenced at the
+cancellation deadline). `--fake-effects` records each launch, as test evidence. The real
 `codex` executor is opt-in; see "Codex ACP executor".
 
 ## Start-up and recovery
@@ -36,13 +37,13 @@ The deterministic `fake` executor runs no agent, model or ACP subprocess:
 4. Alembic (`migrations/`) creates or upgrades the runtime-local SQLite journal
    (`workspace-daemon.sqlite3`). It is not a tenant service database. Its
    tables are normalized and related by foreign keys (see "Journal schema").
-5. Recovery fences every `launching` or `running` attempt through its executor
-   and records it failed with `executor_lost` (`killed`); it never launches it
-   again. If an executor cannot confirm termination, start-up is refused with
+5. Recovery fences every `launching`, `running` or `cancelling` attempt through
+   its executor and records it failed with `executor_lost` (`killed`), or
+   cancelled when a cancel intent was journaled; it never launches it again. If an executor cannot confirm termination, start-up is refused with
    the attempt left as it was. A `recorded` attempt launches once. Each decision
    is logged with the command ID, runtime generation, journal ID and sequence.
 6. A new `runtime.ready` (new `boot_id`, same `journal_id`) is journaled; the
-   binding is sealed; only then are `.execute` and `.inspect` subscribed, using
+   binding is sealed; only then are `.execute`, `.cancel` and `.inspect` subscribed, using
    the runtime's own inbox prefix.
 
 The daemon accepts execute only after VCP commits its latest `runtime.ready`.
@@ -52,9 +53,9 @@ The daemon accepts execute only after VCP commits its latest `runtime.ready`.
 | Table | Holds | Relations and constraints |
 | -- | -- | -- |
 | `journal_runtime` | the single binding (workspace, runtime, generation), `journal_id`, update high-water mark, readiness, blocked reason | one row (`id = 1`); `ready_sequence`, `blocked_sequence` → `journal_updates` |
-| `journal_commands` | each remembered execute command's exact bytes, digest, and reply status and error code/message | `status` is `accepted` or `rejected`; an error exactly when rejected |
+| `journal_commands` | each remembered execute or cancel command's exact bytes, digest, and reply status and error code/message | `status` is `accepted` or `rejected`; an error exactly when rejected |
 | `journal_sessions` | sessions this runtime owns, and the executor conversation (ACP session ID) and whether it can be loaded | `command_id` → the opening command, which carries the agent |
-| `journal_attempts` | state, launch count, attempt sequence, last update sequence, executor handle | `session_id` → sessions, `command_id` → commands (unique); one unfinished attempt per session |
+| `journal_attempts` | state (including `cancelling`), launch count, attempt sequence, last update sequence, executor handle | `session_id` → sessions (NULL only for a cancel-before-execute tombstone), `command_id` → the execute or tombstone's cancel command (unique), `cancel_command_id` → the winning cancel; one unfinished attempt per session |
 | `journal_updates` | ordered update bytes as sent and whether VCP committed them | `attempt_id` → attempts for attempt updates |
 
 Nothing is stored twice: a reply is rebuilt from its command's target and its
@@ -96,6 +97,40 @@ reopens retained updates from the requested sequence; any other permanent
 rejection blocks the outbox and new execution for reconciliation. Inspect uses
 a read-only connection and its own subscription, so it answers during
 execution and recovery.
+
+## Cancellation
+
+Cancel is checked against the binding like execute, has its own subscription
+and is never refused for readiness. Its receipt and the attempt's cancel
+intent commit in one transaction before the reply, which means the intent is
+durable, not that work stopped:
+
+- No attempt yet (cancel overtook execute): a tombstone attempt for the exact
+  binding and execution is journaled and immediately `attempt.cancelled`
+  (`never_started`). A matching execute delivered later is acknowledged and
+  remembered but never launched or opened; a different execution for that
+  attempt is `ATTEMPT_CONFLICT`, as is a cancel naming another execution.
+- `recorded`: cancelled `never_started` in the same transaction; the worker
+  can no longer launch it.
+- `launching`/`running`: becomes `cancelling`, keeping its session and
+  capacity. A launch that returns afterwards still journals `attempt.started`
+  but stays `cancelling`.
+- Already completed or failed, or already cancelling: accepted as a no-op.
+  Cancel and completion serialize in the journal; once an intent is journaled
+  every terminal record of the attempt is `attempt.cancelled` with the first
+  (winning) cancel's command ID and cause.
+
+The worker stops a `cancelling` launch in two steps. It asks the executor to
+stop (`cancel`; Codex sends ACP `session/cancel`, or skips a prompt not yet
+sent) and waits for the work to end, both under one deadline (5 s) that also
+covers acquiring the ACP write lock and draining stdin, so a blocked pipe or a
+full progress outbox cannot hold it. Then it cancels the attempt's task, whose
+executor fences the process tree. A fence already running is never interrupted;
+the deadline restarts after it, so final progress blocked on a full outbox is
+cancelled too and the attempt is fenced again (idempotently) and recorded. The
+terminal record is journaled only after
+a confirmed fence; failed fencing, an exception or a failed terminal write
+leaves the attempt `cancelling` and owned, and fencing is retried with backoff.
 
 ## Codex ACP executor
 
@@ -170,7 +205,10 @@ process-group fence (`tests/acp_fixture.py`, never installed) on macOS and
 Linux. They cover context, continuation after restart, permission denial, model
 and mode capabilities, progress, usage and backpressure, blocked I/O, adapter
 crash, restart mid-prompt, unconfirmed fencing, failed terminal journaling and
-launch/wait exceptions. They are not evidence of cgroup fencing or of an
+launch/wait exceptions; `tests/test_cancellation.py` covers tombstones,
+recorded/launching/running cancellation, graceful ACP cancel, blocked stdin,
+backpressure, failed fencing and terminal writes, and restart with a
+journaled intent. They are not evidence of cgroup fencing or of an
 authenticated model. `tests/test_linux_supervision.py` is opt-in: as root on
 Linux with `OE_DAEMON_TEST_CGROUP_ROOT`, `OE_DAEMON_TEST_AGENT_UID`,
 `OE_DAEMON_TEST_AGENT_GID` and `OE_DAEMON_TEST_AGENT_HOME` it fences a real
@@ -181,7 +219,7 @@ also runs one live, authenticated Codex task. Both skip otherwise.
 
 Production credentials are provisioned out of band (`--credentials`); the
 shared local account behind `--local-test-account` is a test fixture.
-Cancellation, steering, approvals, writable execution, artifacts, other
+Steering, approvals, writable execution, artifacts, other
 runners, credential enrollment, macOS host fencing, VM installation and
 suspend/restore are later work (#1122, #1055 and their successors). Without
 `--codex-acp` only `fake` runs; there is no unsupervised real executor. Beside a worktree, VCP's

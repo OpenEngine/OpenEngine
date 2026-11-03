@@ -34,7 +34,8 @@ log = logging.getLogger(__name__)
 BINDING = ("workspace_id", "runtime_id", "runtime_generation")
 # Durable execute rejections establishing that the daemon recorded and launched nothing.
 NOT_LAUNCHED = frozenset({"INVALID_ARGUMENT", "UNSUPPORTED_EXECUTOR", "SESSION_BUSY"})
-STATES = {"attempt.started": "running", "attempt.completed": "completed", "attempt.failed": "failed"}
+STATES = {"attempt.started": "running", "attempt.completed": "completed", "attempt.failed": "failed",
+          "attempt.cancelled": "cancelled"}
 
 
 class Rejected(Exception):
@@ -142,7 +143,11 @@ class RuntimeUpdates:
             if progress:
                 await self.execution.progress(tx, attempt_id, payload)
             else:
-                await self.execution.transition(tx, attempt_id, state, error=payload.get("error"), result=payload.get("result"))
+                # A cancelled update must name the winning cancel VCP accepted; transition checks it.
+                cancel = message.get("cancel_command_id") and {
+                    "command_id": message["cancel_command_id"], "cause": message["cause"], **payload}
+                await self.execution.transition(tx, attempt_id, state, error=payload.get("error"),
+                                                result=payload.get("result"), cancel=cancel)
         except InvalidTransition:
             raise Rejected("EVENT_CONFLICT", "invalid attempt transition", quarantine=True) from None
         record = await tx.get("attempts", attempt_id)
@@ -213,7 +218,7 @@ class RuntimeCommands:
             return False
         status = "acknowledged" if ack["status"] == "accepted" else "blocked"
         async with self.store.transaction() as tx:
-            if status == "blocked" and ack["error"]["code"] in NOT_LAUNCHED:
+            if status == "blocked" and request["kind"] == "execute" and ack["error"]["code"] in NOT_LAUNCHED:
                 try:
                     await self.execution.transition(tx, request["target"]["attempt_id"], "failed", error={
                         "code": "PROVIDER_ERROR", "message": ack["error"]["message"], "retryable": False})
