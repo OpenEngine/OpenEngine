@@ -8,7 +8,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
-from openengine.persistence import LOCAL_TENANT, Backend, BackendNotImplemented, DatabaseConfig
+from openengine.persistence import LOCAL_TENANT, Backend, BackendNotImplemented, DatabaseConfig, new_tenant
 from openengine.persistence.migrations import downgrade
 
 from graph_engine.persistence import PERSISTENCE
@@ -133,6 +133,33 @@ def test_the_deadline_is_checked_once_the_apply_holds_the_lock(config: DatabaseC
             assert await graphs.apply(_command("cmd_1"), _definition("{}"), deadline=past) == accepted
         finally:
             await graphs.close()
+
+    asyncio.run(scenario())
+
+
+def test_request_scoped_writes_share_the_database_queue(config: DatabaseConfig) -> None:
+    async def scenario() -> None:
+        persistence = PERSISTENCE.open(config)
+        first = persistence.scoped(LOCAL_TENANT)
+        second = persistence.scoped(LOCAL_TENANT)
+        other = persistence.scoped(new_tenant())
+        tasks = []
+        try:
+            async with first._writing:  # noqa: SLF001
+                tasks = [
+                    asyncio.create_task(second.apply(_command("queued"), _definition("{}"))),
+                    asyncio.create_task(other.reject(_command("queued"), {"status": "rejected"})),
+                ]
+                await asyncio.sleep(0.05)
+                assert all(not task.done() for task in tasks)
+                assert await second.graphs("default", 10) == []
+            accepted, rejected = await asyncio.gather(*tasks)
+            assert accepted["status"] == "accepted"
+            assert rejected == {"status": "rejected"}
+            assert await second.apply(_command("queued"), _definition("{}")) == accepted
+        finally:
+            await asyncio.gather(*tasks, return_exceptions=True)
+            await persistence.close()
 
     asyncio.run(scenario())
 
