@@ -23,7 +23,8 @@ _BRACKET = re.compile(r"[\[\]{}]")
 DEFINITIONS = {
     "execute": ("runtime", ("execute",)),
     "cancel": ("runtime", ("cancel",)),
-    "command_ack": ("runtime", ("execute", "cancel")),
+    "steer": ("runtime", ("steer",)),
+    "command_ack": ("runtime", ("execute", "cancel", "steer")),
     "inspect": ("runtime", ("inspect",)),
     "inspect_response": ("runtime", ("inspect",)),
     **{
@@ -36,6 +37,8 @@ DEFINITIONS = {
             "completed",
             "failed",
             "cancelled",
+            "steering_applied",
+            "steering_failed",
             "update_ack",
         )
     },
@@ -142,7 +145,7 @@ def validate_message(definition, payload, subject):
     ):
         errors.append("Execute identity must equal its command ID")
     if (
-        definition == "cancel"
+        definition in ("cancel", "steer")
         and payload["execution"]["command_id"] == payload["command_id"]
     ):
         errors.append("Control command needs a distinct command ID")
@@ -223,6 +226,7 @@ def validate_exchange(request_definition, request, reply, subject):
     reply_definition = {
         "execute": "command_ack",
         "cancel": "command_ack",
+        "steer": "command_ack",
         "inspect": "inspect_response",
         "update": "update_ack",
     }.get(request_definition)

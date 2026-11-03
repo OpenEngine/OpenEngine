@@ -53,7 +53,7 @@
       ]
     },
     "steer_payload": {
-      "description": "Deliver a message to one session. An idle session receives it as its next turn; an active one mid-attempt.",
+      "description": "Deliver a message to a supported fake executor running in the current owned generation. Idle, starting, cancelling, closed, Codex and restore-dependent steering are rejected before acceptance.",
       "type": "object",
       "required": ["session_id", "message"],
       "additionalProperties": false,

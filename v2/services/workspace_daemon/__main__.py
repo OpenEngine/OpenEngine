@@ -8,7 +8,7 @@ needs a workspace root, a separate private journal directory, its immutable
 binding and a broker. Start-up takes the journal's exclusive lock, checks or
 records the binding, migrates and recovers the journal, seals the binding and
 only then subscribes to `oe.internal.v1.runtime.runtimes.{runtime_id}.execute`,
-`.cancel` and `.inspect`. Command reception, inspect, the executor worker and the update
+`.cancel`, `.steer` and `.inspect`. Command reception, inspect, the executor worker and the update
 outbox run independently. A refused recovery exits 2 with its evidence logged.
 
 Broker credentials are provisioned out of band (`--credentials`). Without
@@ -136,7 +136,7 @@ async def serve(args, journal_directory: Path, root: Path, initialization: Initi
                 log.warning("discarded invalid runtime %s", action, extra={"daemon.errors": errors[:3]})
                 return
             body = json.loads(message.data)
-            handler = {"execute": journal.execute, "cancel": journal.cancel, "inspect": journal.inspect}[action]
+            handler = {"execute": journal.execute, "cancel": journal.cancel, "steer": journal.steer, "inspect": journal.inspect}[action]
             try:
                 response = await handler(message.subject, body)
             except Exception:
@@ -145,7 +145,7 @@ async def serve(args, journal_directory: Path, root: Path, initialization: Initi
             await message.respond(encode(response))
 
         # Separate subscriptions: inspect and cancel never queue behind execute handling.
-        for action in ("execute", "cancel", "inspect"):
+        for action in ("execute", "cancel", "steer", "inspect"):
             subject = f"oe.internal.v1.runtime.runtimes.{args.runtime_id}.{action}"
             subscriptions.append(await connection.subscribe(subject, cb=receive))
         await connection.flush()

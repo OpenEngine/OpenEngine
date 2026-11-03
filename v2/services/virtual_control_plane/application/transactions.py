@@ -16,7 +16,7 @@ from typing import Any, Literal, Protocol
 
 Document = dict[str, Any]
 Collection = Literal["workspaces", "operations", "workspace_runtimes", "sessions", "attempts", "attempt_bindings",
-                     "runtime_status"]
+                     "runtime_status", "steering_commands", "history_cursors"]
 
 
 class CommandIdConflict(ValueError):
@@ -85,6 +85,14 @@ class Transaction(Protocol):
         """
         ...
 
+    async def retire_runtime_command(self, command_id: str) -> None:
+        """Stop pending delivery after terminal projection, without inventing an acknowledgement."""
+        ...
+
+    async def pending_steering(self, attempt_id: str) -> list[Document]: ...
+
+    async def append_history(self, session_id: str, entry: Document) -> int: ...
+
     async def append_event(self, envelope: Document) -> None:
         """Queue an immutable public event envelope for publication after commit.
 
@@ -102,6 +110,8 @@ class UnitOfWork(Protocol):
     async def workspace_page(self, filters: Document, after: list[str] | None, limit: int) -> list[Document]: ...
 
     async def session_page(self, filters: Document, after: list[str] | None, limit: int) -> list[Document]: ...
+
+    async def history_page(self, session_id: str, filters: Document, after: int, limit: int) -> list[Document]: ...
 
     def transaction(self) -> AbstractAsyncContextManager[Transaction]:
         """Serialize writers before reading; commit on success, roll back on any failure."""

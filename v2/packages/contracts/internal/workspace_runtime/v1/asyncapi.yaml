@@ -29,6 +29,14 @@ channels:
     messages:
       Cancel:
         $ref: '#/components/messages/Cancel'
+  steer:
+    address: oe.internal.v1.runtime.runtimes.{runtime_id}.steer
+    parameters:
+      runtime_id:
+        description: Runtime identity; must equal target.runtime_id.
+    messages:
+      Steer:
+        $ref: '#/components/messages/Steer'
   inspect:
     address: oe.internal.v1.runtime.runtimes.{runtime_id}.inspect
     parameters:
@@ -78,6 +86,17 @@ operations:
         $ref: '#/channels/replies'
       messages:
       - $ref: '#/channels/replies/messages/CommandAck'
+  steer:
+    action: send
+    channel:
+      $ref: '#/channels/steer'
+    messages:
+    - $ref: '#/channels/steer/messages/Steer'
+    reply:
+      channel:
+        $ref: '#/channels/replies'
+      messages:
+      - $ref: '#/channels/replies/messages/CommandAck'
   inspect:
     action: send
     channel:
@@ -114,6 +133,12 @@ components:
         schemaFormat: application/schema+json;version=draft-07
         schema:
           $ref: ./messages.schema.json#/$defs/cancel
+    Steer:
+      name: Steer
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema:
+          $ref: ./messages.schema.json#/$defs/steer
     Inspect:
       name: Inspect
       payload:

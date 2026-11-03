@@ -477,7 +477,7 @@ operations:
     action: receive
     title: Steer a session
     summary: Deliver a message to a named session; restores compute when permitted.
-    description: Completes with `steering.applied` or `steering.failed`.
+    description: Fake-only active-attempt delivery in the current owned generation. Codex, idle and restore-dependent requests reject before acceptance. Completes with `steering.applied` or `steering.failed`.
     channel: { $ref: '#/channels/workspaceSteer' }
     tags:
     - name: control

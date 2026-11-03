@@ -710,3 +710,33 @@ NATS with the daemon subprocess, a daemon SIGKILL while cancelling and a
 cancel accepted before delivery across VCP and daemon restarts, each ending in
 exactly one `task.cancelled`, no surviving daemon child processes, and destroy
 accepted only afterwards. The daemon there runs the in-process fake executor.
+
+
+## Active fake steering and session history (#1121)
+
+The same opt-in `Execution(enabled=True)` registers `workspaces.{workspace_id}.steer`.
+It requires the session's single running attempt in the owned runtime generation
+and an advertised fake steering capability. Codex, idle/starting/cancelling/closed
+sessions and restore-dependent requests reject before acceptance. Receipt, operation
+and immutable runtime command commit together. Retries keep the original binding.
+
+Daemon steering outcomes project one operation, public event and history entry.
+Terminal task projection fails all unapplied pending steering in that transaction,
+including undelivered commands; it retires their delivery with `settled` without
+inventing a daemon acknowledgement. Task outcomes keep their original result.
+Late updates cannot reverse steering outcomes or append another history entry.
+
+`sessions.{session_id}.events.list` pages conversation and steering entries in
+ascending session sequence, with kind and attempt filters. Opaque versioned cursors
+persist in the service database, bound to the authenticated tenant, session and
+normalized filters. Each page uses bounded index seeks in one database snapshot.
+The service-owned migration backfills conversation entries from retained outbox
+envelopes, including already published messages. Usage/tool-call production is unchanged.
+
+`tests/test_steering.py` covers receipt replay/conflict, rejection, rollback,
+completion/cancel races, undelivered settlement, late/duplicate updates, database
+reopen at acceptance/application/projection, no retargeting on continuation,
+mixed history/filter pagination and cursor isolation. Its NATS test uses the
+fake daemon subprocess and reuses history cursors after VCP restart. None of this
+establishes authenticated model execution; real steering and restoration remain
+outside this slice. Production startup keeps the existing execution opt-in boundary.

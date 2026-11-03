@@ -219,8 +219,27 @@ also runs one live, authenticated Codex task. Both skip otherwise.
 
 Production credentials are provisioned out of band (`--credentials`); the
 shared local account behind `--local-test-account` is a test fixture.
-Steering, approvals, writable execution, artifacts, other
+Real-agent steering, approvals, writable execution, artifacts, other
 runners, credential enrollment, macOS host fencing, VM installation and
 suspend/restore are later work (#1122, #1055 and their successors). Without
 `--codex-acp` only `fake` runs; there is no unsupervised real executor. Beside a worktree, VCP's
 worktree adapter starts and stops this process (see the VCP README).
+
+
+## Fake steering (#1121)
+
+Readiness advertises `steering_executors: ["fake"]`. A steer command must name the
+exact running attempt, session, execution and runtime generation. The journal
+transaction remembers its receipt, appends the message to the fake executor's
+persisted `executor_handle` and journals `steering.applied` together. The existing
+opaque handle column needs no daemon schema change. A stopped or cancelling
+attempt records `steering.failed` with no task-result change. Duplicate commands
+replay receipts; conflicting IDs reject. Codex always rejects steering, even if
+advertised incorrectly, with no fallback to cancellation or another turn.
+
+Completed fake results include applied messages in journal order, bounded by the
+public summary limit (a digest covers any truncated tail). Restart fences an
+interrupted fake attempt as before and replays committed updates; it never
+reapplies steering or targets a new attempt. `tests/test_steering.py` covers
+transaction rollback/retry, binding and capability rejection, terminal races,
+duplicate delivery and maximum-length messages with deterministic fake execution.

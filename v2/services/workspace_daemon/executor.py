@@ -103,6 +103,7 @@ class FakeExecutor:
 
     progress_kinds: tuple[str, ...] = ()
     conversational = False
+    steering = True
 
     def __init__(self, effects: Path | None = None) -> None:
         self.effects = effects
@@ -115,6 +116,12 @@ class FakeExecutor:
                 or type(delay) not in (int, float) or not 0 <= delay <= 60
                 or type(settings.get("ignore_cancel", False)) is not bool):
             raise ValueError(settings)
+
+    @staticmethod
+    def apply_steering(handle: dict[str, Any], command: dict[str, Any]) -> None:
+        """Pure fake state mutation; the journal commits it with the outcome update."""
+        handle.setdefault("steering", []).append({"command_id": command["command_id"],
+                                                  "message": command["payload"]["message"]})
 
     def plan(self, attempt_id: str) -> dict[str, Any]:
         return {"kind": "in_process"}

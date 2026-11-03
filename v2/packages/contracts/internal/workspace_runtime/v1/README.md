@@ -1,7 +1,7 @@
 # Workspace runtime protocol v1
 
 This is the **internal contract**, not an implementation. It covers the next
-execution milestone: execute, agent progress/outcome, cancellation and recovery.
+execution milestone: execute, agent progress/outcome, fake steering, cancellation and recovery.
 Steering is reserved for a later slice. Approvals,
 checkpoints and suspension are excluded. The public
 [VCP contract](../../../virtual_control_plane/v1/asyncapi.yaml) is unchanged.
@@ -15,6 +15,7 @@ wire authority and this document specifies stateful rules. Release:
 | -- | -- | -- |
 | `oe.internal.v1.runtime.runtimes.{runtime_id}.execute` | VCP → daemon | execute → command_ack |
 | `oe.internal.v1.runtime.runtimes.{runtime_id}.cancel` | VCP → daemon | cancel → command_ack |
+| `oe.internal.v1.runtime.runtimes.{runtime_id}.steer` | VCP → daemon | steer → command_ack |
 | `oe.internal.v1.runtime.runtimes.{runtime_id}.inspect` | VCP → daemon | inspect → inspect_response |
 | `oe.internal.v1.vcp.runtimes.{runtime_id}.updates` | daemon → VCP | update → update_ack |
 
@@ -60,7 +61,7 @@ attempt. Retries preserve the entire cause and all identities.
 
 Envelope identities and arbitrary headers are claims, not authentication.
 Provision each daemon with a separate NATS credential scoped to its runtime:
-subscribe to its execute/cancel/inspect subjects **and** its own reply-inbox
+subscribe to its execute/cancel/steer/inspect subjects **and** its own reply-inbox
 prefix `_INBOX.oe.runtime.{runtime_id}.>`; publish to its own updates subject,
 with restricted native response permissions for replies to incoming commands.
 Response permissions permit publishing replies, not subscribing to inboxes.
@@ -83,6 +84,7 @@ permissions: {
   subscribe: { allow: [
     "oe.internal.v1.runtime.runtimes.rt_demo.execute",
     "oe.internal.v1.runtime.runtimes.rt_demo.cancel",
+    "oe.internal.v1.runtime.runtimes.rt_demo.steer",
     "oe.internal.v1.runtime.runtimes.rt_demo.inspect",
     "_INBOX.oe.runtime.rt_demo.>"
   ] }
@@ -320,18 +322,37 @@ error reply. Stateful validation (credentials, session ownership, generation
 registry, journal sequences and executor termination) must run in the services;
 the schema validator does not establish these facts.
 
-## Reserved steering
+## Active fake steering
 
-`oe.internal.v1.runtime.runtimes.{runtime_id}.steer` and update kinds
-`steering.applied` / `steering.failed` are reserved, with no send operation or
-accepted wire schema in this release. Do not publish them or grant daemon steer
-permissions yet. A later contract slice will define active and idle session
-steering, durable acknowledgement and application semantics. Public VCP steering
-responsibilities remain unchanged.
+`oe.internal.v1.runtime.runtimes.{runtime_id}.steer` carries its own command ID
+and cause, plus the immutable target and execution identity of the running
+attempt. `runtime.ready.payload.steering_executors` advertises support; an absent
+field means no steering. Only `fake` supports it. Codex is rejected before public
+acceptance, even if incorrectly advertised. Idle, starting, cancelling, closed,
+stale-generation and restore-dependent requests cannot be accepted.
+
+The daemon commits the receipt, the fake executor handle's ordered message
+list, and `steering.applied` together. Receipt replay never repeats the effect.
+A known attempt that already stopped or is cancelling records `steering.failed`
+without changing its task outcome. A fake completed result appends applied
+messages in journal order. Summaries exceeding the public 65,536-character
+limit include a deterministic prefix and a SHA-256 digest of the complete
+ordered effects; full messages remain in history and journaled executor state.
+Recovery keeps the existing interrupted-attempt fence, never redirects steering
+to a later attempt, and replays committed outcome updates unchanged.
+
+VCP projects each steering command once into its operation, a public outcome,
+and one history entry in the same transaction. Terminal task projection settles
+all still-pending steering, including undelivered commands. Late outcomes cannot
+reverse a settled command. Applied and conversation entries share a session-local
+append-only sequence. The history query performs bounded indexed seeks in one
+read snapshot; opaque versioned cursors persist across restart and bind to the
+authenticated tenant, session, normalized kinds and attempt filter. Cursor
+mismatches report only INVALID_CURSOR. Usage and tool-call production are unchanged.
 
 ## Design provenance
 
 Adapted only from the protocol and validation evidence in PR #1045 at
 `891491c936e7078e8f10619566185d6150b942c7`, for issue #1116. Shared VCP types
 and the single `openengine.cc/v1alpha1` resource API group from #1043 remain
-authoritative. No public contract, handler or persistence behavior is changed.
+authoritative. Issue #1121 extends only active fake steering and session history.
