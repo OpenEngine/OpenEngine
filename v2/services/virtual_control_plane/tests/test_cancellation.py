@@ -15,7 +15,9 @@ from contextlib import asynccontextmanager
 from openengine.contracts.runtime import validate_wire_message
 from openengine.messaging import Client, LocalOperator, Server, ServiceError, Unavailable, envelopes, listen_address
 
-from virtual_control_plane.application.execution import Execution
+import pytest
+
+from virtual_control_plane.application.execution import Execution, InvalidTransition
 from virtual_control_plane.application.lifecycle import Lifecycle
 from virtual_control_plane.application.runtime_delivery import RuntimeCommands, RuntimeUpdates
 from virtual_control_plane.persistence import PERSISTENCE
@@ -234,6 +236,20 @@ def test_duplicate_cancels_and_lost_acknowledgements_settle_one_logical_outcome(
         assert (await flow.operation(late["operation_id"]))["result"] == {
             "attempt_id": execute["resource_id"], "final_state": "cancelled"}
         assert kinds(await events(flow.store)).count("task.cancelled") == 1
+        await flow.close()
+    asyncio.run(scenario())
+
+
+def test_cancelled_transition_without_the_winning_cancel_is_an_invalid_transition(tmp_path):
+    async def scenario():
+        flow = await Flow().start(tmp_path)
+        execute = await flow.execute(delay_seconds=30)
+        await flow.cancel(execute["resource_id"])
+        for cancel in (None, {"command_id": "rtc_other", "cause": {}}):
+            with pytest.raises(InvalidTransition):
+                async with flow.store.transaction() as tx:
+                    await flow.execution.transition(tx, execute["resource_id"], "cancelled", cancel=cancel)
+        assert (await flow.attempt(execute["resource_id"]))["state"] == "cancelling"
         await flow.close()
     asyncio.run(scenario())
 

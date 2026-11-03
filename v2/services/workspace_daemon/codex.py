@@ -75,6 +75,7 @@ class CodexExecutor:
         self.running: dict[str, tuple[ACPClient, str]] = {}
         self.prompting: dict[str, ACPClient] = {}
         self.cancelled: set[str] = set()
+        self.ended: set[str] = set()
 
     def validate(self, payload: dict[str, Any]) -> None:
         if payload["agent"].get("settings"):
@@ -115,6 +116,12 @@ class CodexExecutor:
         return {"executor_session_id": session_id, "resumable": resumable}
 
     async def wait(self, attempt_id: str, handle: dict[str, Any], progress: Progress) -> Outcome:
+        try:
+            return await self._wait(attempt_id, handle, progress)
+        finally:
+            self.ended.discard(attempt_id)
+
+    async def _wait(self, attempt_id: str, handle: dict[str, Any], progress: Progress) -> Outcome:
         client, prompt = self.running.pop(attempt_id)
         self.prompting[attempt_id] = client
         pending, summary = "", ""
@@ -160,6 +167,7 @@ class CodexExecutor:
         finally:
             self.prompting.pop(attempt_id, None)
             self.cancelled.discard(attempt_id)
+            self.ended.add(attempt_id)  # the turn is over; the fence below is not cut short by the cancel deadline
             # A finished turn is not evidence that the agent's tools stopped.
             # Cancellation still fences here, and then skips the journaling below.
             if not await self._stop(handle, client, client.process):
@@ -180,6 +188,9 @@ class CodexExecutor:
         self.cancelled.add(attempt_id)
         if (client := self.prompting.get(attempt_id)) is not None:
             await client.cancel()
+
+    def exited(self, attempt_id: str) -> bool:
+        return attempt_id in self.ended
 
     async def fence(self, attempt: dict[str, Any]) -> bool:
         attempt_id = attempt["command"]["target"]["attempt_id"]

@@ -12,8 +12,10 @@ import time
 from copy import deepcopy
 
 import pytest
+import sqlalchemy as sa
 
 from openengine.contracts.runtime import validate_wire_message
+from openengine.persistence.migrations import downgrade, upgrade
 
 from workspace_daemon import store as journal_store
 from workspace_daemon.executor import ExecutionWorker, FakeExecutor
@@ -170,6 +172,41 @@ def test_running_fake_attempt_is_cancelled_gracefully_or_at_the_deadline(tmp_pat
         # Graceful work ended on its own; otherwise its task was cancelled and the attempt then fenced.
         assert cancelled[0]["termination"] == ("exited" if graceful else "killed")
         assert launches(tmp_path) == ["attempt_1"]
+        await journal.store.close()
+    asyncio.run(scenario())
+
+
+def test_the_deadline_does_not_cut_short_fencing_after_the_agent_exited(tmp_path):
+    class SlowFence(FakeExecutor):
+        def __init__(self):
+            super().__init__()
+            self.ended, self.fenced = set(), False
+
+        async def wait(self, attempt_id, handle, progress):
+            outcome = await super().wait(attempt_id, handle, progress)
+            self.ended.add(attempt_id)
+            await asyncio.sleep(0.6)  # a slow post-exit fence, longer than the deadline
+            self.fenced = True
+            return outcome
+
+        def exited(self, attempt_id):
+            return attempt_id in self.ended
+
+    async def scenario():
+        journal, vcp, outbox = await setup(tmp_path)
+        executor = SlowFence()
+        journal.executors = {"fake": executor}
+        execute = command(delay_seconds=30)
+        assert (await journal.execute(EXECUTE, execute))["status"] == "accepted"
+        worker = ExecutionWorker(journal, cancel_seconds=0.3)
+        await worker.run_once()
+        await running(journal)
+        assert (await journal.cancel(CANCEL, cancel(execute)))["status"] == "accepted"
+        await worker.run_once()
+        await asyncio.gather(*worker.stopping.values())
+        assert executor.fenced and (await state(journal))["state"] == "cancelled"
+        await drain(outbox)
+        assert updates(vcp, "attempt.cancelled")[0]["termination"] == "exited"
         await journal.store.close()
     asyncio.run(scenario())
 
@@ -399,3 +436,27 @@ def test_cancel_receipts_and_updates_survive_a_journal_reopen(tmp_path):
         assert [u["kind"] for u in updates(vcp)] == ["runtime.ready", "attempt.cancelled", "runtime.ready"]
         await restarted.store.close()
     asyncio.run(scenario())
+
+
+def test_downgrade_drops_tombstones_and_hands_cancelling_attempts_to_fencing(tmp_path):
+    async def scenario():
+        journal, vcp, outbox = await setup(tmp_path)
+        assert (await journal.cancel(CANCEL, cancel(command("attempt_0", "rtc_0"), "rtc_cancel_0")))["status"] == "accepted"
+        assert (await journal.execute(EXECUTE, command(delay_seconds=30)))["status"] == "accepted"
+        worker = ExecutionWorker(journal)
+        await worker.run_once()
+        await running(journal)
+        assert (await journal.cancel(CANCEL, cancel(command())))["status"] == "accepted"
+        await worker.close()  # interrupted while cancelling, as a crash would leave it
+        assert (await state(journal))["state"] == "cancelling"
+        await journal.store.close()
+    asyncio.run(scenario())
+    database = journal_store.database(tmp_path / "journal")
+    downgrade(journal_store.MIGRATIONS, database, "2b6e990cf980")
+    engine = sa.create_engine(f"sqlite:///{database.path}")
+    with engine.connect() as connection:
+        attempts = connection.exec_driver_sql("SELECT attempt_id, state FROM journal_attempts").all()
+        orphaned = connection.exec_driver_sql("SELECT count(*) FROM journal_updates WHERE attempt_id = 'attempt_0'").scalar()
+    engine.dispose()
+    assert attempts == [("attempt_1", "running")] and orphaned == 0
+    upgrade(journal_store.MIGRATIONS, database)

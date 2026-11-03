@@ -35,6 +35,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # The previous schema has neither tombstones nor cancel intents. A tombstone (an attempt
+    # without a session) is dropped while its journaled updates are kept; a cancelling attempt
+    # becomes running, which that daemon fences on start and records lost, never relaunching it.
+    op.execute("UPDATE journal_updates SET attempt_id = NULL WHERE attempt_id IN "
+               "(SELECT attempt_id FROM journal_attempts WHERE session_id IS NULL)")
+    op.execute("DELETE FROM journal_attempts WHERE session_id IS NULL")
+    op.execute("UPDATE journal_attempts SET state = 'running' WHERE state = 'cancelling'")
     with op.batch_alter_table('journal_attempts', schema=None) as batch_op:
         batch_op.drop_constraint('ck_journal_attempts_state', type_='check')
         batch_op.create_check_constraint('ck_journal_attempts_state', sa.text(STATES))
