@@ -33,7 +33,8 @@ broker from `OE_VCP_RUNTIME_BROKER_BINARY`, separate from `OE_NATS_URL`, with
 scoped per-runtime credentials under `runtime-broker/` in the state directory;
 guests dial `OE_VCP_RUNTIME_BROKER_GUEST_URL`. VCP then also commits runtime
 updates received there. A broker that cannot start within its deadline fails
-startup. See the service README.
+startup; one that exits later is relaunched, and `/healthz` is 503 while VCP is
+not connected to it. See the service README.
 """
 
 from __future__ import annotations
@@ -186,16 +187,17 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
     # no execute route is served, so nothing is delivered to them yet (#1055).
     updates = (RuntimeUpdateListener(connection, RuntimeUpdates(store, execution))
                if worktree.PROVIDER in lifecycle.providers else None)
-    broker = runtime_broker(store)
-    internal = internal_updates = None
+    broker = internal = internal_updates = None
     health = None
     try:
-        if broker is not None:
-            try:
+        try:
+            broker = runtime_broker(store)
+            if broker is not None:
                 internal = await broker.start()
-            except (BrokerUnavailable, EndpointDrift):
-                log.exception("internal runtime broker did not start")
-                return EXIT_FAILED
+        except (BrokerUnavailable, EndpointDrift, ValueError):
+            log.exception("internal runtime broker did not start")
+            return EXIT_FAILED
+        if internal is not None:
             internal_updates = RuntimeUpdateListener(internal, RuntimeUpdates(store, execution))
             await internal_updates.start()
         await server.start()
@@ -205,7 +207,8 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
         lifecycle.start()
         health = await asyncio.start_server(
             lambda reader, writer: _health(
-                lambda: connection.is_connected and not stopping.is_set(), reader, writer
+                lambda: connection.is_connected and (internal is None or internal.is_connected) and not stopping.is_set(),
+                reader, writer
             ),
             HEALTH_HOST,
             health_port,

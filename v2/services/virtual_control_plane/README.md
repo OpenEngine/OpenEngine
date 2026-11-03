@@ -763,8 +763,11 @@ the second part of #1122.
 
 **Users and permissions.** `vcp` may publish `oe.internal.v1.runtime.runtimes.>`
 and subscribe to `oe.internal.v1.vcp.runtimes.*.updates` and its own
-`_INBOX.oe.vcp.{instance}.>`; its password is regenerated on every launch.
-Each runtime is a user named by its runtime ID with exactly the contract's
+`_INBOX.oe.vcp.{instance}.>`; its password is regenerated on every VCP start.
+Because `vcp` may publish to every runtime's subjects, it answers an update
+only when the reply subject is under the sender's own
+`_INBOX.oe.runtime.{runtime_id}.`; any other reply is dropped. Each runtime is
+a user named `runtime-{runtime_id}` (so none can be `vcp`) with exactly the contract's
 permission block (`packages/contracts/internal/workspace_runtime/v1/README.md`
 §Authentication): its own command subjects and `_INBOX.oe.runtime.{runtime_id}.>`,
 publish to its own updates subject, and one response within 10 seconds to
@@ -776,8 +779,8 @@ subject token (`[A-Za-z0-9_-]{1,64}`).
 row (runtime, generation, user, `active|revoking|retired`, issue and revocation
 times, a SHA-256 digest -- never the secret) is written before the secret,
 which lives only in `runtime-broker/credentials/{runtime_id}` (0600, in a 0700
-directory, written atomically and fsynced) and in the 0600 broker
-configuration generated from it. Neither appears in argv, logs, runtime
+directory, written atomically and fsynced). The 0600 broker configuration holds
+only bcrypt hashes of it and of `vcp`'s password. Neither appears in argv, logs, runtime
 command wires, outbox events or locators. Credentials are stable across VCP
 and broker restarts; a missing or tampered secret is never granted.
 
@@ -802,9 +805,15 @@ endpoint (`endpoint.json`), refusing a changed one as endpoint drift. Each
 launch uses a random `server_name`; VCP accepts the broker only when its
 loopback monitor and the client port's INFO both report it, so a foreign
 listener is never adopted or signalled, and no PID is ever read from disk.
-Startup (lock, spawn, identity, authenticated connect) is bounded; a server
-that exits or cannot bind fails promptly. After startup, connections
-reconnect indefinitely. If the broker child itself is SIGKILLed, its server
+That INFO is sent to any client, so it proves identity only because the
+broker listens on one specific address that no other process can also bind;
+a wildcard listen host (`0.0.0.0`, `::`) is refused, since BSD would let a
+more specific bind under it relay the INFO and collect credentials. IPv6
+hosts are written `[::1]:port`. Startup (lock, spawn, identity, authenticated
+connect) is bounded; a server that exits or cannot bind fails promptly. After
+startup, a broker that exits is relaunched on the same endpoint with backoff
+(0.1 to 5 seconds), pending revocations are then finished, and connections
+reconnect indefinitely; `/healthz` is 503 while VCP is disconnected from it. If the broker child itself is SIGKILLed, its server
 is orphaned until killed by the operator; the next start then fails on the
 occupied port rather than adopting it.
 

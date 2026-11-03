@@ -27,6 +27,11 @@ REQUEST_TIMEOUT_SECONDS = 5.0
 log = logging.getLogger(__name__)
 
 
+def reply_inbox(subject: str) -> str:
+    """The only reply prefix the runtime that publishes on `subject` may name."""
+    return f"_INBOX.oe.runtime.{subject.split('.')[5]}."
+
+
 def span_name(subject: str) -> str:
     """Name spans by template so runtime IDs never name one."""
     tokens = subject.split(".")
@@ -44,7 +49,12 @@ class NatsRuntimeTransport:
 
 
 class RuntimeUpdateListener:
-    """Answers each well-formed update with the handler's committed or rejected acknowledgement."""
+    """Answers each well-formed update with the handler's committed or rejected acknowledgement.
+
+    VCP may publish to every runtime's commands and replies, so an update is
+    answered only on its sender's own inbox: a reply subject naming another
+    runtime's command or inbox is never published to.
+    """
 
     def __init__(self, connection: NATS, updates: RuntimeUpdates) -> None:
         self.connection, self.updates = connection, updates
@@ -56,6 +66,10 @@ class RuntimeUpdateListener:
 
     async def _receive(self, message: Msg) -> None:
         if not message.reply:
+            return
+        if not message.reply.startswith(reply_inbox(message.subject)):
+            log.warning("runtime update reply is outside its runtime's inbox",
+                        extra={"messaging.destination.name": message.subject})
             return
         try:
             reply = await self.updates.receive(message.subject, message.data)

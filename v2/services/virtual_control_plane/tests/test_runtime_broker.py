@@ -19,7 +19,6 @@ import socket
 import stat
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -27,25 +26,20 @@ from pathlib import Path
 import nats
 import pytest
 from openengine.persistence import DatabaseConfig
-from openengine.supervisor.processes.nats import install_nats_server
 
 from virtual_control_plane.persistence import PERSISTENCE
 from virtual_control_plane.persistence.credentials import CredentialRows
 from virtual_control_plane.provisioning import broker as broker_module
 from virtual_control_plane.provisioning.broker import (
-    BrokerEndpoint, BrokerUnavailable, CredentialRetired, EndpointDrift, RuntimeBroker,
+    BrokerEndpoint, BrokerUnavailable, CredentialRetired, EndpointDrift, RuntimeBroker, runtime_user,
 )
+from virtual_control_plane.runtime_nats import RuntimeUpdateListener
 from virtual_control_plane.tests.test_lifecycle import broker as public_broker
 
 pytestmark = [pytest.mark.integration,
               pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="the runtime broker runs on macOS and Linux")]
 
 A, B = "rt_a", "rt_b"
-
-
-@pytest.fixture(scope="module")
-def binary():
-    return install_nats_server(Path(tempfile.gettempdir()) / "oe-test-nats")
 
 
 @pytest.fixture
@@ -217,6 +211,9 @@ def test_credentials_are_private_and_stable_across_broker_restart(binary, tmp_pa
             assert await first.issue(A, 1) == issued and issued.path.read_text() == secret
             argv = subprocess.run(["ps", "-ax", "-o", "args="], capture_output=True, text=True).stdout
             assert secret not in argv and str(first.config) in argv
+            # The configuration holds bcrypt hashes, never a plaintext password.
+            config = first.config.read_text()
+            assert secret not in config and first._password not in config and "$2a$" in config
         directory = tmp_path / "runtime-broker"
         assert stat.S_IMODE(os.stat(directory / "credentials").st_mode) == 0o700
         assert stat.S_IMODE(os.stat(issued.path).st_mode) == 0o600
@@ -253,7 +250,7 @@ def test_revocation_refuses_new_and_closes_existing_connections_and_survives_res
             assert (await rows.get(A)).status == "retired" and (await rows.get(A)).revoked_at is not None
             assert not credential.path.exists()
             with pytest.raises(nats.errors.Error, match="Authorization Violation"):
-                await nats.connect(credential.url, user=A, password=secret, allow_reconnect=False, connect_timeout=1)
+                await nats.connect(credential.url, user=credential.user, password=secret, allow_reconnect=False, connect_timeout=1)
             await runtime_broker.revoke(A)  # idempotent
             with pytest.raises(CredentialRetired):
                 await runtime_broker.issue(A, 1)
@@ -261,7 +258,7 @@ def test_revocation_refuses_new_and_closes_existing_connections_and_survives_res
         restarted = make(tmp_path, binary, database, port)
         async with running(restarted):
             with pytest.raises(nats.errors.Error, match="Authorization Violation"):
-                await nats.connect(credential.url, user=A, password=secret, allow_reconnect=False, connect_timeout=1)
+                await nats.connect(credential.url, user=credential.user, password=secret, allow_reconnect=False, connect_timeout=1)
             assert A not in restarted.config.read_text()
 
     asyncio.run(scenario())
@@ -337,7 +334,7 @@ def test_vcp_sigkill_leaves_no_broker_port_or_lock_and_restart_reuses_the_endpoi
             vcp = Vcp(tmp_path, connection.connected_url.geturl(), binary, port)
             try:
                 vcp.start()
-                await (await nats.connect(f"nats://127.0.0.1:{port}", user=A, password=secret, allow_reconnect=False)).close()
+                await (await nats.connect(f"nats://127.0.0.1:{port}", user=runtime_user(A), password=secret, allow_reconnect=False)).close()
                 ports = next((directory / "run").glob("*/*.ports"))
                 server = int(ports.stem.rsplit("_", 1)[1])
                 assert alive(server)
@@ -356,7 +353,7 @@ def test_vcp_sigkill_leaves_no_broker_port_or_lock_and_restart_reuses_the_endpoi
 
                 vcp.start()
                 assert (directory / "endpoint.json").read_text() == endpoint
-                await (await nats.connect(f"nats://127.0.0.1:{port}", user=A, password=secret, allow_reconnect=False)).close()
+                await (await nats.connect(f"nats://127.0.0.1:{port}", user=runtime_user(A), password=secret, allow_reconnect=False)).close()
                 assert secret not in (tmp_path / "vcp.log").read_text()
             finally:
                 vcp.stop()
@@ -483,3 +480,80 @@ def test_runtime_permissions_are_exactly_the_contract_block() -> None:
         "allow_responses": {"max": 1, "expires": "10s"},
     }
     assert json.dumps(broker_module.vcp_permissions("i1")).count("oe.v1") == 0
+
+
+class Acknowledging:
+    async def receive(self, subject: str, data: bytes) -> bytes:
+        return b"ack"
+
+
+def test_vcp_answers_an_update_only_on_its_senders_own_inbox(binary, tmp_path, database) -> None:
+    async def scenario() -> None:
+        runtime_broker = make(tmp_path, binary, database, free_port())
+        async with running(runtime_broker) as vcp:
+            listener = RuntimeUpdateListener(vcp, Acknowledging())
+            await listener.start()
+            await runtime_broker.issue(A, 1)
+            await runtime_broker.issue(B, 1)
+            conn_a, conn_b = await Runtime().connect(runtime_broker, A), await Runtime().connect(runtime_broker, B)
+            try:
+                victims = [f"oe.internal.v1.runtime.runtimes.{B}.execute", f"_INBOX.oe.runtime.{B}.forged"]
+                received = [await conn_b.subscribe(subject) for subject in victims]
+                await conn_b.flush()
+                for victim in victims:
+                    await conn_a.publish(f"oe.internal.v1.vcp.runtimes.{A}.updates", b"u", reply=victim)
+                await conn_a.flush()
+                # Its own inbox is still answered, after the forged replies were dropped.
+                assert (await conn_a.request(f"oe.internal.v1.vcp.runtimes.{A}.updates", b"u", timeout=2)).data == b"ack"
+                assert not any([await delivered(subscription, 0.3) for subscription in received])
+            finally:
+                await conn_a.close()
+                await conn_b.close()
+                await listener.close()
+
+    asyncio.run(scenario())
+
+
+def test_a_runtime_named_vcp_gets_its_own_user(binary, tmp_path, database) -> None:
+    async def scenario() -> None:
+        runtime_broker = make(tmp_path, binary, database, free_port())
+        async with running(runtime_broker) as vcp:
+            credential = await runtime_broker.issue("vcp", 1)
+            assert credential.user == "runtime-vcp"
+            await (await Runtime().connect(runtime_broker, "vcp")).close()
+            await vcp.publish("oe.internal.v1.runtime.runtimes.vcp.inspect", b"?")
+            await vcp.flush(timeout=2)
+
+    asyncio.run(scenario())
+
+
+def test_wildcard_listen_addresses_are_refused_and_ipv6_is_bracketed() -> None:
+    for host in ("", "0.0.0.0", "::"):
+        with pytest.raises(ValueError, match="specific address"):
+            BrokerEndpoint(host, 4300, "nats://192.0.2.1:4300")
+    endpoint = BrokerEndpoint("::1", 4300, "nats://[::1]:4300")
+    assert endpoint.address == "[::1]:4300" and endpoint.client_url == "nats://[::1]:4300"
+
+
+def test_a_crashed_broker_is_relaunched_and_still_revokes(binary, tmp_path, database, monkeypatch) -> None:
+    monkeypatch.setattr(broker_module, "RESTART_SECONDS", (0.05, 0.2))
+
+    async def scenario() -> None:
+        runtime_broker = make(tmp_path, binary, database, free_port())
+        async with running(runtime_broker) as vcp:
+            credential = await runtime_broker.issue(A, 1)
+            ports = next((runtime_broker.directory / "run").glob("*/*.ports"))
+            os.kill(int(ports.stem.rsplit("_", 1)[1]), signal.SIGKILL)
+
+            deadline = time.monotonic() + 15
+            while ports.exists() or not (runtime_broker.running and vcp.is_connected):
+                assert time.monotonic() < deadline, "the runtime broker was not relaunched"
+                await asyncio.sleep(0.05)
+            await vcp.publish(f"oe.internal.v1.runtime.runtimes.{A}.inspect", b"after")
+            await vcp.flush(timeout=2)
+            await (await Runtime().connect(runtime_broker, A)).close()
+            await runtime_broker.revoke(A)
+            with pytest.raises(nats.errors.Error, match="Authorization Violation"):
+                await nats.connect(credential.url, user=credential.user, password="x", allow_reconnect=False)
+
+    asyncio.run(scenario())

@@ -124,10 +124,10 @@ def test_the_internal_runtime_broker_is_opt_in_and_lives_in_the_state_directory(
     store = type("Store", (), {"database": None})()
 
     assert vcp.runtime_broker(store, {}) is None
-    broker = vcp.runtime_broker(store, {"OE_VCP_STATE_DIR": str(tmp_path), "OE_VCP_RUNTIME_BROKER_LISTEN": "0.0.0.0:4300",
+    broker = vcp.runtime_broker(store, {"OE_VCP_STATE_DIR": str(tmp_path), "OE_VCP_RUNTIME_BROKER_LISTEN": "192.0.2.1:4300",
                                         "OE_VCP_RUNTIME_BROKER_GUEST_URL": "nats://192.0.2.1:4300",
                                         "OE_VCP_RUNTIME_BROKER_BINARY": "/opt/nats-server"})
     assert broker.directory == tmp_path / "runtime-broker"
     assert broker.binary == Path("/opt/nats-server")
-    assert broker.endpoint.client_url == "nats://127.0.0.1:4300"
+    assert broker.endpoint.client_url == "nats://192.0.2.1:4300"
     assert broker.endpoint.guest_url == "nats://192.0.2.1:4300"
