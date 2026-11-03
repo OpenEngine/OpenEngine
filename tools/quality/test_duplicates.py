@@ -1,5 +1,7 @@
 """Policy tests use real parsers and whole temporary source trees."""
 
+from contextlib import redirect_stderr, redirect_stdout
+import io
 import json
 from pathlib import Path
 import subprocess
@@ -7,6 +9,7 @@ import sys
 import tempfile
 import tomllib
 import unittest
+from unittest.mock import patch
 
 import duplicates as detector
 
@@ -130,6 +133,60 @@ class DuplicationTests(unittest.TestCase):
         for language, source in samples.items():
             with self.subTest(language=language):
                 self.assertTrue(list(detector.fingerprints(source.encode(), language, 1)))
+
+    def test_python_line_continuations_normalize_without_changing_literals(self):
+        original = block()
+        continued = original.replace("transform(value, 15)", "transform(\\\n        value, 15)")
+        self.copies(self.base, 2)
+        self.copies(self.head, 2)
+        self.write(self.head, "third.py", continued)
+        found = self.findings()
+        self.assertTrue(found)
+        self.assertTrue(all(len(detector.scope(group)) == 3 for group in found.values()))
+        self.write(self.base, "third.py", original)
+        self.assertFalse(self.findings())
+        # A backslash newline inside a literal remains meaningful content.
+        def keys(suffix):
+            return {key for key, _, _ in detector.fingerprints(
+                (original + suffix).encode(), "python", 100)}
+
+        self.assertNotEqual(keys('label = "a\\\nb"\n'), keys('label = "ab"\n'))
+
+    def test_reporting_reads_only_each_context_byte_range(self):
+        self.copies(self.head, 3, block("first") + block("second", 100))
+        base, current = self.scan(self.base), self.scan(self.head)
+        found = detector.findings(current, base)
+        self.assertGreater(len(found), 1)
+        sources = {p: (self.head / p).read_bytes() for p in ("copy0.py", "copy1.py", "copy2.py")}
+        reads = []
+
+        class Source(io.BytesIO):
+            def read(self, size=-1):
+                reads.append((self.tell(), size))
+                return super().read(size)
+
+        original_open = Path.open
+
+        def open_source(path, mode="r", **kwargs):
+            if mode != "rb":
+                return original_open(path, mode, **kwargs)
+            self.assertEqual(mode, "rb")
+            return Source(sources[path.name])
+
+        stdout = io.StringIO()
+        args = ["duplicates", "--root", str(self.head), "--baseline-root", str(self.base)]
+        with patch.object(sys, "argv", args), patch.object(detector, "scan", side_effect=[base, current]), \
+                patch.object(detector.tomllib, "loads", return_value=self.config), \
+                patch.object(Path, "open", autospec=True, side_effect=open_source), \
+                redirect_stdout(stdout), redirect_stderr(io.StringIO()):
+            self.assertEqual(detector.main(), 1)
+        expected = []
+        for key, group in sorted(found.items()):
+            loc = group["locations"][0]
+            expected.append((loc["start_byte"], loc["end_byte"] - loc["start_byte"]))
+            self.assertEqual(json.loads(stdout.getvalue())["findings"][key]["context"],
+                             sources[loc["path"]][loc["start_byte"]:loc["end_byte"]].decode())
+        self.assertEqual(reads, expected)
 
     def test_parse_error_never_silently_skips_and_waiver_is_content_scoped(self):
         import hashlib

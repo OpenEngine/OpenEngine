@@ -45,7 +45,7 @@ def fingerprints(data, language, minimum):
     values = {}
     while stack:
         node, visited = stack.pop()
-        if "comment" in node.type:
+        if "comment" in node.type or (language == "python" and node.type == "line_continuation"):
             values[node.id] = (b"", 0)
             continue
         atomic = not node.children or node.type in LITERALS
@@ -197,7 +197,9 @@ def main():
         for loc in group["locations"]:
             print(f"  {loc['path']}:{loc['start']}-{loc['end']}", file=sys.stderr)
         loc = group["locations"][0]
-        context = (root / loc["path"]).read_bytes()[loc["start_byte"]:loc["end_byte"]]
+        with (root / loc["path"]).open("rb") as source:
+            source.seek(loc["start_byte"])
+            context = source.read(loc["end_byte"] - loc["start_byte"])
         group["context"] = context.decode("utf-8", errors="replace")
         print(group["context"][:1200], file=sys.stderr)
         print("Extract an appropriate abstraction or add a scoped exception with rationale.",
