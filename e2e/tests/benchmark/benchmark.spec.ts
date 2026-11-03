@@ -7,7 +7,7 @@ import { assignedIssue, issueBody, issues } from "../../fixtures/calculator/issu
 import { milestone } from "../../fixtures/calculator/milestone.ts"
 import { driveMilestone, listRuns, type Budget } from "../../support/driver.ts"
 import { show, step } from "../../support/show.ts"
-import { changelogNames, expectDisplay, key, makesRelease, press, README_COVERS, SEMVER_TAG } from "../../support/verifier.ts"
+import { changelogNames, expectDisplay, key, makesRelease, press, README_COVERS, SEMVER_TAG, workflowsIdle } from "../../support/verifier.ts"
 import { launchQuickTunnel } from "../../support/quick-tunnel.ts"
 import { benchmarkCategory } from "../docCategories"
 
@@ -87,6 +87,43 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
               `to the config directory of the account to use, so that both agree: GH_CONFIG_DIR=~/.config/gh-bench npm run oe-benchmark`,
           ).toBe(owner)
           // Nothing of this check on screen in the screenshots that follow.
+          await terminal.run("clear")
+        })
+
+        await step(`Before you start, install the tools this guide uses. Each is a command you run in the terminal. On macOS with [Homebrew](https://brew.sh/), \`brew install git node uv gh cloudflared\` installs most of them. On other systems, use the links.
+
+- [Git](https://git-scm.com/downloads), to download OpenEngine and your projects.
+- [Node.js](https://nodejs.org/en/download) (22.22.2 or later, 24.15 or later, or 26 or later), which includes \`npm\`, and [uv](https://docs.astral.sh/uv/getting-started/installation/). The installer uses both to build OpenEngine.
+- The [GitHub CLI](https://github.com/cli/cli#installation), \`gh\`, which OpenEngine uses to talk to GitHub. Sign in with \`gh auth login\`.
+- [cloudflared](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/), which gives OpenEngine a temporary public address for GitHub to reach.
+- The coding agents OpenEngine runs, [Claude Code](https://code.claude.com/docs/en/setup) and [Codex](https://developers.openai.com/codex/cli). Follow each one's install page, or install both at once with \`npm install -g @anthropic-ai/claude-code @openai/codex\`. Each needs its own sign-in, which two steps below check.
+- A text editor. This guide uses \`vim\`.
+
+\`openssl\` comes with most systems. Check that everything is installed: each command prints a version, and one that is missing says \`command not found\`.
+
+\`\`\`sh
+git --version
+node --version
+npm --version
+uv --version
+gh --version
+cloudflared --version
+claude --version
+codex --version
+openssl version
+vim --version | head -1
+\`\`\``, async () => {
+          await terminal.run("git --version")
+          await terminal.run("node --version")
+          await terminal.run("npm --version")
+          await terminal.run("uv --version")
+          await terminal.run("gh --version")
+          await terminal.run("cloudflared --version")
+          await terminal.run("claude --version")
+          await terminal.run("codex --version")
+          await terminal.run("openssl version")
+          await terminal.run("vim --version | head -1")
+          await show("benchmark__terminal--tools.png", terminal, testInfo, await terminal.row(/cloudflared version/), "Every tool is installed")
           await terminal.run("clear")
         })
 
@@ -295,7 +332,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "Your project lives in a GitHub repository. Create one with the `gh` command from the last step. It is created under the account `gh` is signed in as.\n\n" +
+            "Your project lives in a GitHub repository. Create one with `gh`, the GitHub tool OpenEngine is connected to. It is created under the account `gh` is signed in as.\n\n" +
               "```sh\ngh repo create " + BENCH_REPO + " --public --add-readme --description \"A calculator, built by OpenEngine.\"\n```",
             async () => {
               await terminal.run(`gh repo create ${BENCH_REPO} --public --add-readme --description "A calculator, built by OpenEngine."`)
@@ -304,8 +341,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "Give it a topic, a label GitHub shows on the repository. OpenEngine's benchmark uses it to recognise this repository as its own.\n\n" +
-              "```sh\ngh repo edit <your-account>/" + BENCH_REPO + " --add-topic " + BENCH_TOPIC + "\n```",
+            "[nodoc] The repository gets a topic, which the benchmark's teardown uses to recognise it as its own",
             async () => {
               await terminal.run(`gh repo edit ${repo} --add-topic ${BENCH_TOPIC}`)
               expect((await getRepo(owner, BENCH_REPO))?.topics, "GitHub lists the topic").toContain(BENCH_TOPIC)
@@ -337,7 +373,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "OpenEngine's deploy workflow will publish the calculator with GitHub Pages, so turn Pages on, with GitHub Actions as its source.\n\n" +
+            "The first issue asks OpenEngine to add a workflow that publishes the calculator with GitHub Pages, GitHub's free hosting for web pages. Turn Pages on, with GitHub Actions as its source, so that workflow can publish.\n\n" +
               "```sh\ngh api -X POST repos/<your-account>/" + BENCH_REPO + "/pages -f build_type=workflow --jq .build_type\n```",
             async () => {
               await terminal.run("clear")
@@ -349,7 +385,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "The workflows OpenEngine adds need to write to the repository, to publish releases, and to open pull requests. Allow both.\n\n" +
+            "The workflows OpenEngine adds need two permissions on GitHub: to write to the repository, which publishing a release takes, and to open pull requests. Turn both on.\n\n" +
               "```sh\ngh api -X PUT repos/<your-account>/" + BENCH_REPO + "/actions/permissions/workflow \\\n  -f default_workflow_permissions=write -F can_approve_pull_request_reviews=true\ngh api repos/<your-account>/" + BENCH_REPO + "/actions/permissions/workflow\n```",
             async () => {
               await terminal.run("clear")
@@ -378,7 +414,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           await step(
-            "OpenEngine works from GitHub issues. To give it something to build, this guide uses an example: a small calculator app, written as a milestone called Calculator with an issue for each piece of it. Each issue depends on the one before, in its text and as a link GitHub shows as blocked by, so OpenEngine takes them in order. With your own project you would use your own issues. List the example ones with:\n\n" +
+            "OpenEngine works from GitHub issues. To give it something to build, this guide uses an example: a small calculator app, written as a milestone called Calculator with an issue for each piece of it. Every issue is written out in [the example's source](https://github.com/OpenEngine/OpenEngine/blob/main/e2e/fixtures/calculator/issues.ts): to follow along, create the same ones in your repository, in a milestone called Calculator. Each issue depends on the one before, in its text and as a link GitHub shows as blocked by, so OpenEngine takes them in order. With your own project you would use your own issues. List the example ones with:\n\n" +
               "```sh\ngh issue list --repo <your-account>/" + BENCH_REPO + " --milestone " + milestone.title + "\n```",
             async () => {
               const number = (await gh("api", `${api}/milestones`, "-f", `title=${milestone.title}`, "-f", `description=${milestone.description}`, "--jq", ".number")).trim()
@@ -414,7 +450,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           )
 
           const hook = await step(
-            "Now point the repository at that address. This is a webhook: GitHub sends a message to a web address whenever something happens in the repository, such as a comment or a merged pull request. The messages are signed with a shared secret, so OpenEngine can tell GitHub sent them. The secret is the one from the `.env` file; here it is still in the environment variable. The command prints the webhook's number.\n\n" +
+            "Now tell GitHub to send its messages to your tunnel's address. This is a webhook: GitHub sends a message to a web address whenever something happens in the repository, such as a comment or a merged pull request. The messages are signed with a shared secret, so OpenEngine can tell GitHub sent them. The command takes the secret from the `ENGINE_GITHUB_WEBHOOK_SECRET` variable, the same one saved in the `.env` file, and prints the webhook's number.\n\n" +
               "```sh\ngh api repos/<your-account>/" + BENCH_REPO + "/hooks -f name=web -F active=true \\\n" +
               "  -f 'config[url]=https://<your tunnel address>/api/github/events' \\\n" +
               "  -f 'config[content_type]=json' -f 'config[secret]='\"$ENGINE_GITHUB_WEBHOOK_SECRET\" \\\n" +
@@ -533,7 +569,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           // While OpenEngine restarts, nothing answers the tunnel, so a delivery then is refused by no fault of OpenEngine's.
           const restart = { from: 0, to: 0 }
           await step(
-            "OpenEngine can also take work straight from GitHub: assign an issue to the account it uses, and it starts on it. Tell it which graph an assigned issue starts, then restart it so it reads the change.\n\n" +
+            "So far you started each run yourself. OpenEngine can also take work straight from GitHub: when an issue is assigned to the account it uses, it starts on it. First tell it which graph to use for an assigned issue, the `" + GRAPH + "` graph you made, then restart it so it reads the change.\n\n" +
               "```sh\nprintf '\\n[work_orders]\\nworkflow = \"" + GRAPH + "\"\\n' >> ~/.config/openengine/engine.toml\noe daemon stop\noe daemon start\n```",
             async () => {
               await terminal.run("clear")
@@ -561,7 +597,7 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
           // the daemon lists a run under its graph only when the CLI or a loop started it.
           const before = new Set((await listRuns()).map((run) => run.runId))
           const assigned = await step(
-            "Assign an issue to OpenEngine, and it picks it up and starts working on it. Here the issue is a new one for the calculator. `@me` is the account `gh` is signed in as, which is also the account OpenEngine uses. GitHub tells OpenEngine about the assignment through the webhook, so there is nothing to run.\n\n" +
+            "Assign an issue to OpenEngine, and it picks it up and starts working on it. Here the issue asks for a style pass: make the calculator look good, without changing what it does. Its text is `assignedIssue` in [the same file](https://github.com/OpenEngine/OpenEngine/blob/main/e2e/fixtures/calculator/issues.ts). Create it in the Calculator milestone as you would any issue, then assign it. `@me` is the account `gh` is signed in as, which is also the account OpenEngine uses. GitHub tells OpenEngine about the assignment through the webhook, so there is nothing to run.\n\n" +
               "```sh\ngh issue edit <issue number> --repo <your-account>/" + BENCH_REPO + " --add-assignee @me\ngh issue view <issue number> --repo <your-account>/" + BENCH_REPO + " --json assignees --jq '.assignees[].login'\n```",
             async () => {
               const milestoneNumber = (await gh("api", `${api}/milestones`, "--jq", `.[] | select(.title == "${milestone.title}") | .number`)).trim()
@@ -653,21 +689,21 @@ test.describe(benchmarkCategory, { tag: ["@benchmark"] }, () => {
       // never shown to the agents. It checks that the guide's run worked, so none of its steps are in the guide. It runs
       // right after the journey, and only if the journey passed, since the next run's setup deletes the repository.
       test("Verify the calculator", { tag: ["@verify"] }, async ({ page }) => {
-        const url = `https://${await whoami()}.github.io/${BENCH_REPO}/`
+        const owner = await whoami()
+        const repo = `${owner}/${BENCH_REPO}`
+        const url = `https://${owner}.github.io/${BENCH_REPO}/`
 
         await step("The calculator is deployed with all its keys", async () => {
-          // The deploy follows the last merge by a minute or so. The last key to be built is ÷, and the last change of all is
-          // the footer the assigned issue asked for, so wait until the page has both.
+          // The deploy follows the last merge by a minute or so. The last key to be built is ÷, so wait until the page has it.
           await expect(async () => {
             await page.goto(url)
             await expect(key(page, "÷")).toBeVisible({ timeout: 2_000 })
-            await expect(page.getByText("Built with OpenEngine")).toBeVisible({ timeout: 2_000 })
           }).toPass({ timeout: 10 * 60_000, intervals: [20_000] })
-        })
-
-        await step("It shows the footer the issue assigned on GitHub asked for", async () => {
+          // The last change of all is the assigned issue's style pass, which adds no text to wait for. Wait until the
+          // repository's workflows (the deploy, and the release that follows a merge) have all finished, so the cases below
+          // run against the styled page.
+          await workflowsIdle(repo)
           await page.goto(url)
-          await expect(page.getByText("Built with OpenEngine", { exact: true })).toBeVisible()
         })
 
         await step("It adds", async () => {

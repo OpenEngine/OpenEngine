@@ -135,7 +135,7 @@ every webhook delivery accepted (except while OpenEngine restarted), and that Op
 the steps that wait on CI. How many it woke is reported, not required: the calculator's CI usually finishes before a run
 starts waiting. A failure quotes what OpenEngine logged about GitHub. "Verify the issues and pull requests", tagged `@verify`, checks
 that every issue in the milestone was closed by a pull request rather than by the harness, and "Verify the calculator"
-checks the footer the assigned issue asked for.
+still works after the assigned issue's style pass: it waits for the repository's workflows to finish, so the cases run against the styled page.
 
 "Verify the docs and releases", also tagged `@verify`, runs after it and reads the calculator's repository through
 GitHub's API: the README says how to run, test and deploy it (by wording only; the person checking the run judges whether

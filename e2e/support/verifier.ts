@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test"
+import { gh } from "./benchmark.ts"
 
 /**
  * What the benchmark's verifier (the `@verify` tests in tests/benchmark/benchmark.spec.ts) uses to check what the agents
@@ -48,3 +49,21 @@ export const makesRelease = (title: string) => /^(feat|fix|perf)(\([^)]*\))?!?:|
 
 /** Whether the changelog names pull request `number`, as both tools do: `(#16)` or `[#16](…)`. */
 export const changelogNames = (changelog: string, number: number) => new RegExp(`#${number}\\b`).test(changelog)
+
+/**
+ * Wait until none of `repo`'s recent workflow runs is queued or running, twice in a row. A merge starts the deploy and the
+ * release, and the release's own commit starts them again, so the page is final only when everything has stopped. The runs
+ * are listed without naming a workflow: the agents chose their names.
+ */
+export async function workflowsIdle(repo: string, { timeout = 10 * 60_000, every = 20_000 } = {}) {
+  const deadline = Date.now() + timeout
+  const busy = async () =>
+    (JSON.parse(await gh("run", "list", "--repo", repo, "--limit", "30", "--json", "status")) as { status: string }[]).filter((run) => run.status !== "completed").length
+  for (let quiet = 0; quiet < 2; ) {
+    quiet = (await busy()) === 0 ? quiet + 1 : 0
+    if (quiet < 2) {
+      if (Date.now() > deadline) throw new Error(`${repo}'s workflows were still running after ${Math.round(timeout / 60_000)} minutes`)
+      await new Promise((resolve) => setTimeout(resolve, every))
+    }
+  }
+}
