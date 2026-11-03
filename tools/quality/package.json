@@ -2,11 +2,20 @@
   "private": true,
   "scripts": {
     "test": "node --test duplication.test.cjs",
-    "check": "node --max-old-space-size=4096 duplication.cjs",
-    "gate": "node gate.cjs"
+    "check": "node --max-old-space-size=4096 build/duplication.js",
+    "gate": "node gate.cjs",
+    "build": "tsc -p tsconfig.json",
+    "pretest": "npm run build",
+    "precheck": "npm run build",
+    "pregate": "npm run build"
   },
   "dependencies": {
+    "@jscpd/tokenizer": "4.0.1",
     "jscpd": "4.0.5",
-    "@jscpd/tokenizer": "4.0.1"
+    "reprism": "0.0.11"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.0",
+    "typescript": "5.9.3"
   }
 }

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {scan, findings} = require('./duplication.cjs');
+const {scan, findings} = require('./build/duplication.js');
 const config = require('./duplication.json');
 const block = Array.from({length: 20}, (_, i) => `result_${i} = process(value_${i}, ${i})`).join('\n');
 const other = Array.from({length: 20}, (_, i) => `different_${i} = alternate(input_${i}, ${i + 50})`).join('\n');
@@ -106,7 +106,7 @@ test('npm prefix resolves both tree arguments from the invocation directory', t 
   }
   // Invoke the real scanner without recursively running this test via the gate.
   fs.writeFileSync(path.join(quality, 'package.json'), JSON.stringify({
-    scripts: {check: `node "${path.join(__dirname, 'duplication.cjs')}"`},
+    scripts: {check: `node "${path.join(__dirname, 'build/duplication.js')}"`},
   }));
   const env = {...process.env};
   delete env.INIT_CWD;
@@ -118,7 +118,7 @@ test('npm prefix resolves both tree arguments from the invocation directory', t 
     assert.ok(report.findings.length);
     assert.deepEqual(report.findings[0].locations.map(l => l.file), ['a.py', 'b.py', 'c.py']);
   }
-  const direct = spawnSync(process.execPath, [path.join(__dirname, 'duplication.cjs'), '../base', '.'],
+  const direct = spawnSync(process.execPath, [path.join(__dirname, 'build/duplication.js'), '../base', '.'],
     {cwd: current, env, encoding: 'utf8'});
   assert.equal(direct.status, 1, direct.stderr);
   assert.ok(JSON.parse(direct.stdout).findings.length);
@@ -169,4 +169,22 @@ test('generated schema revisions are excluded without excluding other documentat
   for (const directory of ['docs/guides', 'v2/docs/guides', 'docs/schema-examples']) {
     assert.ok(findings(tree(t, {...copies(['a', 'b']), [`${directory}/example.py`]: block}), new Map()).length);
   }
+});
+
+
+test('append-only tokenizer preserves pinned lexer tokens and locations', () => {
+  const {tokenize} = require('./build/duplication.js');
+  const {tokenize: original} = require('@jscpd/tokenizer');
+  for (const [format, source] of [
+    ['python', block + '\n# comment\n'],
+    ['javascript', 'const a = `hello ${name}`;\n// comment\n'],
+    ['markup', '<script>const a = 1;</script>\n<div>text</div>'],
+  ]) {
+    const project = tokens => tokens.map(({value, type, range, loc}) => ({value, type, range, start: loc.start.line, end: loc.end.line}));
+    assert.deepEqual(project(tokenize(source, format)), project(original(source, format)));
+  }
+  const source = Array.from({length: 8000}, (_, i) => `value_${i} = process(${i})`).join('\n');
+  const tokens = tokenize(source, 'python');
+  assert.equal(tokens.at(-1).range[1], source.length);
+  assert.equal(tokens.at(-1).loc.end.line, 8000);
 });

@@ -20,7 +20,7 @@ Missing or unreadable base trees fail closed. Both trees are scanned in full,
 even if only one source file changed; no LLM chooses the files to inspect.
 
 The detector uses pinned jscpd 4.0.5 and its pinned 4.0.1 language tokenizer,
-with a content-window grouping policy in `tools/quality/duplication.cjs`.
+with a content-window grouping policy in `tools/quality/duplication.ts`.
 `duplication.json` configures explicit directory/path exclusions and minimum size
 (initially 100 tokens). All regular UTF-8 text files under the repository root
 are included, regardless of extension, subject to the explicit dependency,
@@ -65,3 +65,7 @@ literal repository-relative paths and maximum occurrence counts; globs and empty
 rationales are rejected. Another file, more occurrences, or changed shared tokens
 cannot inherit the exception. Exceptions and changes to detector settings are
 reviewable code changes; never suppress a finding with a blanket exclusion.
+
+The scanner is compiled from strict TypeScript before tests and gate execution.
+Its append-only traversal flattens the pinned jscpd grammars without repeatedly
+copying the accumulated token array.

@@ -1,13 +1,44 @@
 // jscpd 4.0.5 supplies the language lexers; exact token windows form clone groups.
-const fs = require('node:fs');
-const path = require('node:path');
-const {createHash} = require('node:crypto');
-const {isUtf8} = require('node:buffer');
-const {tokenize, getFormatByFile} = require('@jscpd/tokenizer');
-const config = require('./duplication.json');
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import {createHash} from 'node:crypto';
+import {isUtf8} from 'node:buffer';
+import {FORMATS, getFormatByFile} from '@jscpd/tokenizer';
+import config from './duplication.json';
+type Token = {value: string; type?: string; range: number[]; loc: {start: {line: number}; end: {line: number}}};
+type Location = {file: string; start: number; end: number};
+type Group = {id: string; locations: Location[]; context?: string};
+type Exception = {id: string; files: Record<string, number>; rationale: string};
+type Options = {minTokens: number; exclude: string[]; excludePaths: string[]; exceptions: Exception[]};
+type PrismToken = string | {type: string; content: string | PrismToken[]; alias?: string};
+// Loading the pinned jscpd tokenizer initializes these shared grammars.
+const prism: {languages: Record<string, unknown>; tokenize(code: string, grammar: unknown): PrismToken[]} = require('reprism').default;
+
+export function tokenize(source: string, format: string): Token[] {
+  const grammar = prism.languages[FORMATS[format]?.parent || format];
+  if (!grammar) throw new Error(`Unsupported grammar: ${format}`);
+  const result: Token[] = [];
+  let offset = 0, line = 1;
+  function append(token: PrismToken, language: string): void {
+    if (typeof token !== 'string' && Array.isArray(token.content)) {
+      const nestedLanguage = token.alias ? token.alias.replace('language-', '') : language;
+      for (const child of token.content) append(child, nestedLanguage);
+      return;
+    }
+    const value = typeof token === 'string' ? token : token.content as string;
+    if (!(language in FORMATS)) return;
+    const end = line + (value.match(/\n/g) || []).length;
+    result.push({value, type: typeof token === 'string' ? 'default' : token.type,
+      range: [offset, offset + value.length], loc: {start: {line}, end: {line: end}}});
+    offset += value.length;
+    line = end;
+  }
+  for (const token of prism.tokenize(source, grammar)) append(token, format);
+  return result;
+}
 
 // Unknown languages still receive exact lexical matching without a lexer update.
-function textTokens(source) {
+function textTokens(source: string): Token[] {
   const tokens = [];
   let line = 1, offset = 0;
   for (const match of source.matchAll(/[\p{L}\p{N}_]+|[^\s]/gu)) {
@@ -19,17 +50,17 @@ function textTokens(source) {
   return tokens;
 }
 
-function scan(root, options = config) {
+export function scan(root: string, options: Options = config) {
   if (!Number.isInteger(options.minTokens) || options.minTokens < 1) throw new Error('minTokens must be a positive integer');
-  const index = new Map();
-  const files = [];
-  const sequences = [];
-  const vocabulary = new Map();
-  const values = [];
+  const index = new Map<string, number[]>();
+  const files: string[] = [];
+  const sequences: Uint32Array[] = [];
+  const vocabulary = new Map<string, number>();
+  const values: string[] = [];
   const width = options.minTokens;
   let power = 1;
   for (let i = 1; i < width; i++) power = Math.imul(power, 31) >>> 0;
-  function visit(directory) {
+  function visit(directory: string) {
     for (const entry of fs.readdirSync(directory, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name))) {
       const absolute = path.join(directory, entry.name);
       const relative = path.relative(root, absolute).split(path.sep).join('/');
@@ -43,13 +74,13 @@ function scan(root, options = config) {
       if (bytes.includes(0) || !isUtf8(bytes)) continue;
       const source = bytes.toString('utf8');
       const tokens = format === 'text' ? textTokens(source) :
-        tokenize(source, format).filter(t => !['comment', 'empty', 'new_line'].includes(t.type));
+        tokenize(source, format).filter(t => !['comment', 'empty', 'new_line'].includes(t.type || 'default'));
       const sequence = Uint32Array.from(tokens, token => {
         if (!vocabulary.has(token.value)) {
           vocabulary.set(token.value, values.length);
           values.push(token.value);
         }
-        return vocabulary.get(token.value) + 1;
+        return vocabulary.get(token.value)! + 1;
       });
       sequences[fileIndex] = sequence;
       let fingerprint = 0;
@@ -68,8 +99,8 @@ function scan(root, options = config) {
     }
   }
   visit(root);
-  const groups = new Map();
-  const contexts = new Map();
+  const groups = new Map<string, Group>();
+  const contexts = new Map<string, {group: Group; start: number; end: number}[]>();
   for (const [key, records] of index) {
     let crossFile = false;
     for (let i = 6; i < records.length; i += 6) {
@@ -78,7 +109,7 @@ function scan(root, options = config) {
     if (!crossFile) continue;
     // Fingerprints select candidates only. Compare every token to prevent hash
     // collisions from joining unrelated blocks, then hash each exact group once.
-    const partitions = [];
+    const partitions: number[][] = [];
     for (let i = 0; i < records.length; i += 6) {
       const sequence = sequences[records[i]], start = records[i + 5];
       let partition = partitions.find(p => {
@@ -97,11 +128,11 @@ function scan(root, options = config) {
       const format = key.slice(0, key.lastIndexOf(':'));
       const id = createHash('sha256').update(JSON.stringify([format, block])).digest('hex');
       const locations = partition.map(i => ({file: files[records[i]], start: records[i + 1], end: records[i + 2]}));
-      const group = {id, locations};
+      const group: Group = {id, locations};
       groups.set(id, group);
       const file = files[fileIndex];
       if (!contexts.has(file)) contexts.set(file, []);
-      contexts.get(file).push({group, start: records[first + 3], end: records[first + 4]});
+      contexts.get(file)!.push({group, start: records[first + 3], end: records[first + 4]});
     }
   }
   index.clear();
@@ -113,13 +144,13 @@ function scan(root, options = config) {
   return groups;
 }
 
-function counts(group) {
-  const result = {};
+export function counts(group?: Group) {
+  const result: Record<string, number> = {};
   for (const {file} of group?.locations || []) result[file] = (result[file] || 0) + 1;
   return result;
 }
 
-function findings(current, base, exceptions = []) {
+export function findings(current: Map<string, Group>, base: Map<string, Group>, exceptions: Exception[] = []) {
   for (const e of exceptions) {
     if (!/^[a-f0-9]{64}$/.test(e.id) || !e.rationale?.trim() || !e.files ||
         Object.keys(e.files).length < 3 || Object.entries(e.files).some(([p, n]) => /[*?]/.test(p) || !Number.isInteger(n) || n < 1)) {
@@ -130,7 +161,7 @@ function findings(current, base, exceptions = []) {
     const now = counts(group), before = counts(base.get(group.id));
     // Content identity matches relocated copies; splitting into more files still
     // expands a group even when its total number of copies stays the same.
-    const total = counts => Object.values(counts).reduce((sum, n) => sum + n, 0);
+    const total = (counts: Record<string, number>) => Object.values(counts).reduce((sum, n) => sum + n, 0);
     if (Object.keys(now).length < 3 ||
         (Object.keys(now).length <= Object.keys(before).length && total(now) <= total(before))) return false;
     return !exceptions.some(e => e.id === group.id && Object.keys(now).every(p => now[p] <= (e.files[p] || 0)));
@@ -152,4 +183,4 @@ if (require.main === module) {
     process.exitCode = 1;
   }
 }
-module.exports = {scan, findings, counts};
+
