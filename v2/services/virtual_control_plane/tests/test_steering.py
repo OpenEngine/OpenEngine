@@ -18,13 +18,11 @@ from virtual_control_plane.persistence import PERSISTENCE
 from virtual_control_plane.persistence.durable import DurableStore, Transaction
 from virtual_control_plane.tests.test_cancellation import CANCEL, Flow, Local, Vcp, deployment, destroy
 from virtual_control_plane.tests.test_runtime_delivery import (
-    EXECUTE, RUNTIME, WORKSPACE, HostContext, binary, commands, daemon, drain, events, payload, ready, settled, until,
+    EXECUTE, RUNTIME, WORKSPACE, HostContext, commands, daemon, drain, events, payload, ready, settled, until,
 )
 from workspace_daemon.executor import ExecutionWorker, FakeExecutor
 from workspace_daemon.journal import encode
 from workspace_daemon.outbox import UpdateOutbox
-
-__all__ = ["binary"]
 
 STEER = f"oe.v1.vcp.control.workspaces.{WORKSPACE}.steer"
 

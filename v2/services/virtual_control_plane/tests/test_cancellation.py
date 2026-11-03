@@ -24,15 +24,13 @@ from virtual_control_plane.persistence import PERSISTENCE
 from virtual_control_plane.persistence.durable import DurableStore
 from virtual_control_plane.runtime_nats import NatsRuntimeTransport, RuntimeUpdateListener
 from virtual_control_plane.tests.test_runtime_delivery import (
-    EXECUTE, RUNTIME, WORKSPACE, Daemon, HostContext, binary, commands, daemon, drain, events, payload, ready,
+    EXECUTE, RUNTIME, WORKSPACE, Daemon, HostContext, commands, daemon, drain, events, payload, ready,
     settled, until, vcp_store, workspace_root,
 )
 from virtual_control_plane.tests.test_lifecycle import broker
 from workspace_daemon.executor import ExecutionWorker, FakeExecutor
 from workspace_daemon.journal import encode
 from workspace_daemon.outbox import UpdateOutbox
-
-__all__ = ["binary"]  # the module-scoped NATS server fixture
 
 CANCEL = f"oe.v1.vcp.control.workspaces.{WORKSPACE}.cancel"
 DESTROY = f"oe.v1.vcp.control.workspaces.{WORKSPACE}.destroy"

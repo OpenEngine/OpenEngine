@@ -106,6 +106,8 @@ flowchart LR
             class vcp_t_outbox table
             vcp_t_runtime_commands[("runtime_commands<br/>Immutable internal commands accepted atomically with attempts, and their delivery outcome.")]
             class vcp_t_runtime_commands table
+            vcp_t_runtime_credentials[("runtime_credentials<br/>Internal broker credential ownership and revocation state per runtime; never the secret.")]
+            class vcp_t_runtime_credentials table
             vcp_t_runtime_status[("runtime_status<br/>Execution readiness, capabilities, journal identity and update high-water mark of an owned runtime.")]
             class vcp_t_runtime_status table
             vcp_t_runtime_updates[("runtime_updates<br/>Committed internal runtime updates, for duplicate and conflict detection.")]

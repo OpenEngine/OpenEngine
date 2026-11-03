@@ -5,7 +5,7 @@ description = "Manages the lifecycle of agents and the workspaces they work in."
 requires-python = ">=3.11"
 # openengine-contracts validates capabilities.get and the other VCP subjects it serves.
 # The worktree adapter runs `python -m workspace_daemon` as a separate process, importing only its lock-file name.
-dependencies = ["nats-py>=2.16.0", "openengine-contracts", "openengine-messaging", "openengine-persistence", "openengine-telemetry",
+dependencies = ["bcrypt>=4.2", "cryptography>=44", "nats-py>=2.16.0", "openengine-contracts", "openengine-messaging", "openengine-persistence", "openengine-telemetry",
                 "openengine-workspace-daemon"]
 
 [build-system]
@@ -13,7 +13,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-only-include = ["application", "persistence", "providers", "__main__.py", "exclusion.py", "jetstream.py", "runtime_nats.py"]
+only-include = ["application", "persistence", "provisioning", "providers", "__main__.py", "exclusion.py", "jetstream.py", "runtime_nats.py"]
 # Editable installs put services/ on the path, so the service imports as `virtual_control_plane`.
 dev-mode-dirs = [".."]
 

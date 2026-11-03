@@ -120,3 +120,21 @@ session_history = sa.Table(
 sa.Index("ix_steering_commands_pending",
          sa.literal_column("json_extract(body, '$.target.attempt_id')"), sa.literal_column("key"),
          sqlite_where=sa.text("json_extract(body, '$.status') = 'pending'"), _table=documents["steering_commands"])
+
+# Ownership of each runtime's internal broker credential. The row is written
+# before its secret exists and outlives it: the broker configuration is
+# generated from `active` rows only, so a `retired` runtime is never granted
+# again. Only a digest of the secret is stored here.
+runtime_credentials = sa.Table(
+    "runtime_credentials", metadata,
+    sa.Column("runtime_id", sa.String(128), primary_key=True),
+    sa.Column("generation", sa.Integer(), nullable=False),
+    sa.Column("username", sa.String(128), nullable=False),
+    sa.Column("status", sa.String(16), nullable=False),
+    sa.Column("issued_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("secret_digest", sa.String(64), nullable=True),
+    sa.CheckConstraint("status IN ('active', 'revoking', 'retired')", name="ck_runtime_credentials_status"),
+    sa.UniqueConstraint("username", name="uq_runtime_credentials_username"),
+    comment="Internal broker credential ownership and revocation state per runtime; never the secret.",
+)

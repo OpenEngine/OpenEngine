@@ -118,3 +118,16 @@ def test_the_worktree_provider_needs_a_root_and_explicit_daemon_credentials(tmp_
                                  vcp.WORKTREE_SOURCE_ROOTS_VARIABLE: f"{tmp_path}/a{os.pathsep}{tmp_path}/b{os.pathsep}"})["process"]
     assert credentials.daemon.credentials == Path("/run/oe/runtime.creds") and credentials.discard_changes
     assert credentials.source_roots == (tmp_path.resolve() / "a", tmp_path.resolve() / "b")
+
+
+def test_the_internal_runtime_broker_is_opt_in_and_lives_in_the_state_directory(tmp_path: Path) -> None:
+    store = type("Store", (), {"database": None})()
+
+    assert vcp.runtime_broker(store, {}) is None
+    broker = vcp.runtime_broker(store, {"OE_VCP_STATE_DIR": str(tmp_path), "OE_VCP_RUNTIME_BROKER_LISTEN": "192.0.2.1:4300",
+                                        "OE_VCP_RUNTIME_BROKER_GUEST_URL": "nats://192.0.2.1:4300",
+                                        "OE_VCP_RUNTIME_BROKER_BINARY": "/opt/nats-server"})
+    assert broker.directory == tmp_path / "runtime-broker"
+    assert broker.binary == Path("/opt/nats-server")
+    assert broker.endpoint.client_url == "nats://192.0.2.1:4300"
+    assert broker.endpoint.guest_url == "nats://192.0.2.1:4300"

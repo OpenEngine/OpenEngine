@@ -11,11 +11,9 @@ import re
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from pathlib import Path
 
 import pytest
 import sqlalchemy as sa
@@ -23,7 +21,6 @@ import sqlalchemy as sa
 from openengine.contracts.runtime import validate_wire_message
 from openengine.messaging import Client, LocalOperator, Server, ServiceError, Unavailable, envelopes, listen_address
 from openengine.persistence import DatabaseConfig
-from openengine.supervisor.processes.nats import install_nats_server
 
 from virtual_control_plane.application import runtime_delivery
 from virtual_control_plane.application.execution import Execution
@@ -452,11 +449,6 @@ def test_ready_during_provisioning_is_retried_not_committed(tmp_path):
 # Real NATS, with the daemon as an ordinary host subprocess.
 
 
-@pytest.fixture(scope="module")
-def binary():
-    return install_nats_server(Path(tempfile.gettempdir()) / "oe-test-nats")
-
-
 async def until(predicate, timeout=15.0):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -642,7 +634,10 @@ def test_denied_public_request_and_forged_internal_messages_have_no_effect(binar
                       "target": {**BINDING, "session_id": "session_forged", "attempt_id": "attempt_forged"},
                       "boot_id": "boot_forged", "sequence": 2, "occurred_at": "2026-01-01T00:00:00Z", "payload": {},
                       "execution": forged["execution"], "attempt_sequence": 1}
-            reply = json.loads((await connection.request(UPDATES, encode(update), timeout=5)).data)
+            # VCP answers updates only on the runtime's own inbox.
+            inbox = await connection.subscribe(f"_INBOX.oe.runtime.{RUNTIME}.forged")
+            await connection.publish(UPDATES, encode(update), reply=f"_INBOX.oe.runtime.{RUNTIME}.forged")
+            reply = json.loads((await inbox.next_msg(timeout=5)).data)
             assert reply["error"]["code"] == "IDENTITY_MISMATCH"
             assert await events(vcp.store) == [] and launches(tmp_path) == []
             await vcp.stop()
