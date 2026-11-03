@@ -140,6 +140,7 @@ export const assignedIssue: { title: string; description: string[]; criteria: st
   criteria: [
     "The calculator is centred on the page, and the display stands out from the keys.",
     "The digits, the operators and `C` are easy to tell apart, for example by colour.",
+    "The keys keep a familiar calculator layout: the digits in a three-by-three grid with `0` below them, and the operators together in a column.",
     "The keys are large enough to press on a phone, and nothing runs off the edge of a narrow screen.",
     "Every key still does what it did, and the heading and the keys' labels are unchanged.",
     "An automated test checks something that shows the styling is there, such as a viewport setting and a rule for the keys, and the existing tests still pass.",
