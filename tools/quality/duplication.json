@@ -19,7 +19,9 @@
     "fixtures",
     "generated",
     "vendor",
-    "vendored"
+    "vendored",
+    "package-lock.json",
+    "uv.lock"
   ],
   "excludePaths": [
     "tools/quality/duplication.test.cjs",

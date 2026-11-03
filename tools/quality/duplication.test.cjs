@@ -204,3 +204,20 @@ test('recognized formats without loaded grammars use generic matching', t => {
     assert.equal(findings(current, current).length, 0);
   }
 });
+
+test('generated dependency lockfiles are excluded at every depth without excluding source', t => {
+  for (const name of ['package-lock.json', 'uv.lock']) {
+    const base = tree(t, {'a/source.unknown': block, 'b/source.unknown': block,
+      ['old/' + name]: block});
+    const current = tree(t, {'a/source.unknown': block, 'b/source.unknown': block,
+      ['old/' + name]: block, ['nested/new/' + name]: block, [name]: block});
+    assert.equal(findings(current, base).length, 0);
+    for (const group of current.values()) {
+      assert.deepEqual(group.locations.map(l => l.file), ['a/source.unknown', 'b/source.unknown']);
+    }
+  }
+  for (const name of ['package.json', 'uv.lock.py', 'package-lock.json.example']) {
+    const files = Object.fromEntries(['a', 'b', 'nested/c'].map(dir => [dir + '/' + name, block]));
+    assert.ok(findings(tree(t, files), new Map()).length, name);
+  }
+});

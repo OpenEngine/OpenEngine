@@ -26,7 +26,9 @@ with a content-window grouping policy in `tools/quality/duplication.ts`.
 are included, regardless of extension, subject to the explicit dependency,
 generated-code, build, fixture, and vendor exclusions. The generated schema
 outputs `docs/schema` and `v2/docs/schema` are explicitly excluded; other
-documentation remains scanned. Binary files (NUL bytes
+documentation remains scanned. Generated dependency lockfiles named
+`package-lock.json` or `uv.lock` are excluded at every directory depth;
+package manifests and other source files remain scanned. Binary files (NUL bytes
 or invalid UTF-8) are skipped, and symlinks are not followed. Known languages use
 jscpd's available lexers automatically. Recognized formats whose grammars are
 unavailable, unknown extensions, and extensionless files use a
