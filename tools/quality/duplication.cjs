@@ -23,6 +23,12 @@ function scan(root, options = config) {
   if (!Number.isInteger(options.minTokens) || options.minTokens < 1) throw new Error('minTokens must be a positive integer');
   const index = new Map();
   const files = [];
+  const sequences = [];
+  const vocabulary = new Map();
+  const values = [];
+  const width = options.minTokens;
+  let power = 1;
+  for (let i = 1; i < width; i++) power = Math.imul(power, 31) >>> 0;
   function visit(directory) {
     for (const entry of fs.readdirSync(directory, {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name))) {
       const absolute = path.join(directory, entry.name);
@@ -38,38 +44,65 @@ function scan(root, options = config) {
       const source = bytes.toString('utf8');
       const tokens = format === 'text' ? textTokens(source) :
         tokenize(source, format).filter(t => !['comment', 'empty', 'new_line'].includes(t.type));
-      for (let i = 0; i <= tokens.length - options.minTokens; i++) {
-        const block = tokens.slice(i, i + options.minTokens);
-        // Values, including identifier and literal spelling, are significant. Token
-        // boundaries prevent concatenation collisions; lexical roles can vary by context.
-        const id = createHash('sha256').update(JSON.stringify([format, block.map(t => t.value)])).digest('hex');
-        // Retain only flat numeric locations until cross-file repetition is known.
-        const location = [fileIndex, block[0].loc.start.line, block.at(-1).loc.end.line,
-          block[0].range[0], block.at(-1).range[1]];
-        const previous = index.get(id);
+      const sequence = Uint32Array.from(tokens, token => {
+        if (!vocabulary.has(token.value)) {
+          vocabulary.set(token.value, values.length);
+          values.push(token.value);
+        }
+        return vocabulary.get(token.value) + 1;
+      });
+      sequences[fileIndex] = sequence;
+      let fingerprint = 0;
+      for (let i = 0; i < sequence.length; i++) {
+        if (i >= width) fingerprint = (fingerprint - Math.imul(sequence[i - width], power)) >>> 0;
+        fingerprint = (Math.imul(fingerprint, 31) + sequence[i]) >>> 0;
+        if (i + 1 < width) continue;
+        const start = i + 1 - width;
+        const key = `${format}:${fingerprint}`;
+        const location = [fileIndex, tokens[start].loc.start.line, tokens[i].loc.end.line,
+          tokens[start].range[0], tokens[i].range[1], start];
+        const previous = index.get(key);
         if (previous) previous.push(...location);
-        else index.set(id, location);
+        else index.set(key, location);
       }
     }
   }
   visit(root);
   const groups = new Map();
   const contexts = new Map();
-  for (const [id, records] of index) {
-    let repeated = false;
-    for (let i = 5; i < records.length; i += 5) {
-      if (records[i] !== records[0]) { repeated = true; break; }
+  for (const [key, records] of index) {
+    let crossFile = false;
+    for (let i = 6; i < records.length; i += 6) {
+      if (records[i] !== records[0]) { crossFile = true; break; }
     }
-    if (!repeated) continue;
-    const locations = [];
-    for (let i = 0; i < records.length; i += 5) {
-      locations.push({file: files[records[i]], start: records[i + 1], end: records[i + 2]});
+    if (!crossFile) continue;
+    // Fingerprints select candidates only. Compare every token to prevent hash
+    // collisions from joining unrelated blocks, then hash each exact group once.
+    const partitions = [];
+    for (let i = 0; i < records.length; i += 6) {
+      const sequence = sequences[records[i]], start = records[i + 5];
+      let partition = partitions.find(p => {
+        const representative = sequences[records[p[0]]], offset = records[p[0] + 5];
+        for (let j = 0; j < width; j++) if (sequence[start + j] !== representative[offset + j]) return false;
+        return true;
+      });
+      if (!partition) partitions.push(partition = []);
+      partition.push(i);
     }
-    const group = {id, locations};
-    groups.set(id, group);
-    const file = files[records[0]];
-    if (!contexts.has(file)) contexts.set(file, []);
-    contexts.get(file).push({group, start: records[3], end: records[4]});
+    for (const partition of partitions) {
+      const first = partition[0], fileIndex = records[first];
+      if (!partition.some(i => records[i] !== fileIndex)) continue;
+      const start = records[first + 5];
+      const block = Array.from(sequences[fileIndex].subarray(start, start + width), id => values[id - 1]);
+      const format = key.slice(0, key.lastIndexOf(':'));
+      const id = createHash('sha256').update(JSON.stringify([format, block])).digest('hex');
+      const locations = partition.map(i => ({file: files[records[i]], start: records[i + 1], end: records[i + 2]}));
+      const group = {id, locations};
+      groups.set(id, group);
+      const file = files[fileIndex];
+      if (!contexts.has(file)) contexts.set(file, []);
+      contexts.get(file).push({group, start: records[first + 3], end: records[first + 4]});
+    }
   }
   index.clear();
   // Read each representative source once, only for retained repeated groups.

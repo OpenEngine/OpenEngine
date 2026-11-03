@@ -140,3 +140,18 @@ test('binary files are skipped while text exclusions still apply', t => {
   }
   assert.equal(findings(tree(t, {'a.unknown': block, 'b.unknown': block, 'generated/c.unknown': block}), new Map()).length, 0);
 });
+
+test('rolling fingerprint collisions do not merge distinct token windows', t => {
+  const words = Array.from({length: 32}, (_, i) => `word${i}`);
+  // Interned IDs (1,32) and (2,1) have the same base-31 fingerprint.
+  const groups = tree(t, {
+    '0-seed.unknown': words.join(' '),
+    'a.unknown': 'word0 word31',
+    'b.unknown': 'word0 word31',
+    'c.unknown': 'word1 word0',
+  }, {...config, minTokens: 2});
+  const {createHash} = require('node:crypto');
+  const id = createHash('sha256').update(JSON.stringify(['text', ['word0', 'word31']])).digest('hex');
+  assert.deepEqual(groups.get(id).locations.map(l => l.file), ['a.unknown', 'b.unknown']);
+  assert.equal(findings(groups, new Map()).length, 0);
+});
