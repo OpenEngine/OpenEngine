@@ -315,8 +315,8 @@ locator is opaque JSON.
 checks run before acceptance. Ready, failed and suspended workspaces can be
 destroyed; active attempts are rejected with `INVALID_STATE` by an application
 rule. Execution admission must maintain `active_attempt_ids` and refuse new
-attempts once state is `destroying`; execution and cancellation remain future
-work. A concurrent lifecycle operation returns retryable `UNAVAILABLE`.
+attempts once state is `destroying`; a cancelled attempt stays active until
+its termination is confirmed (see "Cancellation"). A concurrent lifecycle operation returns retryable `UNAVAILABLE`.
 
 Acceptance commits the immutable receipt, retention choices, pending operation
 and `destroying` state/version before any deletion. `AllocationProvider.destroy`
@@ -631,12 +631,17 @@ committed readiness for the current generation.
 | `attempt.progress` `usage` | delta added once to the attempt's `usage`; `usage.reported` with its period |
 | `attempt.completed` | attempt completed, session idle, attempt released; `task.completed` |
 | `attempt.failed` | attempt failed, session idle, attempt released; `task.failed`; execute fails only if never started |
+| `attempt.cancelled` | attempt cancelled, session idle, attempt released; `task.cancelled`; execute fails `INVALID_STATE` only if never started |
 
-Progress applies only to a running attempt and only for kinds the runtime
+Every terminal projection also settles each pending `workspaces.cancel`
+operation of the attempt with its `final_state`.
+
+Progress applies only to a started (running or cancelling) attempt and only for kinds the runtime
 registered in `runtime.ready` (the codex executor registers `conversation` and
 `usage`; `fake` none). A usage period that ends before it starts or overlaps
 the attempt's previous one, an unregistered kind (including `artifact`),
-progress after a terminal record, cancellation and steering are
+progress after a terminal record, a cancelled update that does not name the
+winning cancel's internal command and cause, and steering are
 `EVENT_CONFLICT` and quarantine the runtime. Deduplication on the update's
 event ID means redelivered progress never repeats history or usage. There is no
 session-history query yet: the public events are the history. `inspect` asks the
@@ -661,3 +666,47 @@ during execution, VCP restart before delivery and during execution, daemon
 SIGKILL mid-task, execute replay, a denied public request and forged internal
 messages). Delivery is at least once; there is no exactly-once transport. An
 interrupted launch is never rerun.
+
+## Cancellation (#1120)
+
+`workspaces.{workspace_id}.cancel` is registered beside execute (the same
+opt-in `Execution(enabled=True)`; production startup registers neither yet).
+After the shared Server authorizes it, one transaction writes the receipt, a
+pending `workspaces.cancel` operation, the attempt's `cancelling` state (in the
+attempt and its session snapshot) and one immutable internal cancel command
+(`runtime_commands`, its own subject), validated before the first write. The
+command carries the attempt binding, the original execute identity and the
+cancel's public cause. No schema change is needed: the winning cancel's
+internal command ID, cause and coalesced operation IDs live in the attempt
+document.
+
+| Cancel of | Result |
+| -- | -- |
+| an unknown attempt, or one of another workspace | `NOT_FOUND` |
+| a starting/running attempt whose runtime binding is no longer owned | `INVALID_STATE` |
+| a starting or running attempt | pending operation, attempt `cancelling`, one internal cancel |
+| a cancelling attempt | another pending operation, coalesced onto the winning cancel; no new internal command |
+| a completed, failed or cancelled attempt | operation succeeds at once with that `final_state` |
+
+The attempt stays in `active_attempt_ids` while cancelling, so its session,
+the runtime's capacity and destroy's `INVALID_STATE` guard hold until the
+daemon's terminal update confirms termination: cancel acceptance alone never
+permits destroy. `attempt.started` for a cancelling attempt succeeds execute
+and publishes `task.started` but keeps it cancelling. `attempt.cancelled`
+publishes one `task.cancelled` whose `operation` is the execute and whose
+`cancelled_by`, causal path and reason are the winning cancel's; a
+`completed`/`failed` update that won the race keeps that outcome. Either way
+every pending cancel operation succeeds with the attempt's `final_state` in
+the same transaction. Cancel delivery uses the same dispatcher, retries and
+reply checks as execute; a cancel rejection is never read as evidence that
+nothing launched. Destroy-as-cancel, suspend/checkpoint cancellation, workflow
+or GE job cancellation and approvals are out of scope.
+
+`tests/test_cancellation.py` covers, in process, cancel before delivery
+(tombstone), while recorded, launching and running, duplicate and replayed
+cancels, lost cancel and update acknowledgements, completion winning the race,
+unconfirmed termination keeping destroy refused, and rejections; and over real
+NATS with the daemon subprocess, a daemon SIGKILL while cancelling and a
+cancel accepted before delivery across VCP and daemon restarts, each ending in
+exactly one `task.cancelled`, no surviving daemon child processes, and destroy
+accepted only afterwards. The daemon there runs the in-process fake executor.

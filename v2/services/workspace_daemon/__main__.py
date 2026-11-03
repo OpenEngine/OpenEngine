@@ -7,8 +7,8 @@ The same process serves a daemon beside a Git worktree or inside a VM: it
 needs a workspace root, a separate private journal directory, its immutable
 binding and a broker. Start-up takes the journal's exclusive lock, checks or
 records the binding, migrates and recovers the journal, seals the binding and
-only then subscribes to `oe.internal.v1.runtime.runtimes.{runtime_id}.execute`
-and `.inspect`. Command reception, inspect, the executor worker and the update
+only then subscribes to `oe.internal.v1.runtime.runtimes.{runtime_id}.execute`,
+`.cancel` and `.inspect`. Command reception, inspect, the executor worker and the update
 outbox run independently. A refused recovery exits 2 with its evidence logged.
 
 Broker credentials are provisioned out of band (`--credentials`). Without
@@ -136,15 +136,16 @@ async def serve(args, journal_directory: Path, root: Path, initialization: Initi
                 log.warning("discarded invalid runtime %s", action, extra={"daemon.errors": errors[:3]})
                 return
             body = json.loads(message.data)
+            handler = {"execute": journal.execute, "cancel": journal.cancel, "inspect": journal.inspect}[action]
             try:
-                response = await (journal.execute if action == "execute" else journal.inspect)(message.subject, body)
+                response = await handler(message.subject, body)
             except Exception:
                 log.exception("runtime %s not acknowledged; the sender retries", action)
                 return
             await message.respond(encode(response))
 
-        # Separate subscriptions: inspect never queues behind command handling.
-        for action in ("execute", "inspect"):
+        # Separate subscriptions: inspect and cancel never queue behind execute handling.
+        for action in ("execute", "cancel", "inspect"):
             subject = f"oe.internal.v1.runtime.runtimes.{args.runtime_id}.{action}"
             subscriptions.append(await connection.subscribe(subject, cb=receive))
         await connection.flush()

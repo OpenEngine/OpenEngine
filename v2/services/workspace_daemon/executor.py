@@ -14,6 +14,14 @@ other failure, including a terminal record that could not be journaled, leaves
 the attempt `launching` or `running`; the worker then fences it, with backoff,
 and records `executor_lost` only once termination is confirmed. Until then the
 daemon keeps the attempt, its session and its capacity.
+
+A `cancelling` attempt is stopped in two steps. The executor is first asked to
+stop gracefully (`cancel`), and the work may then end on its own; that request,
+including any write it makes, shares one deadline (`cancel_seconds`). Then the
+worker cancels the attempt's task, whose executor fences its own process tree.
+Neither step is evidence of termination: the attempt stays `cancelling` until a
+terminal record is journaled after a confirmed fence (retried with backoff
+like any uncertain attempt), and only then frees its session and capacity.
 """
 
 from __future__ import annotations
@@ -28,8 +36,8 @@ from openengine.messaging.retry import Backoff
 
 log = logging.getLogger(__name__)
 
-SETTINGS = {"outcome", "delay_seconds"}
-INTERRUPTED = ("launching", "running")
+SETTINGS = {"outcome", "delay_seconds", "ignore_cancel"}
+INTERRUPTED = ("launching", "running", "cancelling")
 Progress = Callable[[dict[str, Any]], Awaitable[None]]
 Outcome = tuple[str, dict[str, Any], str]
 
@@ -66,6 +74,10 @@ class ExecutorPort(Protocol):
         """`(state, payload, termination)` once the work provably stopped."""
         ...
 
+    async def cancel(self, attempt_id: str) -> None:
+        """Ask the attempt's work to stop on its own. Best effort: never proof of termination; the caller bounds it."""
+        ...
+
     async def fence(self, attempt: dict[str, Any]) -> bool:
         """True only once the attempt's work provably cannot continue."""
         ...
@@ -77,6 +89,8 @@ class FakeExecutor:
     Its work lives in this daemon's event loop, so once a restarted daemon holds
     the journal's exclusive lock the previous process, and its work, has ended.
     `effects`, if given, gets one line per launch: test evidence of no relaunch.
+    `cancel` ends the wait early unless `ignore_cancel` is set, which stands in
+    for work that does not stop on request and must be fenced at the deadline.
     """
 
     progress_kinds: tuple[str, ...] = ()
@@ -84,12 +98,14 @@ class FakeExecutor:
 
     def __init__(self, effects: Path | None = None) -> None:
         self.effects = effects
+        self.stopping: dict[str, asyncio.Event] = {}
 
     def validate(self, payload: dict[str, Any]) -> None:
         settings = payload["agent"].get("settings", {})
         delay = settings.get("delay_seconds", 0.05)
         if (set(settings) - SETTINGS or settings.get("outcome", "completed") not in ("completed", "failed")
-                or type(delay) not in (int, float) or not 0 <= delay <= 60):
+                or type(delay) not in (int, float) or not 0 <= delay <= 60
+                or type(settings.get("ignore_cancel", False)) is not bool):
             raise ValueError(settings)
 
     def plan(self, attempt_id: str) -> dict[str, Any]:
@@ -104,23 +120,39 @@ class FakeExecutor:
 
     async def wait(self, attempt_id: str, handle: dict[str, Any], progress: Progress) -> Outcome:
         settings = handle["settings"]
-        await asyncio.sleep(settings.get("delay_seconds", 0.05))
+        stop = asyncio.Event() if settings.get("ignore_cancel") else self.stopping.setdefault(attempt_id, asyncio.Event())
+        try:
+            async with asyncio.timeout(settings.get("delay_seconds", 0.05)):
+                await stop.wait()
+        except TimeoutError:
+            pass
+        finally:
+            self.stopping.pop(attempt_id, None)
+        if stop.is_set():
+            return "failed", {"error": {"code": "PROVIDER_ERROR", "message": "Fake executor stopped on request",
+                                        "retryable": False}, "reason": "executor_failed"}, "exited"
         if settings.get("outcome", "completed") == "completed":
             return "completed", {"result": {"summary": "Fake executor completed the task."}}, "exited"
         return "failed", {"error": {"code": "PROVIDER_ERROR", "message": "Simulated executor failure", "retryable": False},
                           "reason": "executor_failed"}, "exited"
 
+    async def cancel(self, attempt_id: str) -> None:
+        self.stopping.setdefault(attempt_id, asyncio.Event()).set()
+
     async def fence(self, attempt: dict[str, Any]) -> bool:
+        self.stopping.pop(attempt["command"]["target"]["attempt_id"], None)
         return True
 
 
 class ExecutionWorker:
     """Launches each recorded attempt once, independently of command reception and inspect,
-    and fences any launching or running attempt no task of this process still owns."""
+    and fences any launching, running or cancelling attempt no task of this process still owns."""
 
-    def __init__(self, journal, poll_seconds: float = 0.05) -> None:
-        self.journal, self.poll_seconds = journal, poll_seconds
+    def __init__(self, journal, poll_seconds: float = 0.05, cancel_seconds: float = 5.0) -> None:
+        self.journal, self.poll_seconds, self.cancel_seconds = journal, poll_seconds, cancel_seconds
         self.tasks: dict[str, asyncio.Task] = {}
+        self.stopping: dict[str, asyncio.Task] = {}
+        self.launches: set[str] = set()
         self.backoff = Backoff(initial=1.0, maximum=30.0)
         self._worker: asyncio.Task | None = None
 
@@ -129,9 +161,18 @@ class ExecutionWorker:
         async with self.journal.store.read() as tx:
             recorded = await tx.attempt_ids("recorded")
             orphaned = await tx.attempt_ids(*INTERRUPTED)
+            cancelling = await tx.attempt_ids("cancelling")
+        for attempt_id in cancelling:
+            # Only a live launch is stopped; a fence already in progress is left to finish.
+            task = self.tasks.get(attempt_id)
+            if task is not None and attempt_id in self.launches and attempt_id not in self.stopping:
+                self.stopping[attempt_id] = asyncio.create_task(self._stop(attempt_id, task))
+                self.stopping[attempt_id].add_done_callback(lambda _, key=attempt_id: self.stopping.pop(key, None))
         launched = 0
         for attempt_id in recorded:
             if self._start(attempt_id, self._run(attempt_id)):
+                self.launches.add(attempt_id)
+                self.tasks[attempt_id].add_done_callback(lambda _, key=attempt_id: self.launches.discard(key))
                 launched += 1
         for attempt_id in orphaned:
             if attempt_id not in self.tasks and self.backoff.due(attempt_id):
@@ -177,7 +218,9 @@ class ExecutionWorker:
             return
         async with journal.store.transaction() as tx:
             attempt = await tx.attempt(attempt_id)
-            attempt.update(state="running", executor_handle=handle)
+            if attempt["state"] == "launching":
+                attempt["state"] = "running"  # a cancel journaled meanwhile keeps it cancelling
+            attempt["executor_handle"] = handle
             if conversation is not None:
                 await tx.save_executor_session(command["target"]["session_id"], conversation["executor_session_id"],
                                                conversation["resumable"])
@@ -187,6 +230,28 @@ class ExecutionWorker:
             attempt_id, handle, lambda value: journal.progress(attempt_id, value))
         async with journal.store.transaction() as tx:
             await journal.finish(tx, await tx.attempt(attempt_id), state, payload, termination)
+
+    async def _stop(self, attempt_id: str, task: asyncio.Task) -> None:
+        """Graceful cancellation within one deadline, then the task is cancelled so its executor fences."""
+        evidence = {"daemon.attempt_id": attempt_id}
+        try:
+            async with self.journal.store.read() as tx:
+                attempt = await tx.attempt(attempt_id)
+            executor = self.journal.executors.get(attempt["command"]["payload"]["agent"]["runner"])
+            # The deadline covers the request (a blocked write included) and the wait for the work to end.
+            async with asyncio.timeout(self.cancel_seconds):
+                if executor is not None:
+                    await executor.cancel(attempt_id)
+                await asyncio.wait({task})
+        except TimeoutError:
+            log.warning("graceful cancellation timed out; fencing", extra=evidence)
+        except Exception:
+            log.exception("graceful cancellation failed; fencing", extra=evidence)
+        finally:
+            if not task.done():
+                task.cancel()
+            # Not confirmation: an unjournaled outcome is resolved by fencing in `run_once`.
+            await asyncio.gather(task, return_exceptions=True)
 
     async def _resolve(self, attempt_id: str) -> None:
         """Fence an attempt whose outcome is uncertain; never launch it again."""
@@ -226,8 +291,8 @@ class ExecutionWorker:
             await asyncio.sleep(self.poll_seconds)
 
     async def close(self) -> None:
-        # Interrupted attempts stay launching/running; the next start fences them.
-        tasks = [task for task in (self._worker, *self.tasks.values()) if task is not None]
+        # Interrupted attempts stay launching/running/cancelling; the next start fences them.
+        tasks = [task for task in (self._worker, *self.stopping.values(), *self.tasks.values()) if task is not None]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

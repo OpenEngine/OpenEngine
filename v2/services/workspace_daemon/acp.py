@@ -5,6 +5,9 @@ langgraph-acp dependency. The client advertises no filesystem or terminal
 capability, refuses every client method and denies every permission request
 (approvals are not implemented). Writes and reads share each call's deadline,
 so an agent that stops reading or writing cannot hold the executor past it.
+Frames are written under one lock, so a `session/cancel` sent during a prompt
+never interleaves with a permission reply; its caller bounds the wait for that
+lock and the pipe drain together.
 Notifications that arrive while a session is loaded (its replayed history) are
 discarded; only those during a prompt reach the caller as live progress.
 """
@@ -53,6 +56,7 @@ class ACPClient:
         self.process, self.timeout = process, timeout
         self.next_id = 0
         self.session_id: str | None = None
+        self._writing = asyncio.Lock()
         # Drained, never stored: agent diagnostics can hold secrets.
         self._stderr = asyncio.create_task(self._discard(process.stderr))
 
@@ -65,8 +69,9 @@ class ACPClient:
         wire = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode() + b"\n"
         if len(wire) > MAX_FRAME:
             raise ACPError(Violation.FRAME)
-        self.process.stdin.write(wire)
-        await self.process.stdin.drain()
+        async with self._writing:
+            self.process.stdin.write(wire)
+            await self.process.stdin.drain()
 
     async def call(self, method: str, params: dict[str, Any], *, update: Update | None = None,
                    timeout: float | None = None) -> dict[str, Any]:
@@ -148,6 +153,11 @@ class ACPClient:
     async def prompt(self, text: str, update: Update, timeout: float) -> dict[str, Any]:
         return await self.call("session/prompt", {"sessionId": self.session_id, "prompt": [{"type": "text", "text": text}]},
                                update=update, timeout=timeout)
+
+    async def cancel(self) -> None:
+        """Ask the agent to end the current turn (`session/cancel`). A notification: only the write is awaited."""
+        if self.session_id is not None:
+            await self._send({"jsonrpc": "2.0", "method": "session/cancel", "params": {"sessionId": self.session_id}})
 
     async def close(self) -> None:
         """Release the pipes once the process tree is fenced; unread output is drained so the process can be reaped."""
