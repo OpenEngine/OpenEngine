@@ -160,3 +160,41 @@ def test_an_agent_step_that_reports_nothing_sits_beside_naming_as_unknown() -> N
     assert step.cost_usd is None and not step.complete
     assert rollup.nodes[str(NodeId("naming"))].complete
     assert not rollup.total.complete
+
+
+def _published_usage(events: list[ACPEvent | Exception], *, stop: str | None = None) -> list[Any]:
+    async def scenario() -> list[Any]:
+        class Session:
+            async def prompt(self, prompt: Any) -> AsyncIterator[ACPEvent]:
+                for event in events:
+                    if isinstance(event, Exception):
+                        raise event
+                    yield event
+
+            async def cancel(self) -> None: ...
+
+        runtime = SimpleNamespace(publish=AsyncMock())
+        execution = NodeExecution(runtime, RUN, ExecutionId("execution"), IMPLEMENTATION)
+        node = ACPNode(agent="claude", cwd="/tmp")
+        try:
+            await node._speak(_Turn(node, execution, "session", session_id="s"), Session(), "go")
+        except RuntimeError:
+            pass
+        return [
+            call.args[2] for call in runtime.publish.await_args_list
+            if call.args[1] is EventKind.USAGE_UPDATED
+        ]
+
+    return asyncio.run(scenario())
+
+
+def test_a_turn_that_fails_before_reporting_is_still_unknown() -> None:
+    assert _published_usage([RuntimeError("boom")]) == [
+        {"agent": "claude", "model": "", "sessionId": "s"}
+    ]
+
+
+def test_a_turn_cancelled_by_steering_does_not_mark_the_node_unknown() -> None:
+    cancelled = ACPEvent(agent="claude", type=ACPEventType.PROMPT_COMPLETED, session_id="s",
+                         data={"stopReason": "cancelled"})
+    assert _published_usage([cancelled]) == []

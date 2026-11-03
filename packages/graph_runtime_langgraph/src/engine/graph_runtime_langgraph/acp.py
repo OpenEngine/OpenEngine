@@ -196,6 +196,8 @@ class _Turn:
     answer: "_StoredAnswer | None" = None
     """An answered request from before this process existed."""
     approval_requested: bool = False
+    reported_usage: bool = False
+    """Whether any turn of this invocation published a `usage.updated`."""
     narrating: Callable[[], Awaitable[None]] | None = None
     """`_speak`'s buffer flush, for as long as a turn is in flight.
 
@@ -1115,7 +1117,6 @@ class ACPNode:
         execution = turn.execution
         said: list[str] = []
         cancelled = False
-        reported_usage = False
         pending: list[str] = []
         thinking: list[str] = []
 
@@ -1148,7 +1149,7 @@ class ACPNode:
         turn.approval_requested = False
 
         async def consume() -> None:
-            nonlocal cancelled, reported_usage
+            nonlocal cancelled
             async for event in session.prompt(prompt):
                 if event.type == ACPEventType.PROMPT_COMPLETED:
                     cancelled = event.data.get("stopReason") == "cancelled"
@@ -1168,7 +1169,7 @@ class ACPNode:
                     continue
                 await flush_thinking()
                 if await self._republish(execution, event):
-                    reported_usage = True
+                    turn.reported_usage = True
                 if event.type == ACPEventType.MESSAGE_DELTA:
                     block = event.data.get("content")
                     if isinstance(block, Mapping) and block.get("type") == "text":
@@ -1176,14 +1177,6 @@ class ACPNode:
                         if isinstance(text, str):
                             pending.append(text)
             await flush()
-            if not reported_usage:
-                # An agent that reports nothing is unknown, not free: naming
-                # the session keeps the node in the rollup, incomplete.
-                await execution.emit(EventKind.USAGE_UPDATED, {
-                    "agent": self.agent,
-                    "model": str((self.session_config or {}).get("model") or ""),
-                    "sessionId": turn.session_id,
-                })
 
         steering_id = steering_id_of(prompt)
         if steering_id:
@@ -1216,6 +1209,14 @@ class ACPNode:
                 return_exceptions=True,
             )
             turn.narrating = None
+            if not turn.reported_usage and not cancelled:
+                # An agent that reports nothing is unknown, not free: naming
+                # the session keeps the node in the rollup, incomplete. Sent
+                # on every way out -- error included -- but not for a turn
+                # steering cancelled, whose successor reports for the node.
+                await execution.emit(
+                    EventKind.USAGE_UPDATED, self._usage_base(turn.session_id)
+                )
         if steering_id and not cancelled:
             # Applied means the agent finished the turn it was given, which a
             # queued or merely-sent message cannot claim.
@@ -1253,6 +1254,14 @@ class ACPNode:
             )
         return False
 
+    def _usage_base(self, session_id: str | None) -> dict[str, object]:
+        model = (self.session_config or {}).get("model")
+        return {
+            "agent": self.agent,
+            "model": model if isinstance(model, str) else "",
+            "sessionId": session_id or "",
+        }
+
     def _usage(self, event: Any) -> dict[str, object] | None:
         """This event's usage as a `usage.updated` payload, if it reported any.
 
@@ -1260,12 +1269,7 @@ class ACPNode:
         running cost, and the prompt response the finished turn's tokens.
         Anything but USD is left out rather than converted.
         """
-        model = (self.session_config or {}).get("model")
-        payload: dict[str, object] = {
-            "agent": self.agent,
-            "model": model if isinstance(model, str) else "",
-            "sessionId": event.session_id or "",
-        }
+        payload = self._usage_base(event.session_id)
         if event.type == ACPEventType.PROMPT_COMPLETED:
             usage = event.data.get("usage")
             if not isinstance(usage, Mapping):
