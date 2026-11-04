@@ -152,26 +152,26 @@ REVIEW_FACETS: tuple[ReviewFacet, ...] = (
         name="Conciseness",
         focus=(
             "Look for unnecessary complexity: dead code, redundant conditions, "
-            "over-abstraction, copy-paste duplication that should be a shared "
-            "function, overly verbose patterns that have a simpler equivalent in "
-            "the language or framework, and any code that could be removed without "
-            "changing behavior."
+            "over-abstraction, overly verbose patterns that have a simpler "
+            "equivalent in the language or framework, and any code that could be "
+            "removed without changing behavior."
         ),
     ),
     ReviewFacet(
         id="dryness",
-        name="DRYness & code duplication",
+        name="DRYness & semantic reuse",
         focus=(
-            "Check the changes for DRY (Don't Repeat Yourself) violations and code "
-            "duplication. Search the repository beyond the changed files for "
-            "existing helpers, utilities, and equivalent logic that the change "
-            "could reuse. Look for duplicated business rules and repeated logic "
-            "introduced by the change, both within the diff and against existing "
-            "code. Report actionable duplication with the changed location and "
-            "the existing equivalent's path, explaining what should be reused or "
-            "consolidated and why. Do not flag unrelated pre-existing duplication "
-            "or recommend abstractions for merely similar code with different "
-            "responsibilities."
+            "Check whether the change reimplements an existing helper, utility or "
+            "business rule elsewhere in the repository. Search beyond the changed "
+            "files and report each case with the changed location and the "
+            "existing equivalent's path, explaining what should be reused. "
+            "Syntactic clones across three or more files are handled by the "
+            "duplication gate; do not report them. Two similar copies are "
+            "acceptable unless they implement the same business rule. If the "
+            "copies serve different responsibilities, or extraction would need "
+            "flag arguments or more than about two parameters, a scoped exception "
+            "with a rationale is a valid outcome and preferable to a leaky "
+            "abstraction. Do not flag unrelated pre-existing duplication."
         ),
     ),
 )
