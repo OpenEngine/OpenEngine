@@ -1,5 +1,6 @@
 """Policy tests use real parsers and whole temporary source trees."""
 
+from collections import Counter
 from contextlib import redirect_stderr, redirect_stdout
 import io
 import json
@@ -241,6 +242,41 @@ class DuplicationTests(unittest.TestCase):
         report = detector.scan(self.head, self.config)
         self.assertTrue(report["errors"])
         self.assertEqual(report["files"], 1)
+
+    def test_fuzzy_move_to_third_file_reports_every_location(self):
+        original = block().replace("    return value", """    for item in value:
+        if item.ready:
+            value.append(item.result())
+        else:
+            value.remove(item)
+    try:
+        value.sort(key=lambda item: item.name)
+    except ValueError:
+        value.clear()
+    return value""")
+        variant = original.replace("    return value", "    if value is None:\n        return []\n    return value")
+        self.write(self.base, "a.py", original + variant)
+        self.write(self.base, "b.py", original)
+        self.write(self.head, "a.py", original)
+        self.write(self.head, "b.py", original)
+        self.write(self.head, "c.py", variant)
+        base, current = self.scan(self.base), self.scan(self.head)
+        self.assertEqual(Counter(u["exact"] for u in base["units"]),
+                         Counter(u["exact"] for u in current["units"]))
+        found = detector.fuzzy_findings(current, base)
+        self.assertTrue(found)
+        for group in found.values():
+            self.assertEqual(detector.scope(group), {"a.py": 1, "b.py": 1, "c.py": 1})
+        command = [sys.executable, detector.__file__, "--root", str(self.head),
+                   "--baseline-root", str(self.base)]
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 1)
+        reported = json.loads(result.stdout)["findings"]
+        self.assertTrue(any(g["kind"] == "type3" for g in reported.values()))
+        for path in ("a.py", "b.py", "c.py"):
+            self.assertIn(path + ":", result.stderr)
+        for group in reported.values():
+            self.assertEqual(detector.scope(group), {"a.py": 1, "b.py": 1, "c.py": 1})
 
     def test_cli_output_is_byte_identical(self):
         self.copies(self.head, 3)

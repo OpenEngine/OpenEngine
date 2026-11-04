@@ -71,7 +71,10 @@ test grammar waiver is unnecessary because tests no longer participate.
 Two similar files remain allowed. Exact and Type-2 groups fail only when they
 span three files and distinct-file count or occurrence count increases versus
 base. Type-3 findings require a qualifying group containing an exact unit identity
-whose count increased versus base (including a previously unseen exact hash).
+whose count increased versus base (including a previously unseen exact hash),
+or whose member identities now span more distinct files than in base. Moving a
+near-duplicate from a file with two copies into a third file therefore fails
+even when every exact unit count is unchanged.
 This detects new third/fourth copies as well as edits joining existing near-clones.
 Unchanged debt, content-preserving moves, renames and line shifts pass. Replacing a
 removed copy with an identical copy elsewhere is treated as relocation. A changed

@@ -155,9 +155,15 @@ def fuzzy_findings(current, base):
     groups = current.get("fuzzy_groups")
     if groups is None:
         groups = fuzzy_groups(current.get("units", []), 0.8)
-    return {key: group for key, group in groups.items()
-            if any(now[u["language"], u["exact"]] > old[u["language"], u["exact"]]
-                   for u in group["locations"])}
+    result = {}
+    for key, group in groups.items():
+        identities = {(u["language"], u["exact"]) for u in group["locations"]}
+        old_paths = {u["path"] for u in base.get("units", [])
+                     if (u["language"], u["exact"]) in identities}
+        if (len(scope(group)) > len(old_paths)
+                or any(now[identity] > old[identity] for identity in identities)):
+            result[key] = group
+    return result
 
 
 def prune_nested(groups):
