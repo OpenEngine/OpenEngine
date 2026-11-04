@@ -18,3 +18,8 @@
 - Generate new table and schema migration revisions with Alembic (`alembic revision`), and implement schema changes in those revisions rather than runtime DDL.
 - Use `migrations/sqlite` for the state store and `migrations/sqlite_graph` for the separate graph runtime database. To generate graph revisions, use `alembic_config(database_url, store="graph")` with `alembic.command.revision`. Apply it with `engine-migrate --store graph <database_url>`.
 - LangGraph owns its checkpoint database schema; leave its migrations to the checkpointer.
+
+## Duplication
+
+- The duplication gate (`.github/workflows/duplication.yml`) owns syntactic clones across three or more files; the `dryness` review facet owns semantic reuse of existing helpers and business rules. Two similar copies are acceptable (rule of three) unless they implement the same business rule.
+- If flagged copies serve different responsibilities, or extraction would need flag arguments or more than about two parameters, a scoped exception with a rationale is a valid outcome, preferable to a leaky abstraction.
