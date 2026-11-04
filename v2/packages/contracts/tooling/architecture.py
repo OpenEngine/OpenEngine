@@ -151,7 +151,7 @@ def diagram() -> str:
         "    end",
         "    class cli,supervisor app",
         "    class github,slack integration",
-        '    nats[("NATS: credential account identity<br/>GE/VCP dedicated or shared verified Principal")]',
+        '    nats[("NATS: credential account identity<br/>GE dedicated/shared; VCP dedicated verified Principal")]',
         "    class nats stream",
     ]
     for service in SERVICES:

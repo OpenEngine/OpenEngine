@@ -67,12 +67,15 @@ GE and VCP load trusted process configuration using `Deployment.from_environment
 `OE_TENANCY_MODE=dedicated` uses `OE_TENANT_ID` (default LOCAL_TENANT).
 `shared` resolves broker-written account tokens using a cached resolver over
 the `OE_ACCOUNT_TENANTS` JSON account-to-tenant mapping. Unknown accounts are
-refused; payload identity grants no access.
+refused; payload identity grants no access. VCP refuses shared startup until
+tenant-scoped workspace storage (#1228) lands; shared routing is currently
+available to GE only.
 
 Local authorization retains LocalOperator's broker loopback restriction. Shared
 mode requires explicit `OE_AUTHORIZATION=credentialed` and an
 `OE_NATS_CREDENTIALS` file for the service account. Credentialed authorization
-trusts broker account imports and permissions and allows all projects within
+checks the connected broker INFO `auth_required` flag on every authorization,
+including after reconnect, and refuses open brokers. It trusts broker account imports and permissions and allows all projects within
 the verified tenant. Operators must restrict account-scoped subjects to trusted
 services; this is not user-level project RBAC. Dedicated deployments can also
 explicitly select credentialed authorization with tenant credentials.

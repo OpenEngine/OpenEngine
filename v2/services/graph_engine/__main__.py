@@ -86,7 +86,7 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
         log.warning("NATS listens beyond loopback; local-operator mode refuses every request",
                     extra={"server.listen": listener})
     # One authorizer for every request, and again for the project each one reaches.
-    authorizer = deployment.authorizer()
+    authorizer = deployment.authorizer(connection)
     registry = Registry(store, authorizer)
     server = Server(
         connection, "ge", listener, queries=registry.queries(), commands=registry.commands(), authorizer=authorizer, tenancy=deployment.tenancy,

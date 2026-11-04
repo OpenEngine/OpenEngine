@@ -126,4 +126,7 @@ provides credential connection options and an explicit authorizer choice. See
 [deployment settings](../../ARCHITECTURE.md#public-request-tenancy). Its
 `public_client(connection, request)` refuses an unverified request and binds
 the outbound client to the same principal and mode. Credentials require the
-installed `nats-py[nkeys]` signing extra.
+installed `nats-py[nkeys]` signing extra. Services bind the credentialed authorizer
+to their connection; each authorization requires broker INFO `auth_required`,
+rechecked after reconnect, so supplying credentials to an open broker grants
+no access. Broker account imports and permissions remain operator configuration.

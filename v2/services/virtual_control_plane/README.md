@@ -846,10 +846,11 @@ qualify their own boundaries.
 
 ### Public deployment configuration
 
-The service selects dedicated or shared public request routing from the trusted
+The service selects dedicated public request routing from the trusted
 [deployment settings](../../ARCHITECTURE.md#public-request-tenancy). Local mode
-keeps the loopback-only LocalOperator authorizer; shared mode requires explicit
-credentialed authorization and a configured account-to-tenant mapping. Every
+keeps the loopback-only LocalOperator authorizer. Credentialed mode checks the
+connected broker authentication requirement on every authorization. VCP refuses
+shared startup until tenant-scoped storage (#1228) lands. Every
 handler receives the verified `Request.principal`. Future public downstream
 calls should use `Deployment.public_client(connection, request)` to preserve
 that identity. Internal runtime traffic remains a separate protocol.

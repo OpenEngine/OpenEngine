@@ -40,7 +40,14 @@ class CredentialedOperator:
     This is an explicit deployment choice, not end-user project RBAC.
     """
 
+    def __init__(self, connection: NATS | None = None):
+        self.connection = connection
+
     def authorize(self, request: Request) -> Principal:
+        # INFO is refreshed by nats-py on reconnect. A credentials path alone
+        # does not prove the broker challenged the connection. Fail closed.
+        if self.connection is None or self.connection._server_info.get("auth_required") is not True:
+            raise ServiceError(ErrorCode.PERMISSION_DENIED, "credentialed authorization requires broker authentication")
         if request.principal is None:
             raise ServiceError(ErrorCode.PERMISSION_DENIED, "verified principal required")
         return request.principal
@@ -84,8 +91,8 @@ class Deployment:
     def connection_options(self) -> dict[str, str]:
         return {"user_credentials": self.credentials} if self.credentials else {}
 
-    def authorizer(self) -> LocalOperator | CredentialedOperator:
-        return LocalOperator() if self.authorization == "local" else CredentialedOperator()
+    def authorizer(self, connection: NATS | None = None) -> LocalOperator | CredentialedOperator:
+        return LocalOperator() if self.authorization == "local" else CredentialedOperator(connection)
 
     def public_client(self, connection: NATS, request: Request) -> Client:
         """Bind outbound public calls to this request's verified identity and deployment mode."""

@@ -33,10 +33,10 @@ def test_configured_routing_and_initiating_principal_preserved(tmp_path, service
     deployment = configuration(tmp_path, mode)
     binary = install_nats_server(tmp_path / "cache")
     port = _free_port()
-    process = subprocess.Popen([str(binary), "-a", "127.0.0.1", "-p", str(port)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    process = subprocess.Popen([str(binary), "-a", "127.0.0.1", "-p", str(port), "--auth", "test-token"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     async def exercise():
-        connection = await nats.connect(f"nats://127.0.0.1:{port}")
+        connection = await nats.connect(f"nats://127.0.0.1:{port}", token="test-token")
         seen = []
 
         async def downstream(request):
@@ -49,9 +49,9 @@ def test_configured_routing_and_initiating_principal_preserved(tmp_path, service
             return reply["result"]
 
         servers = [Server(connection, service, "nats://127.0.0.1", queries={"inspect": Route(forward)},
-                          tenancy=deployment.tenancy, authorizer=deployment.authorizer()),
+                          tenancy=deployment.tenancy, authorizer=deployment.authorizer(connection)),
                    Server(connection, "tools", "nats://127.0.0.1", queries={"inspect": Route(downstream)},
-                          tenancy=deployment.tenancy, authorizer=deployment.authorizer())]
+                          tenancy=deployment.tenancy, authorizer=deployment.authorizer(connection))]
         try:
             for server in servers:
                 await server.start()
@@ -155,8 +155,62 @@ def test_service_boot_wires_deployment_to_connection_and_server(tmp_path, monkey
     monkeypatch.setattr(module, "Server", server)
     if service == "virtual_control_plane":
         monkeypatch.setattr(module, "providers", lambda: {})
-    with pytest.raises(ReachedServer):
+    expected = ValueError if service == "virtual_control_plane" and mode == "shared" else ReachedServer
+    with pytest.raises(expected):
         asyncio.run(module.serve("nats://broker", 0, None, object()))
+    if expected is ValueError:
+        assert captured == {}
+        return
     assert captured["connection"]["user_credentials"] == deployment.credentials
     assert captured["server"]["tenancy"] is deployment.tenancy
     assert isinstance(captured["server"]["authorizer"], CredentialedOperator)
+
+
+def test_credentialed_authorizer_rechecks_broker_authentication(tmp_path):
+    from openengine.messaging import Request
+    from openengine.messaging.errors import ServiceError
+
+    class Connection:
+        _server_info = {"auth_required": True}
+
+    connection = Connection()
+    authorizer = configuration(tmp_path, "dedicated").authorizer(connection)
+    request = Request(SUBJECT, "query", "graphs.list", {}, "nats://broker", principal=Principal(TENANT))
+    assert authorizer.authorize(request) == Principal(TENANT)
+    for info in ({}, {"auth_required": False}):
+        connection._server_info = info
+        with pytest.raises(ServiceError, match="broker authentication"):
+            authorizer.authorize(request)
+
+
+def test_credentialed_service_refuses_open_broker(tmp_path):
+    deployment = configuration(tmp_path, "dedicated")
+    binary = install_nats_server(tmp_path / "cache")
+    port = _free_port()
+    process = subprocess.Popen([str(binary), "-a", "127.0.0.1", "-p", str(port)],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    async def exercise():
+        connection = await nats.connect(f"nats://127.0.0.1:{port}", **deployment.connection_options())
+        seen = []
+
+        async def handler(request):
+            seen.append(request.principal)
+            return {}
+
+        server = Server(connection, "ge", "nats://127.0.0.1", queries={"inspect": Route(handler)},
+                        tenancy=deployment.tenancy, authorizer=deployment.authorizer(connection))
+        try:
+            await server.start()
+            reply = json.loads((await connection.request("oe.v1.ge.query.inspect", b'{"params": {}}')).data)
+            assert reply["error"]["code"] == "PERMISSION_DENIED"
+            assert seen == []
+        finally:
+            await connection.close()
+
+    try:
+        time.sleep(0.1)
+        asyncio.run(exercise())
+    finally:
+        process.terminate()
+        process.wait(timeout=5)

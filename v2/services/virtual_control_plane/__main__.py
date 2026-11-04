@@ -54,6 +54,7 @@ from openengine.messaging.deployment import Deployment
 from alembic.util import CommandError
 from openengine.messaging import Server, listen_address
 from openengine.messaging.server import is_loopback
+from openengine.messaging.tenancy import Mode
 from openengine.persistence import DatabaseConfig
 from openengine.telemetry import configure
 from sqlalchemy.exc import SQLAlchemyError
@@ -158,6 +159,9 @@ async def _health(healthy, reader: asyncio.StreamReader, writer: asyncio.StreamW
 
 async def serve(nats_url: str, health_port: int, ready_file: Path | None, store: DurableStore) -> int:
     deployment = Deployment.from_environment()
+    if deployment.tenancy.mode is Mode.SHARED:
+        message = "VCP shared mode requires tenant-scoped storage (#1228)"
+        raise ValueError(message)
     stopping = asyncio.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(signum, stopping.set)
@@ -186,7 +190,7 @@ async def serve(nats_url: str, health_port: int, ready_file: Path | None, store:
     log.info("providers configured", extra={"vcp.providers": sorted(lifecycle.providers)})
     execution = Execution(lifecycle)
     server = Server(connection, "vcp", listener, queries={**lifecycle.queries(), **execution.queries()}, commands=lifecycle.commands(),
-                    tenancy=deployment.tenancy, authorizer=deployment.authorizer())
+                    tenancy=deployment.tenancy, authorizer=deployment.authorizer(connection))
     publisher = OutboxPublisher(store, JetStreamEvents(connection.jetstream()))
     # Supervised host daemons register (`runtime.ready`) over the internal protocol;
     # no execute route is served, so nothing is delivered to them yet (#1055).
