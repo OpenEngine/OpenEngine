@@ -1,0 +1,31 @@
+name: duplication
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  duplication:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.28"
+      - name: Whole repository duplication gate
+        working-directory: head
+        run: uv run --project tools/quality --locked python tools/quality/gate.py --baseline-root ../base > duplication.json
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: duplication
+          path: head/duplication.json

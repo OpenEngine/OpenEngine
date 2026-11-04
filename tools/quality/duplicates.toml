@@ -1,0 +1,12 @@
+# Both revisions are scanned using this policy. No changed-file filter.
+roots = ["."]
+min_tokens = 100
+unit_min_tokens = 100
+similarity_threshold = 0.8
+test_patterns = ["tests", "__tests__", "test_*.py", "*_test.py", "*.test.ts", "*.test.tsx", "*.test.js", "*.spec.*", "conftest.py"]
+exclude_dirs = [".git", ".venv", "venv", "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".next", ".astro", ".engine", ".agents", ".claude", ".codex", "dist", "build", "coverage", "htmlcov", "target", "vendor", "playwright-report", "test-results"]
+exclude_paths = ["tests/fixtures", "tools/quality/fixtures", "site/static/v2", "scripts/code_graph_report.html", "docs/schema", "v2/docs/schema"]
+
+# Exceptions must name a content fingerprint, exact file paths and exact copy
+# counts, plus a nonempty rationale. Growth and stale exceptions fail closed.
+exceptions = []
