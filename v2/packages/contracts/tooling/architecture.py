@@ -142,7 +142,7 @@ def diagram() -> str:
         "    classDef runtime fill:#f1f5f9,stroke:#334155,color:#0f172a",
         "",
         '    subgraph apps["Apps"]',
-        '        cli["oe CLI"]',
+        '        cli["oe CLI: tenant credentials, plain subjects"]',
         '        supervisor["supervisor (oe up)"]',
         "    end",
         '    subgraph integrations["Integrations"]',
@@ -151,7 +151,7 @@ def diagram() -> str:
         "    end",
         "    class cli,supervisor app",
         "    class github,slack integration",
-        '    nats[("NATS server")]',
+        '    nats[("NATS: credential account identity<br/>GE dedicated/shared; VCP dedicated verified Principal")]',
         "    class nats stream",
     ]
     for service in SERVICES:

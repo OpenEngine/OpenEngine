@@ -115,6 +115,7 @@ async def _ask(nats_url: str, ask: Callable[[Client], Awaitable[T]]) -> T:
         connection = await nats.connect(
             nats_url, name="oe", connect_timeout=CONNECT_TIMEOUT_SECONDS, allow_reconnect=False,
             max_reconnect_attempts=1, reconnect_time_wait=0.1, error_cb=ignore,
+            **({"user_credentials": os.environ["OE_NATS_CREDENTIALS"]} if os.environ.get("OE_NATS_CREDENTIALS") else {}),
         )
     except (OSError, nats.errors.Error):
         raise NatsUnreachable(nats_url) from None
