@@ -56,7 +56,10 @@ Blinding can match unrelated responsibilities; shingles discard repetition count
 and statement order, and arbitrary repeated runs without shared subtrees can be
 missed. Review the differences before extracting an abstraction.
 
-Tests are exempt under DAMP, in both direct and fuzzy layers. `test_patterns` in
+The acceptance criteria intentionally exempt test code from both exact and fuzzy
+duplication layers: the project keeps tests DAMP and accepts repeated test setup.
+Tests are excluded by configured patterns and those exclusions are listed in the
+JSON output. `test_patterns` in
 `duplicates.toml` match path components: `tests`, `__tests__`, `test_*.py`,
 `*_test.py`, `*.test.ts`, `*.test.tsx`, `*.test.js`, `*.spec.*`, and `conftest.py`.
 JSON `excluded_tests` lists test files omitted from scanning. Dependencies,
