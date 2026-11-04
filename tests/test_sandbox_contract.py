@@ -1,7 +1,6 @@
 """Backend-neutral contract: add future factories to sandbox_backend's params."""
 
 import asyncio
-from pathlib import Path
 import sys
 import os
 
