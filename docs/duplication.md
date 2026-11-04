@@ -16,71 +16,122 @@ The baseline must exist and differ from the current tree.
 
 ## Matching contract
 
-The pinned detector is `engine-duplication-gate` 1.0.0 (`exact-tree-v1`), with
-Tree-sitter 0.25.2 and language-pack 0.10.0. Its isolated `uv.lock` pins grammar
-dependencies and artifact hashes. Change the detector version when changing
-fingerprint semantics, and re-evaluate baseline behavior on upgrades.
+The pinned detector is `engine-duplication-gate` 2.0.0 (`tree-clones-v2`), with
+Tree-sitter 0.25.2 and language-pack 0.10.0. The isolated `uv.lock` pins grammar
+artifacts. Both revisions use the head detection policy. CODEOWNERS requires
+maintainer review of `tools/quality/duplicates.toml`; repository branch protection
+must enforce code-owner review to prevent self-approved policy loosening.
 
-Every complete syntax subtree with at least `min_tokens` leaf tokens (default
-100) is a candidate. Ordered child hashes, node kinds and literal/identifier
-bytes define identity; SHA-256 hashes are grouped **directly**, never by
-transitive pairwise similarity. Comments and formatting outside literals are
-ignored. String/template subtrees are atomic and preserve their entire bytes,
-including whitespace, escaping and interpolation spelling. A long string alone
-does not satisfy the token threshold. No identifier renaming, literal folding,
-near-match or semantic equivalence is supported. Arbitrary statement sequences
-which do not form a complete subtree can be missed. Nested matching subtrees
-are independently reported, so a large clone can produce overlapping findings.
+Three channels participate, with `kind` values `exact`, `type2` and `type3`:
 
-The extension map explicitly supports Python, JavaScript (`.js`, `.mjs`),
-TypeScript, TSX, Bash, Rust and Go. Each grammar has an executable smoke test;
-repository-scale coverage currently exercises Python, JS, TS and TSX. Other
-extensions (including HTML, CSS, JSON, Markdown and extensionless scripts) are
-listed in JSON `unsupported`; they have no generic fallback. Embedded code in
-unsupported formats is not scanned. Different grammars never share groups.
-Tree-sitter accepts a syntax tree, not necessarily a program accepted by the
-language compiler; this is not a correctness or shared-responsibility proof.
+- Exact: ordered syntax-subtree hashes preserve identifiers, literals, operators,
+  keywords and structure. Comments and Python backslash continuations outside
+  literals are ignored. Strings/templates are atomic, preserving their bytes.
+- Type-2: a second channel in `fingerprints()` blinds identifiers to ID, numeric
+  literals to NUM and strings/templates to STR. Operators, keywords and structure
+  stay. Hashes are grouped directly; there is no similarity chaining.
+- Type-3: functions, methods and classes of at least `unit_min_tokens` (100) use
+  sets of blinded inner-subtree hashes with at least five tokens. Inner function
+  and class wrappers are omitted from shingles. An inverted index generates
+  candidate pairs sharing shingles within a grammar. Exact set Jaccard verifies
+  each candidate at `similarity_threshold` (0.8). No sampling or MinHash is used.
+  Units sorted by path, byte offset and exact hash join the first complete-link
+  cluster whose every member meets the threshold. This conservative greedy
+  partition is deterministic; it can miss overlapping cliques. A-B and B-C never
+  imply A-C. Only clusters spanning at least three distinct files are reported.
 
-`duplicates.toml` sets source roots and explicitly excludes dependency/cache
-directories, generated schema/atlas reports, build output and detector fixtures.
-Other tests participate. Symlinks are not followed. There is no large-file skip.
-Unreadable supported files and parse errors fail closed. A known pinned-grammar
-failure in `apps/web/src/loops.test.tsx` has a reviewable, exact-file SHA-256
-parse waiver with rationale; JSON lists this file as unscanned. Editing it
-invalidates the waiver; fixing it requires removing the stale waiver. Reviewed
-parse waivers in the base policy remain available for the baseline scan when
-head fixes such a failure. All other detection settings come from head and are
-identical for both scans, including when the base predates this gate.
+`min_tokens` defaults to 100 for direct matches. Long strings count as one token.
+Module/root wrappers are excluded: removing an unrelated module setting must not
+create a new clone of an unchanged function. A group is suppressed when every
+location is contained in a larger reported group with the same file spread.
+Equal spans prefer exact, then Type-2, then Type-3. Reports therefore show a cloned
+function once; raw scan groups retain channel information for inspection.
 
-Two files are permitted. A group fails when it spans at least three distinct
-files **and** its distinct-file count or total occurrence count increases.
-Multiple copies in one file do not count as multiple files. Existing unchanged
-debt and unrelated edits pass. Content-preserving renames, moves and line shifts
-pass: counts are compared by content identity, independent of paths/lines.
-Replacing a removed occurrence with an identical occurrence elsewhere is treated
-as relocation. A change shared by three files gets a new fingerprint and fails;
-changing only one occurrence usually reduces the old group and passes. A third
-file, fourth file or extra occurrence in an already qualifying group fails.
+Python, JavaScript (.js/.mjs), TypeScript, TSX, Bash, Rust and Go extensions match
+case-insensitively. Unsupported files are listed in JSON; embedded code in HTML,
+CSS, Markdown and other unsupported formats is not scanned. Grammar smoke tests
+cover every supported language. Grammar acceptance is not compiler validation.
+Syntax similarity suggests candidates for abstraction, not semantic equivalence.
+Blinding can match unrelated responsibilities; shingles discard repetition counts
+and statement order, and arbitrary repeated runs without shared subtrees can be
+missed. Review the differences before extracting an abstraction.
 
-Diagnostics include every file and line range, the fingerprint and shared source
-context. JSON includes full shared context for findings, all scan groups,
-unsupported files, parse waivers, errors and timing. Resolve findings by extracting
-an appropriate abstraction, or explain why these copies have independent
-responsibilities in a scoped exception. Similar syntax alone does not justify
-forcing unrelated responsibilities into one abstraction.
+Tests are exempt under DAMP, in both direct and fuzzy layers. `test_patterns` in
+`duplicates.toml` match path components: `tests`, `__tests__`, `test_*.py`,
+`*_test.py`, `*.test.ts`, `*.test.tsx`, `*.test.js`, `*.spec.*`, and `conftest.py`.
+JSON `excluded_tests` lists test files omitted from scanning. Dependencies,
+generated code, build output and detector fixtures remain explicitly excluded.
+Symlinks are not followed. There is no large-file skip. Parse failures and read
+errors fail closed; `files` counts only successfully parsed files. The former TSX
+test grammar waiver is unnecessary because tests no longer participate.
+
+Two similar files remain allowed. Exact and Type-2 groups fail only when they
+span three files and distinct-file count or occurrence count increases versus
+base. Type-3 findings require a qualifying group containing an exact unit identity
+whose count increased versus base (including a previously unseen exact hash).
+This detects new third/fourth copies as well as edits joining existing near-clones.
+Unchanged debt, content-preserving moves, renames and line shifts pass. Replacing a
+removed copy with an identical copy elsewhere is treated as relocation. A changed
+literal in one member of a three-file fuzzy group can now require review.
+
+Diagnostics include all locations. Fuzzy members include similarity to a named
+reference, differing shingle hashes and bounded statement excerpts for those
+shingles. Scores reference the least similar peer so differences remain visible.
+Source context is bounded to 1,200 bytes per finding and read by byte range.
+JSON serialization is sorted and contains no timings or nondeterministic fields;
+identical inputs produce identical bytes. Use `benchmark.py` for timing and RSS.
+
+Resolve a finding by extracting an appropriate abstraction or adding a scoped
+exception with rationale:
 
 ```toml
 [[exceptions]]
-fingerprint = "python:<hash from diagnostic>"
+fingerprint = "<key from diagnostic>"
 files = { "a.py" = 1, "b.py" = 1, "c.py" = 1 }
-rationale = "Explain why these exact copies should remain independently owned."
+rationale = "Explain why these copies should remain independently owned."
 ```
 
-Replace `exceptions = []` with these array entries, **before** any
-`[parse_exceptions...]` tables. Exceptions require exact content, paths, copy
-counts and a nonempty rationale. Wildcards and duplicate entries are rejected.
-Growth, moves, content changes or removal make a waiver fail until reviewed and
-updated/removed. Exceptions never become directory exclusions automatically.
+Replace `exceptions = []` with these entries. Direct keys use channel fingerprints;
+Type-3 exception keys hash the sorted list of unit blinded hashes and exact paths,
+including multiplicities. The JSON members expose those identities for review.
+Exact file/count scope, a nonempty rationale and no wildcard paths are required.
+Growth, moves or structural changes invalidate the exception. Blinded exceptions
+intentionally survive identifier/literal changes. Stale exceptions fail closed.
+Reviewed parse waivers from base remain available only to its baseline scan.
+
+## Type-2/Type-3 calibration
+
+Measured against PR base `39ea9a1f2c37b1a35c8263f76d443ba83222e260`, macOS
+arm64, warm caches. Each row is a fresh process scanning all 503 non-test source
+files (3,922,573 bytes), then grouping all layers. Counts are qualifying groups
+after nested suppression within direct and fuzzy layers; exact wins equal direct
+spans. There are 1,658 eligible units and no parse errors.
+
+| Threshold | Exact | Type-2 | Type-3 | Scan + grouping seconds | Peak RSS MiB |
+| --- | --- | --- | --- | --- | --- |
+| 0.7 | 0 | 0 | 1 | 5.28 | 83.55 |
+| 0.8 | 0 | 0 | 1 | 5.23 | 82.56 |
+| 0.9 | 0 | 0 | 1 | 5.08 | 82.80 |
+
+Default 0.8 retains the added-branch regression while producing only one existing
+group, so base debt is tolerable and unchanged debt is nonblocking. That group
+contains functions in runtime/terminal_mcp.py, single_tool_mcp/__init__.py and
+slack_concierge/slack_egress.py, with minimum pair similarity 0.9375. These are
+measurements, not evidence of semantic equivalence or enforced CI budgets.
+
+Reproduce each threshold with (substitute 0.7 and 0.9):
+
+```sh
+uv run --project tools/quality --locked python tools/quality/benchmark.py --root /path/to/base --threshold 0.8
+```
+
+Three generated ~1 MiB Python files (30,000 assignments each) took 2.66 seconds
+and 380.34 MiB peak RSS with both blinded and exact trees. One direct and one
+fuzzy group collapse to one finding. No file-size skip applies. Candidate work
+can approach quadratic for a repository where every unit shares a shingle;
+there is no unconditional all-pairs similarity pass. Large nested classes and
+many candidate matches still increase memory and runtime. Context excerpts remain
+bounded even for deeply nested expressions.
 
 ## Evaluation and selection
 
@@ -120,5 +171,5 @@ The regression suite validates three-file matches, disjoint pairwise chains,
 small boilerplate, exact literal/name preservation, formatting/comments,
 all supported grammars, large files, exclusions, baseline transitions, relocation,
 content changes, exception growth, parse failures and machine-readable CLI output.
-The conservative subtree contract is selected over structural anonymization:
-it can point to exact shared code without claiming semantic equivalence.
+The original evaluation below predates Type-2/Type-3 support; the new calibration
+applies the DAMP exclusions and deterministic similarity policy described above.

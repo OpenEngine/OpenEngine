@@ -1,2 +1,4 @@
 # Each entry lets a table hold rows that belong to no tenant.
 /v2/packages/persistence/src/openengine/persistence/tenancy/global_tables.toml @SheaHawkins @dethstrobe
+
+/tools/quality/duplicates.toml @SheaHawkins @dethstrobe

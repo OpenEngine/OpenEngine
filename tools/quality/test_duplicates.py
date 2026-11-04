@@ -67,7 +67,7 @@ class DuplicationTests(unittest.TestCase):
         self.assertFalse(self.findings())
 
     def test_pairwise_chain_is_not_a_three_file_clone(self):
-        first, second = block("one"), block("two", 100)
+        first, second = block("one"), block("two", 100).replace("transform(value,", "transform(value * value + 1,")
         self.write(self.head, "a.py", first)
         self.write(self.head, "b.py", first + second)
         self.write(self.head, "c.py", second)
@@ -90,9 +90,9 @@ class DuplicationTests(unittest.TestCase):
         self.copies(self.head, 3)
         self.write(self.head, "copy0.py", block() * 2)
         self.assertTrue(self.findings())
-        # Changing just one occurrence to unrelated code reduces existing debt.
+        # Changing one literal now joins the qualifying near-duplicate group.
         self.write(self.head, "copy0.py", block(offset=500))
-        self.assertFalse(self.findings())
+        self.assertTrue(self.findings())
 
     def test_small_boilerplate_and_configurable_threshold(self):
         self.copies(self.head, 3, "def identity(value):\n    return value\n")
@@ -153,7 +153,7 @@ class DuplicationTests(unittest.TestCase):
         self.assertNotEqual(keys('label = "a\\\nb"\n'), keys('label = "ab"\n'))
 
     def test_reporting_reads_only_each_context_byte_range(self):
-        self.copies(self.head, 3, block("first") + block("second", 100))
+        self.copies(self.head, 3, block("first") + block("second", 100).replace("transform(value,", "transform(value * value + 1,"))
         base, current = self.scan(self.base), self.scan(self.head)
         found = detector.findings(current, base)
         self.assertGreater(len(found), 1)
@@ -183,10 +183,108 @@ class DuplicationTests(unittest.TestCase):
         expected = []
         for key, group in sorted(found.items()):
             loc = group["locations"][0]
-            expected.append((loc["start_byte"], loc["end_byte"] - loc["start_byte"]))
+            expected.append((loc["start_byte"], min(1200, loc["end_byte"] - loc["start_byte"])))
             self.assertEqual(json.loads(stdout.getvalue())["findings"][key]["context"],
-                             sources[loc["path"]][loc["start_byte"]:loc["end_byte"]].decode())
+                             sources[loc["path"]][loc["start_byte"]:min(loc["end_byte"], loc["start_byte"] + 1200)].decode())
         self.assertEqual(reads, expected)
+
+    def test_type2_renames_and_two_file_policy(self):
+        for i in range(2):
+            self.write(self.head, f"unit{i}.py", block().replace("value", f"renamed{i}"))
+        self.assertFalse(self.findings())
+        self.write(self.head, "unit2.py", block().replace("value", "other"))
+        found = self.findings()
+        self.assertTrue(any(g["kind"] == "type2" for g in found.values()))
+        self.assertTrue(all(len(detector.scope(g)) == 3 for g in found.values()))
+
+    def test_type3_extra_branch_and_changed_unit_baseline(self):
+        original = block() + ""
+        # Diverse structure prevents a repeated single statement from dominating sets.
+        original = original.replace("    return value", """    for item in value:
+        if item.ready:
+            value.append(item.result())
+        else:
+            value.remove(item)
+    try:
+        value.sort(key=lambda item: item.name)
+    except ValueError:
+        value.clear()
+    return value""")
+        changed = original.replace("    return value", "    if value is None:\n        return []\n    return value")
+        self.copies(self.base, 2, original)
+        self.copies(self.head, 2, original)
+        self.write(self.head, "third.py", changed)
+        report = self.scan(self.head)
+        groups = detector.fuzzy_groups(report["units"], .8)
+        self.assertTrue(groups)
+        self.assertTrue(any(g["kind"] == "type3" for g in self.findings().values()))
+        for group in groups.values():
+            self.assertTrue(all(m["score"] >= .8 for m in group["locations"]))
+            self.assertTrue(any(m["added_shingles"] or m["removed_shingles"]
+                                for m in group["locations"]))
+        self.write(self.base, "third.py", changed)
+        self.assertFalse(self.findings())
+        (self.head / "third.py").rename(self.head / "relocated.py")
+        self.assertFalse(self.findings())
+
+    def test_test_exemptions_case_and_parse_counts(self):
+        paths = ["tests/a.py", "nested/tests/b.py", "x/__tests__/a.ts", "test_a.py",
+                 "a_test.py", "a.test.ts", "a.test.tsx", "a.test.js", "a.spec.jsx", "conftest.py"]
+        for path in paths:
+            self.write(self.head, path, "invalid code (")
+        self.write(self.head, "source.PY", block())
+        report = self.scan(self.head)
+        self.assertEqual(report["excluded_tests"], sorted(paths))
+        self.assertEqual(report["files"], 1)
+        self.assertFalse(self.findings())
+        self.write(self.head, "broken.py", "def invalid(")
+        report = detector.scan(self.head, self.config)
+        self.assertTrue(report["errors"])
+        self.assertEqual(report["files"], 1)
+
+    def test_cli_output_is_byte_identical(self):
+        self.copies(self.head, 3)
+        command = [sys.executable, detector.__file__, "--root", str(self.head),
+                   "--baseline-root", str(self.base)]
+        first = subprocess.run(command, capture_output=True, check=False)
+        second = subprocess.run(command, capture_output=True, check=False)
+        self.assertEqual(first.returncode, 1)
+        self.assertEqual(first.stdout, second.stdout)
+        self.assertEqual(first.stderr, second.stderr)
+
+    def test_wrapper_changes_and_nested_noise(self):
+        self.copies(self.base, 3)
+        self.copies(self.head, 3)
+        self.write(self.base, "copy0.py", block() + "setting = 1\n")
+        self.assertFalse(self.findings())
+        empty = {"groups": {}, "units": []}
+        found = detector.findings(self.scan(self.head), empty)
+        self.assertEqual(len(found), 1)
+
+    def test_fuzzy_exception_scope_is_blinded_and_exact_path_scoped(self):
+        self.copies(self.head, 3)
+        report = self.scan(self.head)
+        report["fuzzy_groups"] = detector.fuzzy_groups(report["units"], .8)
+        found = dict(report["fuzzy_groups"])
+        exceptions = [{"fingerprint": key, "files": detector.scope(group),
+                       "rationale": "Separate ownership requires these copies"}
+                      for key, group in found.items()]
+        self.assertTrue(found)
+        self.assertFalse(detector.apply_exceptions(found, report, exceptions))
+        self.assertFalse(found)
+        self.copies(self.head, 4)
+        grown = self.scan(self.head)
+        grown["fuzzy_groups"] = detector.fuzzy_groups(grown["units"], .8)
+        self.assertTrue(detector.apply_exceptions(dict(grown["fuzzy_groups"]), grown, exceptions))
+
+    def test_fuzzy_does_not_chain(self):
+        units = []
+        for i, shingles in enumerate((list("abcdefgh"), list("abcdefghi"), list("bcdefghi"))):
+            units.append({"language": "python", "path": f"{i}.py", "start": 1, "end": 10,
+                          "start_byte": 0, "end_byte": 100, "exact": str(i),
+                          "blinded": str(i), "tokens": 100, "shingles": shingles})
+        # A-B and B-C pass .85, A-C fails. Never report a transitive triple.
+        self.assertFalse(detector.fuzzy_groups(units, .85))
 
     def test_parse_error_never_silently_skips_and_waiver_is_content_scoped(self):
         import hashlib

@@ -4,7 +4,7 @@ requires-python = ">=3.11"
 
 [[package]]
 name = "engine-duplication-gate"
-version = "1.0.0"
+version = "2.0.0"
 source = { virtual = "." }
 dependencies = [
     { name = "tree-sitter" },
