@@ -139,6 +139,13 @@ there is no unconditional all-pairs similarity pass. Large nested classes and
 many candidate matches still increase memory and runtime. Context excerpts remain
 bounded even for deeply nested expressions.
 
+Pair state grows with the square of the number of units sharing a shingle set:
+1,600 identical units require roughly 225 MiB of pair state. This quadratic case
+needs hundreds of identical-shingle units; the real base's 1,658 units cost about
+5 seconds and 83 MiB peak RSS overall. Maintainers consider this limit non-blocking
+for this PR, so pair-collapsing logic is deferred. Function size and complexity
+limits are tracked in [#1324](https://github.com/OpenEngine/OpenEngine/issues/1324).
+
 Descendant collection has a separate scaling limit: for each eligible function,
 method or class, it scans the file's inner-subtree list to collect shingles and
 contexts. This costs O(U × N), where U is the number of eligible units and N is
