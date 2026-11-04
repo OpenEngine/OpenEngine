@@ -86,6 +86,23 @@ def test_invalid_deployment_refused(environment):
         Deployment.from_environment(environment)
 
 
+@pytest.mark.parametrize("tenant", [None, "", "spoof"])
+def test_credentialed_dedicated_requires_explicit_valid_tenant(tmp_path, tenant):
+    credentials = tmp_path / "tenant.creds"
+    credentials.touch()
+    environment = {"OE_AUTHORIZATION": "credentialed", "OE_NATS_CREDENTIALS": str(credentials)}
+    if tenant is not None:
+        environment["OE_TENANT_ID"] = tenant
+    with pytest.raises(ValueError, match="OE_TENANT_ID" if not tenant else "tenant"):
+        Deployment.from_environment(environment)
+
+
+def test_local_deployment_defaults_to_local_tenant():
+    from openengine.messaging.tenancy import LOCAL_TENANT, Dedicated
+
+    assert Deployment.from_environment({}).tenancy == Dedicated(LOCAL_TENANT)
+
+
 def test_oe_up_overrides_inherited_shared_settings_and_cli_subjects(tmp_path):
     oe = _oe(tmp_path / "state")
     try:

@@ -75,6 +75,8 @@ class Deployment:
         if authorization == "credentialed" and not credentials:
             _refuse("credentialed authorization requires OE_NATS_CREDENTIALS")
         if mode == "dedicated":
+            if authorization == "credentialed" and not env.get("OE_TENANT_ID"):
+                _refuse("credentialed dedicated mode requires explicit OE_TENANT_ID")
             tenancy = Dedicated(env.get("OE_TENANT_ID", LOCAL_TENANT))
         elif mode == "shared":
             if authorization != "credentialed":

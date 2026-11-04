@@ -64,7 +64,9 @@ Each service owns its database (see [packages/persistence](packages/persistence/
 ## Public request tenancy
 
 GE and VCP load trusted process configuration using `Deployment.from_environment`.
-`OE_TENANCY_MODE=dedicated` uses `OE_TENANT_ID` (default LOCAL_TENANT).
+`OE_TENANCY_MODE=dedicated` uses `OE_TENANT_ID` (default LOCAL_TENANT for
+local authorization). Credentialed dedicated deployments require an explicit
+`OE_TENANT_ID`; they never default to the local tenant.
 `shared` resolves broker-written account tokens using a cached resolver over
 the `OE_ACCOUNT_TENANTS` JSON account-to-tenant mapping. Unknown accounts are
 refused; payload identity grants no access. VCP refuses shared startup until
