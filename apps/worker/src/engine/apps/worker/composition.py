@@ -16,14 +16,17 @@ from engine.adapters.sandbox.smolvm import SmolvmSandbox
 from engine.adapters.source_control.github import GitHubSourceControl
 from engine.adapters.state_store.postgres import PostgresStateStore
 from engine.adapters.workflow_runtime.temporal import TemporalWorkflowRuntime
-from engine.adapters.workspace_provider.git_worktree import GitWorktreeWorkspaceProvider
+from engine.adapters.workspace_provider.git_worktree import (
+    DEFAULT_ROOT_DIRECTORY,
+    GitWorktreeWorkspaceProvider,
+)
 from engine.runtime import Capabilities, Dispatcher
 from engine.apps.worker.settings import Settings
 
 
 def build_capabilities(settings: Settings) -> Capabilities:
     """Wire every port to its concrete implementation."""
-    workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root)
+    workspace_provider = GitWorktreeWorkspaceProvider(settings.workspace_root or DEFAULT_ROOT_DIRECTORY)
     logging.getLogger(__name__).log(
         logging.INFO if settings.github_token else logging.WARNING,
         "source_control composition=worker github_identity=service credential=settings.github_token configured=%s",

@@ -13,6 +13,7 @@ import tomllib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Self
 
 from engine.domain import ForgeMode
 from engine.ports.agent_runner import ResponseStyle
@@ -321,6 +322,38 @@ class EngineConfig:
     Configured explicitly when approvals are left to trusted repositories:
     `approvals.auto_approve` covers every repository, this only the ones named.
     """
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceSettings:
+    """What a headless deployable needs, layered on the loaded Engine config."""
+
+    temporal_host: str = "localhost:7233"
+    github_token: str = ""
+    buzz_base_url: str = ""
+    buzz_api_token: str = ""
+    workspace_root: str = ""
+    """Blank means the workspace provider's own default root."""
+    postgres_dsn: str = ""
+    engine_config: EngineConfig = EngineConfig()
+    """Provider-neutral settings loaded from TOML.
+
+    `approvals` governs turns that can pause to ask, and these processes run
+    none: their runner is the unattended one, held to its sandbox rather than
+    to a policy. Read here so they refuse to start on a file the interface
+    would refuse too.
+    """
+    config_path: Path | None = None
+
+    @classmethod
+    def from_env(cls, loaded: LoadedEngineConfig, environ: Mapping[str, str] | None = None) -> Self:
+        """Build once at startup: the process environment overrides the TOML config."""
+        environment = os.environ if environ is None else environ
+        return cls(
+            engine_config=loaded.config,
+            config_path=loaded.path,
+            github_token=environment.get("GITHUB_TOKEN", loaded.config.github_token),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1026,6 +1059,7 @@ __all__ = [
     "SessionsConfig",
     "DEFAULT_SESSION_TOOLS",
     "LoadedEngineConfig",
+    "ServiceSettings",
     "ResponseStyle",
     "ServerConfig",
     "SandboxConfig",

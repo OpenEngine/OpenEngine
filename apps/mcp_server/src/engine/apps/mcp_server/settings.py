@@ -1,12 +1,20 @@
 """Gateway settings, the only module here that reads the environment."""
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 import os
 import re
 from urllib.parse import urlsplit
 
 from .auth import https_url
+
+
+_ISSUER_DEPENDENT = ("OE_MCP_OIDC_AUDIENCE", "OE_MCP_ALLOWED_EMAILS", "OE_MCP_OIDC_REQUIRED_SCOPES")
+
+
+def _reject_without_issuer(configured: Iterable[str]) -> None:
+    for name in configured:
+        raise ValueError(f"{name} requires OE_MCP_OIDC_ISSUER; unset it for static-token mode")
 
 
 @dataclass(frozen=True)
@@ -31,13 +39,13 @@ class Settings:
 
     def __post_init__(self) -> None:
         if self.oidc_issuer is None:
-            for name, configured in (
-                ("OE_MCP_OIDC_AUDIENCE", self.oidc_audience is not None),
-                ("OE_MCP_ALLOWED_EMAILS", bool(self.allowed_emails)),
-                ("OE_MCP_OIDC_REQUIRED_SCOPES", bool(self.oidc_required_scopes)),
-            ):
-                if configured:
-                    raise ValueError(f"{name} requires OE_MCP_OIDC_ISSUER; unset it for static-token mode")
+            _reject_without_issuer(
+                name for name, configured in (
+                    ("OE_MCP_OIDC_AUDIENCE", self.oidc_audience is not None),
+                    ("OE_MCP_ALLOWED_EMAILS", bool(self.allowed_emails)),
+                    ("OE_MCP_OIDC_REQUIRED_SCOPES", bool(self.oidc_required_scopes)),
+                ) if configured
+            )
         if (not self.oidc_issuer or self.token) and (len(self.token) < 32 or any(c.isspace() for c in self.token)):
             raise ValueError("MCP token must contain at least 32 non-whitespace characters")
         if self.engine_token:
@@ -74,16 +82,14 @@ class Settings:
     def from_env(cls, environ: Mapping[str, str] | None = None) -> "Settings":
         """Build once at startup; a missing required variable is named in the error."""
         environment = os.environ if environ is None else environ
-        # Check presence before parsing: even empty OIDC variables indicate configuration.
-        if "OE_MCP_OIDC_ISSUER" not in environment:
-            for name in ("OE_MCP_OIDC_AUDIENCE", "OE_MCP_ALLOWED_EMAILS", "OE_MCP_OIDC_REQUIRED_SCOPES"):
-                if name in environment:
-                    raise ValueError(f"{name} requires OE_MCP_OIDC_ISSUER; unset it for static-token mode")
         required = {}
         for name in ("OE_MCP_REPOSITORY", "OE_MCP_WORKFLOW", "OE_MCP_PUBLIC_URL"):
             if name not in environment:
                 raise ValueError(f"missing required environment variable {name}")
             required[name] = environment[name]
+        # Presence, not value: even empty OIDC variables indicate configuration.
+        if "OE_MCP_OIDC_ISSUER" not in environment:
+            _reject_without_issuer(name for name in _ISSUER_DEPENDENT if name in environment)
         return cls(
             token=environment.get("OE_MCP_TOKEN", ""),
             repository=required["OE_MCP_REPOSITORY"],
