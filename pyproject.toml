@@ -103,6 +103,7 @@ max-statements = 1348  # web.api.create_app; #748
 "apps/mcp_server/src/engine/apps/mcp_server/__main__.py" = ["TRY003", "TRY301"]  # #779
 "apps/mcp_server/src/engine/apps/mcp_server/auth.py" = ["TRY003", "TRY004"]  # #779
 "apps/mcp_server/src/engine/apps/mcp_server/server.py" = ["TRY003", "TRY004", "TRY301"]  # #779
+"apps/mcp_server/src/engine/apps/mcp_server/settings.py" = ["TRY003", "TRY004", "TRY301"]  # #779
 "apps/web/hatch_build.py" = ["TRY003"]  # #779
 "apps/web/src/engine/apps/web/__main__.py" = ["TRY003"]  # #779
 "apps/web/src/engine/apps/web/api.py" = ["TRY003", "TRY301"]  # #779
