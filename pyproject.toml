@@ -86,12 +86,12 @@ select = ["E4", "E7", "E9", "F", "C901", "PLR0912", "PLR0913", "PLR0915", "BLE00
 
 # Measured with Ruff 0.17.0; ratchet down in #779 as the owning refactors land.
 [tool.ruff.lint.mccabe]
-max-complexity = 534  # web.api.create_app; #748
+max-complexity = 489  # web.api.create_app; #748
 
 [tool.ruff.lint.pylint]
-max-branches = 35  # TerminalMcpBroker._repository_call; #755
+max-branches = 34  # TerminalMcpBroker._repository_call; #755
 max-args = 33  # web.api.create_app; #743
-max-statements = 1459  # web.api.create_app; #748
+max-statements = 1348  # web.api.create_app; #748
 
 [tool.ruff.lint.per-file-ignores]
 # Existing diagnostics only: no directory globs or whole rule-family ignores.
@@ -105,7 +105,7 @@ max-statements = 1459  # web.api.create_app; #748
 "apps/mcp_server/src/engine/apps/mcp_server/server.py" = ["TRY003", "TRY004", "TRY301"]  # #779
 "apps/web/hatch_build.py" = ["TRY003"]  # #779
 "apps/web/src/engine/apps/web/__main__.py" = ["TRY003"]  # #779
-"apps/web/src/engine/apps/web/api.py" = ["F821", "TRY003", "TRY301"]  # #779
+"apps/web/src/engine/apps/web/api.py" = ["TRY003", "TRY301"]  # #779
 "apps/web/src/engine/apps/web/composition.py" = ["TRY003"]  # #779
 "apps/web/src/engine/apps/web/github_auth.py" = ["TRY003"]  # #779
 "apps/web/src/engine/apps/web/github_communications.py" = ["TRY003"]  # #779
@@ -142,7 +142,7 @@ max-statements = 1459  # web.api.create_app; #748
 "packages/adapters/source_control/github/src/engine/adapters/source_control/github/__init__.py" = ["TRY003"]  # #779
 "packages/adapters/source_control/github/src/engine/adapters/source_control/github/transports.py" = ["TRY003", "TRY300"]  # #779
 "packages/adapters/source_control/github/src/engine/adapters/source_control/github/verification.py" = ["TRY003"]  # #779
-"packages/adapters/source_control/gitlab/src/engine/adapters/source_control/gitlab/__init__.py" = ["E701", "E702", "F401", "TRY003"]  # #779
+"packages/adapters/source_control/gitlab/src/engine/adapters/source_control/gitlab/__init__.py" = ["TRY003"]  # #779
 "packages/adapters/source_control/gitlab/src/engine/adapters/source_control/gitlab/transports.py" = ["TRY003"]  # #779
 "packages/adapters/state_store/memory/src/engine/adapters/state_store/memory/__init__.py" = ["TRY003"]  # #779
 "packages/adapters/state_store/sqlite/src/engine/adapters/state_store/sqlite/__init__.py" = ["TRY003"]  # #779
@@ -151,7 +151,7 @@ max-statements = 1459  # web.api.create_app; #748
 "packages/graph_runtime/src/engine/graph_runtime/api.py" = ["TRY003", "TRY004"]  # #779
 "packages/graph_runtime/src/engine/graph_runtime/executions.py" = ["TRY003"]  # #779
 "packages/graph_runtime/src/engine/graph_runtime/inputs.py" = ["TRY003", "TRY004"]  # #779
-"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/acp.py" = ["F402", "TRY003", "TRY004"]  # #779
+"packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/acp.py" = ["TRY003", "TRY004"]  # #779
 "packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/components/ci_check.py" = ["TRY003"]  # #779
 "packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/components/findings.py" = ["TRY003", "TRY004"]  # #779
 "packages/graph_runtime_langgraph/src/engine/graph_runtime_langgraph/components/name.py" = ["TRY003", "TRY301"]  # #779
@@ -190,19 +190,18 @@ max-statements = 1459  # web.api.create_app; #748
 "tests/test_approvals.py" = ["TRY003"]  # #779
 "tests/test_cli_session.py" = ["TRY003"]  # #779
 "tests/test_github_auth.py" = ["TRY003"]  # #779
-"tests/test_github_concierge.py" = ["E402", "F401", "TRY003"]  # #779
+"tests/test_github_concierge.py" = ["TRY003"]  # #779
 "tests/test_github_ingress.py" = ["TRY003"]  # #779
 "tests/test_github_login.py" = ["TRY003"]  # #779
 "tests/test_github_source_control.py" = ["TRY003"]  # #779
 "tests/test_graph_components.py" = ["TRY003"]  # #779
 "tests/test_graph_runtime_langgraph.py" = ["TRY003"]  # #779
 "tests/test_graph_runtime_langgraph_acp.py" = ["TRY003"]  # #779
-"tests/test_graph_service.py" = ["F401", "TRY003"]  # #779
+"tests/test_graph_service.py" = ["TRY003"]  # #779
 "tests/test_graph_workflow_inputs.py" = ["TRY003"]  # #779
-"tests/test_layout_helpers.py" = ["F401"]  # #779
 "tests/test_remote_mcp.py" = ["TRY003"]  # #779
 "tests/test_runner_utilization.py" = ["TRY003"]  # #779
-"tests/test_sandbox_contract.py" = ["F401", "TRY003"]  # #779
+"tests/test_sandbox_contract.py" = ["TRY003"]  # #779
 "tests/test_single_tool_mcp.py" = ["TRY003"]  # #779
 "tests/test_slack_controls.py" = ["TRY003"]  # #779
 "tests/test_slack_transcript_mirroring.py" = ["TRY003"]  # #779

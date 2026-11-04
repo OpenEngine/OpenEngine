@@ -11,19 +11,20 @@ inherit it. The independent `apps/open-verify` distribution keeps its existing
 Ruff configuration; the root command also checks it with those rules.
 
 The baseline enables `E4`, `E7`, `E9`, `F`, `C901`, `PLR0912`, `PLR0913`,
-`PLR0915`, `BLE001` and all stable `TRY` rules. Initial measured maxima with
-Ruff 0.16.10 are:
+`PLR0915`, `BLE001` and all stable `TRY` rules. Current measured ceilings with
+Ruff 0.17.0 are:
 
 | Rule | Ceiling | Current owner | Refactor |
 | --- | ---: | --- | --- |
-| C901 | 534 | `web.api.create_app` | #748 |
-| PLR0912 | 35 | `TerminalMcpBroker._repository_call` | #755 |
+| C901 | 489 | `web.api.create_app` | #748 |
+| PLR0912 | 34 | `TerminalMcpBroker._repository_call` | #755 |
 | PLR0913 | 33 | `web.api.create_app` | #743 |
-| PLR0915 | 1459 | `web.api.create_app` | #748 |
+| PLR0915 | 1348 | `web.api.create_app` | #748 |
 
 [Issue #779](https://github.com/OpenEngine/OpenEngine/issues/779) tracks removal
-of every exact-file/rule exception in `pyproject.toml`, including the existing
-undefined workflow names in `web.api`. New files receive the full rule set.
+of the remaining exception-handling baselines in `pyproject.toml`. The
+E4/E7/E9/F exact-file exceptions have been removed, including the unreferenced
+legacy workflow helpers in `web.api` that still named the removed executor. New files receive the full rule set.
 File-level exceptions still allow that particular violation in the named file;
 remove them as the corresponding code is refactored. Do not expand the list or
 raise ceilings to accommodate new code.

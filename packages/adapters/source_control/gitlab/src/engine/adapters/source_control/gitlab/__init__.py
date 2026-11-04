@@ -8,7 +8,7 @@ from urllib.parse import quote, urlparse
 
 from engine.adapters.source_control.gitlab.transports import GitLabOAuthTransport, GitLabTransportError
 from engine.domain.ids import WorkspaceId
-from engine.ports.source_control import ChangeRequest, CommentResult, Discussion, GitResult, JobLogs, Pipeline, PipelineRetry, PipelineStatus, StatusCheck, WorkItem
+from engine.ports.source_control import ChangeRequest, CommentResult, Discussion, GitResult, JobLogs, Pipeline, PipelineRetry, PipelineStatus, WorkItem
 from engine.ports.workspace_provider import WorkspaceProvider
 from engine.runtime.change_requests import change_request, names_a_project_step
 from engine.runtime.git_core import DEFAULT_GIT_BINARY, GitInvoker, guard_push, refuse_internal_branch
@@ -64,7 +64,8 @@ class GitLabSourceControl:
         project = await self._project(workspace_id)
         result = await self._api("POST", f"/projects/{project}/merge_requests", json={"source_branch": branch, "target_branch": base_ref, "title": title, "description": body})
         url = self._str(result, "web_url")
-        if not url: raise GitLabSourceControlError("GitLab returned no merge-request URL")
+        if not url:
+            raise GitLabSourceControlError("GitLab returned no merge-request URL")
         return url
 
     async def approve_change_request(self, project: str, number: int, body: str, *, commit_sha: str) -> None:
@@ -107,7 +108,8 @@ class GitLabSourceControl:
 
     async def authenticated_login(self, repository_url: str) -> str:
         username = self._str(await self._api("GET", "/user"), "username")
-        if not username: raise GitLabSourceControlError("GitLab returned no authenticated username")
+        if not username:
+            raise GitLabSourceControlError("GitLab returned no authenticated username")
         return username
 
     async def branch_tips(self, project: str, destinations: Sequence[str]) -> dict[str, str]:
@@ -208,23 +210,29 @@ class GitLabSourceControl:
         raise NotImplementedError("GitLab review thread resolution is not supported")
 
     async def view_change_request(self, workspace_id: WorkspaceId, number: int) -> ChangeRequest:
-        project = await self._project(workspace_id); mr = await self._api("GET", f"/projects/{project}/merge_requests/{number}")
+        project = await self._project(workspace_id)
+        mr = await self._api("GET", f"/projects/{project}/merge_requests/{number}")
         notes = await self._list(f"/projects/{project}/merge_requests/{number}/notes")
         return ChangeRequest(head_is_same_repository=mr.get("source_project_id") is not None and mr.get("source_project_id") == mr.get("target_project_id"), number=number, title=self._str(mr,"title"), state=self._str(mr,"state"), body=self._str(mr,"description"), author=self._nested(mr,"author","username"), url=self._str(mr,"web_url"), head_ref=self._str(mr,"source_branch"), head_sha=self._str(mr,"sha"), base_ref=self._str(mr,"target_branch"), comments=tuple(self._discussion(note) for note in notes))
 
     async def list_work_items(self, workspace_id: WorkspaceId, state: str = "open", labels: Sequence[str] = (), limit: int = 30) -> tuple[WorkItem, ...]:
-        project = await self._project(workspace_id); issues = await self._list(f"/projects/{project}/issues", {"state": state, "labels": ",".join(labels), "per_page": min(limit,100)})
+        project = await self._project(workspace_id)
+        issues = await self._list(f"/projects/{project}/issues", {"state": state, "labels": ",".join(labels), "per_page": min(limit,100)})
         return tuple(self._work_item(issue) for issue in issues[:limit])
 
     async def view_work_item(self, workspace_id: WorkspaceId, number: int) -> WorkItem:
-        project = await self._project(workspace_id); issue = await self._api("GET", f"/projects/{project}/issues/{number}"); notes = await self._list(f"/projects/{project}/issues/{number}/notes")
+        project = await self._project(workspace_id)
+        issue = await self._api("GET", f"/projects/{project}/issues/{number}")
+        notes = await self._list(f"/projects/{project}/issues/{number}/notes")
         return self._work_item(issue, tuple(self._discussion(note) for note in notes))
 
     async def list_pipeline_status(self, workspace_id: WorkspaceId, *, ref: str | None = None, change_request_number: int | None = None) -> PipelineStatus:
         project = await self._project(workspace_id)
         if ref is None and change_request_number is not None:
-            mr = await self._api("GET", f"/projects/{project}/merge_requests/{change_request_number}"); ref = self._str(mr,"sha")
-        if not ref: raise ValueError("provide ref or change_request_number")
+            mr = await self._api("GET", f"/projects/{project}/merge_requests/{change_request_number}")
+            ref = self._str(mr,"sha")
+        if not ref:
+            raise ValueError("provide ref or change_request_number")
         pipelines = await self._list(f"/projects/{project}/pipelines", {"sha": ref})
         values: list[Pipeline] = []
         for pipeline in pipelines:
@@ -243,13 +251,17 @@ class GitLabSourceControl:
             if not candidates or not isinstance(candidates[0].get("id"), int):
                 raise GitLabSourceControlError("GitLab returned no completed jobs for pipeline")
             job_id = candidates[0]["id"]
-        data = await self._transport.download(f"/projects/{project}/jobs/{job_id}/trace"); text = data.decode(errors="replace"); truncated = len(text)>_MAX_LOG_CHARACTERS
+        data = await self._transport.download(f"/projects/{project}/jobs/{job_id}/trace")
+        text = data.decode(errors="replace")
+        truncated = len(text)>_MAX_LOG_CHARACTERS
         return JobLogs(pipeline_id, job_id, text[-_MAX_LOG_CHARACTERS:] if truncated else text, truncated)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
 
     async def retry_pipeline(self, workspace_id: WorkspaceId, pipeline_id: int, job_id: int | None = None) -> PipelineRetry:
         project = await self._project(workspace_id)
-        if job_id is None: await self._api("POST", f"/projects/{project}/pipelines/{pipeline_id}/retry")
-        else: await self._api("POST", f"/projects/{project}/jobs/{job_id}/retry")
+        if job_id is None:
+            await self._api("POST", f"/projects/{project}/pipelines/{pipeline_id}/retry")
+        else:
+            await self._api("POST", f"/projects/{project}/jobs/{job_id}/retry")
         return PipelineRetry(pipeline_id, job_id)
 
     async def _root(self, workspace_id: WorkspaceId) -> str:
@@ -258,7 +270,8 @@ class GitLabSourceControl:
         return await self._workspace_provider.root_path(workspace_id)
 
     async def _project(self, workspace_id: WorkspaceId) -> str:
-        remote = await self._checked(workspace_id,("remote","get-url","origin")); value=remote.removesuffix(".git")
+        remote = await self._checked(workspace_id,("remote","get-url","origin"))
+        value=remote.removesuffix(".git")
         path = value.split(":",1)[1] if value.startswith("git@") else urlparse(value).path.lstrip("/")
         # Quoting escapes the separators between steps and leaves a `.` alone,
         # so a `..` remote would reach `/projects/../merge_requests` and be
@@ -273,7 +286,8 @@ class GitLabSourceControl:
     async def _api(self,*args: object,**kwargs: object) -> dict:
         try:
             result=await self._transport.request(*args,**kwargs)  # pyright: ignore[reportArgumentType]  # Baseline: see docs/pyright.md
-        except GitLabTransportError as error: raise GitLabSourceControlError(str(error)) from error
+        except GitLabTransportError as error:
+            raise GitLabSourceControlError(str(error)) from error
         return result if isinstance(result,dict) else {}
     async def _list(self,path: str,params: dict | None=None, *, strict: bool = False) -> list[dict]:
         items: list[dict] = []

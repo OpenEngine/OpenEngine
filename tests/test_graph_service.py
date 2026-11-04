@@ -19,7 +19,7 @@ import httpx
 import pytest
 import yaml
 from engine.domain import RunId, WorkspaceId
-from engine.graph_runtime import GraphId, RunStatus, UnknownGraphError, UnknownRunError
+from engine.graph_runtime import GraphId, UnknownGraphError, UnknownRunError
 from engine.graph_runtime_langgraph import (
     LangGraphRuntime,
     PullRequestRecord,
