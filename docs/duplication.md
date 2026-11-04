@@ -133,6 +133,19 @@ there is no unconditional all-pairs similarity pass. Large nested classes and
 many candidate matches still increase memory and runtime. Context excerpts remain
 bounded even for deeply nested expressions.
 
+Descendant collection has a separate scaling limit: for each eligible function,
+method or class, it scans the file's inner-subtree list to collect shingles and
+contexts. This costs O(U × N), where U is the number of eligible units and N is
+the number of inner subtrees in that file. A single file containing hundreds of
+functions can therefore cause quadratic work as it grows, even when candidate
+similarity checks are inexpensive. Current repository scans take about five
+seconds, and maintainers consider this limit non-blocking for this PR. Keeping
+files and functions small is tracked in
+[#1324](https://github.com/OpenEngine/OpenEngine/issues/1324), covering function
+size and complexity limits coordinated with
+[#779](https://github.com/OpenEngine/OpenEngine/issues/779). Optimizing descendant
+collection is deferred; this PR does not introduce size limits.
+
 ## Evaluation and selection
 
 Evaluated before selecting the gate implementation, on macOS arm64, CPython
@@ -157,8 +170,9 @@ measured with `resource.getrusage(RUSAGE_CHILDREN)`, prototype RSS with
 generated graph report. #1315 used its own configured exclusions. The prototype
 large-file benchmark uses 30,000 assignment statements per file, so it exercises
 large syntax trees rather than only large strings. Memory scales with syntax
-tree size, candidate count and retained matching locations; there is no quadratic
-all-pairs comparison. Parse stacks are iterative to avoid Python recursion limits.
+tree size, candidate count and retained matching locations. The v2 descendant
+collection and candidate scaling limits are described above. Parse stacks are
+iterative to avoid Python recursion limits.
 
 Treepeat's exact ruleset also ran on four small Python fixture trees: it emitted
 one three-region group for identical functions, one for formatting/comment-only
