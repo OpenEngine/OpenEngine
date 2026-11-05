@@ -211,7 +211,7 @@ def _settings(loaded: LoadedEngineConfig) -> Settings:
         github_client_id=os.environ.get(
             "GITHUB_CLIENT_ID", loaded.config.github_client_id
         ),
-        github_token=os.environ.get("GITHUB_TOKEN", loaded.config.github_token),
+        github_token=os.environ.get("GITHUB_TOKEN") or loaded.config.github_token,
         github_webhook=github_webhook_config(loaded),
         source_control_preferences=SourceControlPreferences(),
     )
