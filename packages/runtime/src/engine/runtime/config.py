@@ -324,6 +324,19 @@ class EngineConfig:
     """
 
 
+#: Where checkouts go when nothing says otherwise.
+#:
+#: Outside the repository, so the development server's file watcher does not
+#: see them. Written down once here because several apps and the workflows that
+#: provision checkouts all need the same answer.
+DEFAULT_ROOT_DIRECTORY = "/tmp/engine-workspaces"
+
+
+def valid_service_token(token: str) -> bool:
+    """Whether `token` is long enough to accept as a bearer secret."""
+    return len(token) >= 32 and not any(c.isspace() for c in token)
+
+
 @dataclass(frozen=True, slots=True)
 class ServiceSettings:
     """What a headless deployable needs, layered on the loaded Engine config."""
@@ -332,8 +345,7 @@ class ServiceSettings:
     github_token: str = ""
     buzz_base_url: str = ""
     buzz_api_token: str = ""
-    workspace_root: str = ""
-    """Blank means the workspace provider's own default root."""
+    workspace_root: str = DEFAULT_ROOT_DIRECTORY
     postgres_dsn: str = ""
     engine_config: EngineConfig = EngineConfig()
     """Provider-neutral settings loaded from TOML.
@@ -1042,6 +1054,8 @@ def _reject_unknown(
 
 
 __all__ = [
+    "DEFAULT_ROOT_DIRECTORY",
+    "valid_service_token",
     "AccessConfig",
     "ApprovalCapability",
     "ApprovalConfig",

@@ -6,6 +6,8 @@ import os
 import re
 from urllib.parse import urlsplit
 
+from engine.runtime import valid_service_token
+
 from .auth import https_url
 
 
@@ -19,10 +21,6 @@ _ISSUER_DEPENDENT = {
 
 def _orphaned(name: str) -> ValueError:
     return ValueError(f"{name} requires OE_MCP_OIDC_ISSUER; unset it for static-token mode")
-
-
-def _is_strong_secret(value: str) -> bool:
-    return len(value) >= 32 and not any(c.isspace() for c in value)
 
 
 @dataclass(frozen=True)
@@ -50,10 +48,10 @@ class Settings:
             for attribute, name in _ISSUER_DEPENDENT.items():
                 if getattr(self, attribute) not in (None, ()):
                     raise _orphaned(name)
-        if (not self.oidc_issuer or self.token) and not _is_strong_secret(self.token):
+        if (not self.oidc_issuer or self.token) and not valid_service_token(self.token):
             raise ValueError("MCP token must contain at least 32 non-whitespace characters")
         if self.engine_token:
-            if not _is_strong_secret(self.engine_token):
+            if not valid_service_token(self.engine_token):
                 raise ValueError("OE_MCP_ENGINE_TOKEN must contain at least 32 non-whitespace characters")
             if self.engine_token == self.token:
                 raise ValueError("OE_MCP_ENGINE_TOKEN must differ from OE_MCP_TOKEN")
