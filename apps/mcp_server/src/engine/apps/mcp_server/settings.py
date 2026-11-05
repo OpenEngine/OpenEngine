@@ -1,6 +1,6 @@
 """Gateway settings, the only module here that reads the environment."""
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 import os
 import re
@@ -9,12 +9,20 @@ from urllib.parse import urlsplit
 from .auth import https_url
 
 
-_ISSUER_DEPENDENT = ("OE_MCP_OIDC_AUDIENCE", "OE_MCP_ALLOWED_EMAILS", "OE_MCP_OIDC_REQUIRED_SCOPES")
+# Settings that only make sense with an OIDC issuer, and the variables that set them.
+_ISSUER_DEPENDENT = {
+    "oidc_audience": "OE_MCP_OIDC_AUDIENCE",
+    "allowed_emails": "OE_MCP_ALLOWED_EMAILS",
+    "oidc_required_scopes": "OE_MCP_OIDC_REQUIRED_SCOPES",
+}
 
 
-def _reject_without_issuer(configured: Iterable[str]) -> None:
-    for name in configured:
-        raise ValueError(f"{name} requires OE_MCP_OIDC_ISSUER; unset it for static-token mode")
+def _orphaned(name: str) -> ValueError:
+    return ValueError(f"{name} requires OE_MCP_OIDC_ISSUER; unset it for static-token mode")
+
+
+def _is_strong_secret(value: str) -> bool:
+    return len(value) >= 32 and not any(c.isspace() for c in value)
 
 
 @dataclass(frozen=True)
@@ -39,17 +47,13 @@ class Settings:
 
     def __post_init__(self) -> None:
         if self.oidc_issuer is None:
-            _reject_without_issuer(
-                name for name, configured in (
-                    ("OE_MCP_OIDC_AUDIENCE", self.oidc_audience is not None),
-                    ("OE_MCP_ALLOWED_EMAILS", bool(self.allowed_emails)),
-                    ("OE_MCP_OIDC_REQUIRED_SCOPES", bool(self.oidc_required_scopes)),
-                ) if configured
-            )
-        if (not self.oidc_issuer or self.token) and (len(self.token) < 32 or any(c.isspace() for c in self.token)):
+            for attribute, name in _ISSUER_DEPENDENT.items():
+                if getattr(self, attribute) not in (None, ()):
+                    raise _orphaned(name)
+        if (not self.oidc_issuer or self.token) and not _is_strong_secret(self.token):
             raise ValueError("MCP token must contain at least 32 non-whitespace characters")
         if self.engine_token:
-            if len(self.engine_token) < 32 or any(c.isspace() for c in self.engine_token):
+            if not _is_strong_secret(self.engine_token):
                 raise ValueError("OE_MCP_ENGINE_TOKEN must contain at least 32 non-whitespace characters")
             if self.engine_token == self.token:
                 raise ValueError("OE_MCP_ENGINE_TOKEN must differ from OE_MCP_TOKEN")
@@ -89,7 +93,9 @@ class Settings:
             required[name] = environment[name]
         # Presence, not value: even empty OIDC variables indicate configuration.
         if "OE_MCP_OIDC_ISSUER" not in environment:
-            _reject_without_issuer(name for name in _ISSUER_DEPENDENT if name in environment)
+            for name in _ISSUER_DEPENDENT.values():
+                if name in environment:
+                    raise _orphaned(name)
         return cls(
             token=environment.get("OE_MCP_TOKEN", ""),
             repository=required["OE_MCP_REPOSITORY"],
