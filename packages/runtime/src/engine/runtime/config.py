@@ -364,7 +364,7 @@ class ServiceSettings:
         return cls(
             engine_config=loaded.config,
             config_path=loaded.path,
-            github_token=environment.get("GITHUB_TOKEN", loaded.config.github_token),
+            github_token=environment.get("GITHUB_TOKEN") or loaded.config.github_token,
         )
 
 

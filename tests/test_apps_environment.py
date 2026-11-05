@@ -3,6 +3,11 @@
 Every other module takes the values it needs as parameters. `LEGACY` is the
 remaining reads still to move behind a `Settings.from_env()` (#741); the list
 may only shrink.
+
+The scan is deliberately limited to `apps/`. `packages/` and `workflows/` also
+read the environment (git_core, the ACP and sandbox adapters, the GitHub
+transports); bringing them under the same rule is tracked as follow-up work on
+#741, not enforced here.
 """
 
 import ast
@@ -88,3 +93,12 @@ def test_guard_sees_aliased_and_from_imports(tmp_path):
         module = tmp_path / "m.py"
         module.write_text(source)
         assert _reads_environment(module), source
+
+
+def test_empty_github_token_falls_back_to_the_config_file():
+    from engine.runtime import LoadedEngineConfig, ServiceSettings
+    from engine.runtime.config import EngineConfig
+
+    loaded = LoadedEngineConfig(config=EngineConfig(github_token="from-toml"), path=None)
+    assert ServiceSettings.from_env(loaded, {"GITHUB_TOKEN": ""}).github_token == "from-toml"
+    assert ServiceSettings.from_env(loaded, {"GITHUB_TOKEN": "from-env"}).github_token == "from-env"
