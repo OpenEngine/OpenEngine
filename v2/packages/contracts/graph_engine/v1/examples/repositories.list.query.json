@@ -1,0 +1,9 @@
+{
+  "message": "ListRepositoryQuery",
+  "subject": "oe.v1.ge.query.repositories.list",
+  "payload": {
+    "params": {
+      "project": "alpha"
+    }
+  }
+}

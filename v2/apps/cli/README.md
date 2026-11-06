@@ -79,3 +79,11 @@ its log, NATS's JetStream data, and the services' SQLite databases
 (`databases/`). `OE_DATABASE_BACKEND` switches every service's database; see
 packages/persistence. The jobs, loops, workspaces and connections commands,
 and the rest of the graph commands, arrive with the services behind them.
+
+`oe repo add PATH [--project NAME] [--base-ref REF] [--workspace-policy worktree]
+[--trust | --no-trust]` registers an existing local checkout through GE. The
+base defaults to `HEAD`; unset trust requires approval. `oe repo list` and
+`oe repo get` inspect one project's persisted defaults (`--json` for scripts).
+Project selection follows `--project`, `OE_PROJECT`, then `default`.
+See [repository onboarding](../../../docs/repository-onboarding.md#v2-local-registration-ticket-1056-part-1)
+for ownership, trust and the remaining execution work.

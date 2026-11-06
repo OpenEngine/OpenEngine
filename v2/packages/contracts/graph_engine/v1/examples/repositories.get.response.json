@@ -1,0 +1,17 @@
+{
+  "message": "GetRepositoryResponse",
+  "subject": "_INBOX.repo",
+  "payload": {
+    "status": "ok",
+    "result": {
+      "repository": {
+        "project": "alpha",
+        "checkout": "/home/operator/repo",
+        "base_ref": "main",
+        "workspace_policy": "worktree",
+        "trusted": null
+      }
+    }
+  },
+  "in_reply_to": "oe.v1.ge.query.repositories.get"
+}

@@ -195,3 +195,50 @@ passphrase prompt. When omitted, the existing SSH environment is preserved.
 Restart the daemon after changing these settings. Clone failures report git's
 reason with URLs and embedded credentials redacted; publickey denials point to
 `[github] ssh_key`, and timeouts are named explicitly.
+
+## V2 local registration (ticket #1056, part 1)
+
+From `v2/`, after `uv sync` and `uv run oe up`:
+
+```sh
+uv run oe repo add .. --project alpha --base-ref main --workspace-policy worktree --no-trust
+uv run oe repo add ../v2 --project beta --base-ref HEAD --workspace-policy worktree --trust
+uv run oe repo list --project alpha
+uv run oe repo get --project beta
+```
+
+V2 uses GE's public `repositories.add`, `repositories.list` and
+`repositories.get` contracts, rather than the V1 configuration file described
+above. Each tenant/project has one registered default. Adding again replaces
+that project's checkout and defaults atomically; another project is unaffected.
+Project selection is `--project`, then `OE_PROJECT`, then `default`. GE derives
+the tenant from the verified principal and authorizes every project's access.
+Local operator access requires the loopback NATS listener.
+
+The CLI sends an absolute path on the GE host. GE resolves symlinks and nested
+directories to the canonical working checkout root and verifies the base ref
+as a local commit. Missing paths, bare repositories and unknown refs are
+rejected. Discovery never fetches, checks out, stashes, creates worktrees or
+changes branches; dirty files and worktrees holding branches stay untouched.
+`HEAD` is stored as the requested symbolic default, not frozen at registration.
+
+`--trust` records true; `--no-trust` records false. Omitting both records null,
+including when replacing an existing registration. Only true displays `trusted`;
+false and null display `approval-required`. Registration reads no repository
+configuration and imported configuration cannot grant trust. This stores and
+reports the decision; enforcing its delivery to execution is part 3.
+
+GE owns the defaults in its tenant-scoped `repositories` table, migrated by its
+Alembic history. Restarting `oe down` / `oe up` keeps the registrations.
+`repositories.add` atomically records a succeeded operation and an idempotency
+receipt with the defaults. The operation query contains the accepted snapshot;
+get/list show the current default. Replaying a command returns its original
+operation even if the local checkout has since disappeared. `expected_version`
+is unsupported and rejected. Get returns `NOT_FOUND` for an unregistered
+project; list returns an empty `items` array. List is project-scoped and has at
+most one item, so it needs no pagination.
+
+Part 2 adds public cloning, safe imports and trust/revoke commands. Part 3 adds
+consistent checkout selection, immutable execution intent, owned VCP checkout
+provisioning and approval-policy delivery. Private authentication, forge login,
+automatic PR publication and repository-wide agent scope are outside this part.

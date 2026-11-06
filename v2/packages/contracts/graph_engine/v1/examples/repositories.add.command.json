@@ -1,0 +1,17 @@
+{
+  "message": "AddRepositoryCommand",
+  "subject": "oe.v1.ge.control.repositories.add",
+  "payload": {
+    "command_id": "cmd_repo",
+    "causal_path": [
+      "cmd_repo"
+    ],
+    "payload": {
+      "project": "alpha",
+      "checkout": "/home/operator/repo",
+      "base_ref": "main",
+      "workspace_policy": "worktree",
+      "trusted": null
+    }
+  }
+}

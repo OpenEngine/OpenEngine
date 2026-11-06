@@ -1,0 +1,10 @@
+{
+  "message": "AddRepositoryResponse",
+  "subject": "_INBOX.repo",
+  "payload": {
+    "command_id": "cmd_repo",
+    "status": "accepted",
+    "operation_id": "op_repo"
+  },
+  "in_reply_to": "oe.v1.ge.control.repositories.add"
+}

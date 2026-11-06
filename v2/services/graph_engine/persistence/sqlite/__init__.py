@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from openengine.persistence import Database, DatabaseStore, TenantDatabase
 
-from graph_engine.persistence.schema import command_receipts, graph_revisions, graphs, operations
+from graph_engine.persistence.schema import command_receipts, graph_revisions, graphs, operations, repositories
 from graph_engine.persistence.store import (
     Command,
     CommandIdConflict,
@@ -116,6 +116,41 @@ class SqliteGraphs(DatabaseStore):
                 return receipt
             await _record(transaction, command, response, datetime.now(UTC))
         return response
+
+    async def repository_receipt(self, command: Command) -> dict[str, Any] | None:
+        async with self.database.connect() as connection:
+            return await _receipt(connection, command)
+
+    async def register_repository(self, command: Command, repository: dict[str, Any],
+                                  deadline: datetime | None) -> dict[str, Any]:
+        async with self.database.transaction() as transaction:
+            await transaction.exec_driver_sql("BEGIN IMMEDIATE")
+            if (receipt := await _receipt(transaction, command)) is not None:
+                return receipt
+            now = datetime.now(UTC)
+            if deadline is not None and deadline < now:
+                raise DeadlineExceeded(deadline, now)
+            where = (repositories.c.tenant_id == self.database.tenant,
+                     repositories.c.project == command.project)
+            await transaction.execute(repositories.delete().where(*where))
+            await transaction.execute(repositories.insert().values(
+                tenant_id=self.database.tenant, **repository))
+            operation_id = _new_id("op")
+            await transaction.execute(operations.insert().values(
+                tenant_id=self.database.tenant, operation_id=operation_id, project=command.project,
+                command_id=command.command_id, operation="repositories.add", status="succeeded",
+                resources={}, result={"repository": repository}, created_at=now, updated_at=now,
+            ))
+            response = {"command_id": command.command_id, "status": "accepted", "operation_id": operation_id}
+            await _record(transaction, command, response, now)
+        return response
+
+    async def repositories(self, project: str) -> list[dict[str, Any]]:
+        async with self.database.connect() as connection:
+            rows = (await connection.execute(repositories.select().where(
+                repositories.c.tenant_id == self.database.tenant, repositories.c.project == project,
+            ))).all()
+        return [{key: value for key, value in row._mapping.items() if key != "tenant_id"} for row in rows]
 
     async def graph(self, graph_id: str) -> Graph | None:
         async with self.database.connect() as connection:

@@ -275,3 +275,27 @@ def test_project_selects_the_graph_applied_listed_and_read(serving) -> None:
     missing = _graph_list(home, "get", "implement-review", "--project", "cli-gamma")
     assert missing.returncode == 1
     assert missing.stderr == "oe graph get: NOT_FOUND: no graph named implement-review in project cli-gamma\n"
+
+
+def test_repo_commands(serving, tmp_path):
+    home, _ = serving
+    def oe(*arguments):
+        result = subprocess.run([sys.executable, "-m", "openengine.cli", "repo", *arguments],
+                                env={**os.environ, "XDG_STATE_HOME":str(home)}, capture_output=True, text=True, timeout=30)
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+    # GE must canonicalize a subdirectory to its checkout; no imported trust.
+    root = tmp_path / "checkout"
+    root.mkdir()
+    for args in (["init", "-b", "main"], ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"]):
+        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+    (root / "v2").mkdir()
+    for name, path, base, flag in [("alpha",root,"main","--no-trust"),("beta",root/"v2","HEAD","--trust")]:
+        added = oe("add",str(path),"--project",name,"--base-ref",base,"--workspace-policy","worktree",flag)
+        assert str(root) in added and name in added and base in added
+        assert ("approval-required" if name=="alpha" else "trusted") in added
+        got = json.loads(oe("get","--project",name,"--json"))["repository"]
+        assert got["trusted"] == (name=="beta") and got["base_ref"] == base
+        assert json.loads(oe("list","--project",name,"--json"))["items"] == [got]
+    with pytest.raises(subprocess.CalledProcessError):
+        subprocess.run([sys.executable,"-m","openengine.cli","repo","add",str(tmp_path),"--trust","--no-trust"],check=True,capture_output=True)

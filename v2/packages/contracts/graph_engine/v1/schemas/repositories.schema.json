@@ -1,0 +1,171 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Project repository defaults",
+  "$defs": {
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "$ref": "graph.schema.json#/$defs/project"
+        },
+        "checkout": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "base_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "workspace_policy": {
+          "enum": [
+            "worktree"
+          ]
+        },
+        "trusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Only an explicit operator decision grants trust; null requires approval."
+        }
+      },
+      "required": [
+        "project",
+        "checkout",
+        "base_ref",
+        "workspace_policy",
+        "trusted"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "$ref": "graph.schema.json#/$defs/project"
+        },
+        "checkout": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "base_ref": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "workspace_policy": {
+          "enum": [
+            "worktree"
+          ]
+        },
+        "trusted": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Only an explicit operator decision grants trust; null requires approval."
+        }
+      },
+      "required": [
+        "checkout",
+        "base_ref",
+        "workspace_policy"
+      ]
+    },
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "project": {
+          "$ref": "graph.schema.json#/$defs/project"
+        }
+      },
+      "required": []
+    },
+    "add": {
+      "allOf": [
+        {
+          "$ref": "../../../common/v1/command.schema.json"
+        },
+        {
+          "properties": {
+            "payload": {
+              "$ref": "#/$defs/payload"
+            }
+          }
+        }
+      ]
+    },
+    "query": {
+      "allOf": [
+        {
+          "$ref": "../../../common/v1/query.schema.json"
+        },
+        {
+          "properties": {
+            "params": {
+              "$ref": "#/$defs/params"
+            }
+          }
+        }
+      ]
+    },
+    "add_response": {
+      "$ref": "../../../common/v1/command-response.schema.json"
+    },
+    "list_response": {
+      "allOf": [
+        {
+          "$ref": "../../../common/v1/query-response.schema.json"
+        },
+        {
+          "properties": {
+            "result": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "items": {
+                  "type": "array",
+                  "maxItems": 1,
+                  "items": {
+                    "$ref": "#/$defs/repository"
+                  }
+                }
+              },
+              "required": [
+                "items"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "get_response": {
+      "allOf": [
+        {
+          "$ref": "../../../common/v1/query-response.schema.json"
+        },
+        {
+          "properties": {
+            "result": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "repository": {
+                  "$ref": "#/$defs/repository"
+                }
+              },
+              "required": [
+                "repository"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  }
+}

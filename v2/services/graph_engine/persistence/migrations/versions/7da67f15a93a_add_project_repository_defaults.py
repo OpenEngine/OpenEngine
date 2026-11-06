@@ -1,0 +1,48 @@
+"""add project repository defaults
+
+Revision ID: 7da67f15a93a
+Revises: 5cce010cee3d
+Create Date: 2026-11-02 13:30:50.820101
+"""
+
+from typing import Sequence, Union
+
+from alembic import op
+import sqlalchemy as sa
+
+
+revision: str = '7da67f15a93a'
+down_revision: Union[str, Sequence[str], None] = '5cce010cee3d'
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
+
+
+class UnsafeTenantDowngrade(RuntimeError):
+    """Tenant registrations must survive a refused downgrade."""
+
+    def __init__(self, table: str) -> None:
+        super().__init__(f"{table} has non-local tenant rows; remove them to downgrade")
+
+
+def upgrade() -> None:
+    op.create_table(
+        "repositories",
+        sa.Column("tenant_id", sa.CHAR(32), nullable=False),
+        sa.Column("project", sa.String(64), nullable=False),
+        sa.Column("checkout", sa.Text, nullable=False),
+        sa.Column("base_ref", sa.String(256), nullable=False),
+        sa.Column("workspace_policy", sa.String(32), nullable=False),
+        sa.Column("trusted", sa.Boolean, nullable=True),
+        sa.PrimaryKeyConstraint("tenant_id", "project"),
+        comment="One explicitly registered local checkout and execution defaults per project.",
+    )
+
+
+def downgrade() -> None:
+    # Guard before dropping data, including tables checked by the older tenant revision.
+    bind = op.get_bind()
+    for name in ("repositories", "graphs", "graph_revisions", "operations", "command_receipts"):
+        if bind.scalar(sa.text(f"SELECT COUNT(*) FROM {name} WHERE tenant_id != :local"),
+                       {"local": "00000000000070008000000000000001"}):
+            raise UnsafeTenantDowngrade(name)
+    op.drop_table("repositories")

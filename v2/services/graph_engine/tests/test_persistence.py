@@ -405,3 +405,19 @@ def test_populated_local_tenant_rows_survive_downgrade_and_upgrade(config: Datab
             await handle.close()
 
     asyncio.run(replay())
+
+@pytest.mark.parametrize("target", ["5cce010cee3d", "d75ffe6cc5ed"])
+def test_repository_downgrade_preserves_non_local_rows(config, target):
+    from openengine.persistence import new_tenant
+    database = PERSISTENCE.database(config)
+    engine = database.migration_engine()
+    with engine.begin() as connection:
+        connection.execute(sa.text(
+            "INSERT INTO repositories VALUES (:tenant, 'alpha', '/repo', 'main', 'worktree', 1)"
+        ), {"tenant": new_tenant().hex})
+    with pytest.raises(RuntimeError, match="repositories has non-local tenant rows"):
+        downgrade(PERSISTENCE.migrations, database, target)
+    with engine.connect() as connection:
+        assert connection.scalar(sa.text("SELECT COUNT(*) FROM repositories")) == 1
+        assert connection.scalar(sa.text("SELECT version_num FROM alembic_version")) == "7da67f15a93a"
+    assert PERSISTENCE.drift(metadata, config) == []

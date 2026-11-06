@@ -2,14 +2,15 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:graph-engine
 info:
   title: OpenEngine Graph Engine (ge)
-  version: 1.0.0-draft.8
+  version: 1.0.0-draft.9
   description: |
     The Graph Engine decides which steps of a graph run and when. This document
     describes the NATS interface **GE serves**: the commands and queries it
     answers and the events it publishes.
 
     > **Mostly contract only.** GE answers `oe.v1.ge.control.graphs.apply`
-    > (Graph resources only), `oe.v1.ge.query.graphs.list`,
+    > (Graph resources only), `oe.v1.ge.control.repositories.add`,
+    > `oe.v1.ge.query.repositories.list`, `oe.v1.ge.query.repositories.get`, `oe.v1.ge.query.graphs.list`,
     > `oe.v1.ge.query.graphs.{graph_id}.get`, and
     > `oe.v1.ge.query.operations.{operation_id}.get` for the operations it
     > records. Every other subject is a defined API that GE answers with
@@ -161,6 +162,21 @@ servers:
     description: The NATS server `oe up` starts.
 
 channels:
+  repositoriesAdd:
+    address: oe.v1.ge.control.repositories.add
+    title: Add project repository
+    messages:
+      AddRepositoryCommand: { $ref: '#/components/messages/AddRepositoryCommand' }
+  repositoriesList:
+    address: oe.v1.ge.query.repositories.list
+    title: List project repository
+    messages:
+      ListRepositoryQuery: { $ref: '#/components/messages/ListRepositoryQuery' }
+  repositoriesGet:
+    address: oe.v1.ge.query.repositories.get
+    title: Get project repository
+    messages:
+      GetRepositoryQuery: { $ref: '#/components/messages/GetRepositoryQuery' }
   graphsApply:
     address: oe.v1.ge.control.graphs.apply
     title: Apply a graph
@@ -322,6 +338,9 @@ channels:
     title: NATS reply inbox
     description: The requester's reply subject, set by NATS request/reply. Never named in a payload.
     messages:
+      AddRepositoryResponse: { $ref: '#/components/messages/AddRepositoryResponse' }
+      ListRepositoryResponse: { $ref: '#/components/messages/ListRepositoryResponse' }
+      GetRepositoryResponse: { $ref: '#/components/messages/GetRepositoryResponse' }
       ApplyGraphResponse: { $ref: '#/components/messages/ApplyGraphResponse' }
       RunGraphResponse: { $ref: '#/components/messages/RunGraphResponse' }
       SubmitJobResponse: { $ref: '#/components/messages/SubmitJobResponse' }
@@ -475,6 +494,42 @@ channels:
       LoopRemoved: { $ref: '#/components/messages/LoopRemoved' }
 
 operations:
+  addRepository:
+    action: receive
+    title: Add project repository
+    description: |
+      Registers one local checkout default per authorized tenant/project (default project if omitted).
+      Replaces that project's checkout, base_ref, workspace_policy and trusted decision atomically
+      with a succeeded operation and command receipt. No repository configuration is imported.
+      Discovery resolves an absolute local directory to the working checkout root and verifies
+      base_ref as a commit without fetching or changing user work. Only worktree policy is supported.
+      Trusted true is an explicit operator decision; false and null require approval.
+      Omitting trusted resets it to null. Execution-policy delivery is deferred.
+      Retries replay the original operation without discovering again. expected_version is rejected.
+      Operation result contains repository; no lifecycle event is emitted for registration.
+    channel: { $ref: '#/channels/repositoriesAdd' }
+    tags: [{ name: control }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/AddRepositoryResponse' }]
+  listRepository:
+    action: receive
+    title: List project repository
+    description: Returns items with zero or one default for the authorized project; no pagination.
+    channel: { $ref: '#/channels/repositoriesList' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/ListRepositoryResponse' }]
+  getRepository:
+    action: receive
+    title: Get project repository
+    description: Returns repository for the authorized project, or NOT_FOUND.
+    channel: { $ref: '#/channels/repositoriesGet' }
+    tags: [{ name: query }]
+    reply:
+      channel: { $ref: '#/channels/replyInbox' }
+      messages: [{ $ref: '#/channels/replyInbox/messages/GetRepositoryResponse' }]
   applyGraph:
     action: receive
     title: Apply a graph
@@ -833,6 +888,60 @@ components:
         schema: { $ref: '../../common/v1/query.schema.json#/$defs/headers' }
 
   messages:
+    AddRepositoryCommand:
+      name: AddRepositoryCommand
+      title: Add project repository
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/repositories.schema.json#/$defs/add' }
+      examples:
+        - name: repositories.add.command
+          payload: { $ref: './examples/repositories.add.command.json#/payload' }
+    AddRepositoryResponse:
+      name: AddRepositoryResponse
+      title: Add project repository
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/repositories.schema.json#/$defs/add_response' }
+      examples:
+        - name: repositories.add.response
+          payload: { $ref: './examples/repositories.add.response.json#/payload' }
+    ListRepositoryQuery:
+      name: ListRepositoryQuery
+      title: List project repository
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/repositories.schema.json#/$defs/query' }
+      examples:
+        - name: repositories.list.query
+          payload: { $ref: './examples/repositories.list.query.json#/payload' }
+    ListRepositoryResponse:
+      name: ListRepositoryResponse
+      title: List project repository
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/repositories.schema.json#/$defs/list_response' }
+      examples:
+        - name: repositories.list.response
+          payload: { $ref: './examples/repositories.list.response.json#/payload' }
+    GetRepositoryQuery:
+      name: GetRepositoryQuery
+      title: Get project repository
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/repositories.schema.json#/$defs/query' }
+      examples:
+        - name: repositories.get.query
+          payload: { $ref: './examples/repositories.get.query.json#/payload' }
+    GetRepositoryResponse:
+      name: GetRepositoryResponse
+      title: Get project repository
+      payload:
+        schemaFormat: application/schema+json;version=draft-07
+        schema: { $ref: './schemas/repositories.schema.json#/$defs/get_response' }
+      examples:
+        - name: repositories.get.response
+          payload: { $ref: './examples/repositories.get.response.json#/payload' }
     ApplyGraphCommand:
       name: ApplyGraphCommand
       title: Apply a graph command
