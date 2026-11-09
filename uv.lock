@@ -1431,16 +1431,16 @@ wheels = [
 
 [[package]]
 name = "langgraph-checkpoint-sqlite"
-version = "3.1.2"
+version = "3.1.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiosqlite" },
     { name = "langgraph-checkpoint" },
     { name = "sqlite-vec" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ee/df/082bb3b2b6f775402046fcdf1e3adfa9cd462846145ab504a76abc52c657/langgraph_checkpoint_sqlite-3.1.2.tar.gz", hash = "sha256:4e3f376fa6f192d6ad2a1a4643b039986f1593552ef870e9e45281575de6fbf2", size = 151160, upload-time = "2026-10-12T22:54:31.54Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/b7/abc333499322d7d00284255c6a56271c7741f65fba5114a137f96023df43/langgraph_checkpoint_sqlite-3.1.3.tar.gz", hash = "sha256:df305e347e66d97375e680bc4a5337e4d37d5a4996b3c24f49a942c515caa7d7", size = 151241, upload-time = "2026-10-30T22:18:40.218Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b2/92/3fd8417a00bd41c40ca586e8f534daaf2c09e80ae891a93552f39ac31538/langgraph_checkpoint_sqlite-3.1.2-py3-none-any.whl", hash = "sha256:249640b84efd4872585a9ce596a63c2593e543f748341791591aeaf4c878329c", size = 41844, upload-time = "2026-10-12T22:54:30.429Z" },
+    { url = "https://files.pythonhosted.org/packages/68/e7/574aee0a314fa1c72e62cef2cc22c4f97655a2a18c4031de08d903841b14/langgraph_checkpoint_sqlite-3.1.3-py3-none-any.whl", hash = "sha256:7ef55348754b8415e9b2bd2a9d6a385a2246c667a57ad34a591d4ab884a4b1a0", size = 41844, upload-time = "2026-10-30T22:18:38.806Z" },
 ]
 
 [[package]]
