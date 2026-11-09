@@ -10,17 +10,9 @@
   {
     "path": "v2/ARCHITECTURE.md",
     "kind": "documentation",
-    "bytes": 6446,
-    "sha256": "bffa38066e09341417f3ce332a750420b5118229f000ef89b7ecc1e566c1480d",
+    "bytes": 6822,
+    "sha256": "c517391228e6d0180ca8cced4aea1211a9d6c9bfcde9e03bde71969a2aec2084",
     "lines": 62,
-    "tests": []
-  },
-  {
-    "path": "v2/CODEOWNERS",
-    "kind": "source/config",
-    "bytes": 0,
-    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "lines": 0,
     "tests": []
   },
   {
@@ -611,16 +603,16 @@
   {
     "path": "v2/docs/architecture.mermaid",
     "kind": "documentation",
-    "bytes": 10341,
-    "sha256": "290aed17b9120586ee860e0e8ba6e3a19a646a9bc1d51195a53f05a43e07fe0b",
-    "lines": 139,
+    "bytes": 12342,
+    "sha256": "4548e9cd3bd1d5c08124c85c94341b63c70a6aa6ff422aa40b4f73d56a66065b",
+    "lines": 163,
     "tests": []
   },
   {
     "path": "v2/docs/architecture.svg",
     "kind": "documentation",
-    "bytes": 89476,
-    "sha256": "1460bb2fb7a11d44ca6522c2f50d5e30feb8a5f229aee4eb981a4892be832373",
+    "bytes": 101380,
+    "sha256": "4fdda55eda0bc92cdecd7441d9ea3979b50189343020d672882fd6822ebb0c69",
     "lines": 1,
     "tests": []
   },
@@ -669,6 +661,30 @@
     "kind": "documentation",
     "bytes": 118816,
     "sha256": "df352d6f8092278a9869363fa958fa34ff2bf4bd623a1935a62285e0e4cf001d",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/5cce010cee3d.md",
+    "kind": "documentation",
+    "bytes": 3762,
+    "sha256": "3ad66cbbe5789af2a5021b0b3e82350760fa3624973cf46464803d2f97f452b2",
+    "lines": 125,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/5cce010cee3d.mermaid",
+    "kind": "documentation",
+    "bytes": 2704,
+    "sha256": "b67322417a1664571849bfe36b6264b98eff57ae66414e987d453aaab6dc44b7",
+    "lines": 59,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/ge/5cce010cee3d.svg",
+    "kind": "documentation",
+    "bytes": 130498,
+    "sha256": "a723783b26bb319f64060c4d6067bc9b5938a9eca369f63ecf84382da9f1a282",
     "lines": 1,
     "tests": []
   },
@@ -739,48 +755,48 @@
   {
     "path": "v2/docs/schema/latest_ge.mermaid",
     "kind": "documentation",
-    "bytes": 2469,
-    "sha256": "c96f8d496e0d9bdd90b5174747166c064444441f596d6b857a08eab308d9a7bf",
-    "lines": 54,
+    "bytes": 2704,
+    "sha256": "b67322417a1664571849bfe36b6264b98eff57ae66414e987d453aaab6dc44b7",
+    "lines": 59,
     "tests": []
   },
   {
     "path": "v2/docs/schema/latest_ge.svg",
     "kind": "documentation",
-    "bytes": 116270,
-    "sha256": "81e62b4528c84a927d527ca354a45461b9de688f9e00486178d0ecaf1c3f8f43",
+    "bytes": 130523,
+    "sha256": "376b8f99c3114c81ae11f38ce1e9d120e55f743ec8959bfee9f6b2fa9e6d2b6a",
     "lines": 1,
     "tests": []
   },
   {
     "path": "v2/docs/schema/latest_tools.mermaid",
     "kind": "documentation",
-    "bytes": 4138,
-    "sha256": "cd653a590d0cbf1e170166d8c06c1059c3e1613230d125c6544fb227de7e13f2",
-    "lines": 87,
+    "bytes": 4425,
+    "sha256": "3e92014f3831842cab9956d5f502da9e8293d968203c59e197ff8c1b17400c14",
+    "lines": 94,
     "tests": []
   },
   {
     "path": "v2/docs/schema/latest_tools.svg",
     "kind": "documentation",
-    "bytes": 196819,
-    "sha256": "e5544956f18a32e769256038331dcef304fb4b5d463d92f3536f91216594a4c4",
+    "bytes": 226189,
+    "sha256": "f9e0ef02c5fad005e1c7cefc77a6f392d8d57801a8171cabd77b32d1e80f0203",
     "lines": 1,
     "tests": []
   },
   {
     "path": "v2/docs/schema/latest_vcp.mermaid",
     "kind": "documentation",
-    "bytes": 1682,
-    "sha256": "6ab3716be2d78b587ddf438fcad019afe48d59974f1405043866b55524c7824d",
-    "lines": 39,
+    "bytes": 4600,
+    "sha256": "77d6053cd8ff1b4840e712bbb758370e4a261ed622ac0a1fc13a735c6de254a2",
+    "lines": 99,
     "tests": []
   },
   {
     "path": "v2/docs/schema/latest_vcp.svg",
     "kind": "documentation",
-    "bytes": 79104,
-    "sha256": "aee44f10cb974f66d981d1387aaf11577786ab206d65b1256b435a7ec911e9f3",
+    "bytes": 221072,
+    "sha256": "74fcc81be9f7562e7f26139b174970835d5cb61964f237f39f85b0e9a1ad7ea9",
     "lines": 1,
     "tests": []
   },
@@ -805,6 +821,30 @@
     "kind": "documentation",
     "bytes": 166730,
     "sha256": "abc831852312c924adbe9fa15846bd7daae16d893564ba13ab818785ae95dbe6",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/tools/1f78d3a45137.md",
+    "kind": "documentation",
+    "bytes": 6415,
+    "sha256": "4f436a14a89765dff582c40491ee4acac3a4f807c45b629f03127f09605e67a8",
+    "lines": 192,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/tools/1f78d3a45137.mermaid",
+    "kind": "documentation",
+    "bytes": 4425,
+    "sha256": "3e92014f3831842cab9956d5f502da9e8293d968203c59e197ff8c1b17400c14",
+    "lines": 94,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/tools/1f78d3a45137.svg",
+    "kind": "documentation",
+    "bytes": 226178,
+    "sha256": "5fb13790f7528f2e0419cdaffcf34bd0190642b33ea4abad7511a47830ef39a7",
     "lines": 1,
     "tests": []
   },
@@ -881,6 +921,30 @@
     "tests": []
   },
   {
+    "path": "v2/docs/schema/vcp/1b2226fa7c9a.md",
+    "kind": "documentation",
+    "bytes": 7548,
+    "sha256": "de6458a97d74023cc4f8005a11ace93bbbf1f59a68966d54b59ad2d7d7de2eec",
+    "lines": 217,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/1b2226fa7c9a.mermaid",
+    "kind": "documentation",
+    "bytes": 4256,
+    "sha256": "bb6986694c98cb4771b3f5b06dbd727c4185809f356e67ebcbf037756b931a3b",
+    "lines": 92,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/1b2226fa7c9a.svg",
+    "kind": "documentation",
+    "bytes": 220988,
+    "sha256": "ff39e03b06db67d1fc5682ee2d32ff2ffd1a956541906a44d890f65bbd57cbcd",
+    "lines": 1,
+    "tests": []
+  },
+  {
     "path": "v2/docs/schema/vcp/591de3f10346.md",
     "kind": "documentation",
     "bytes": 2574,
@@ -925,6 +989,30 @@
     "kind": "documentation",
     "bytes": 79097,
     "sha256": "31507776bfc79ede951f3eb2cc28f0d1dc0d872257ce867fbb2267663ca1def7",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/700f6cbb335e.md",
+    "kind": "documentation",
+    "bytes": 4084,
+    "sha256": "5ae0c1db8370c8723c0fe83ce2e6ec35c261c0a163afd2f2a2c04a4b2a699817",
+    "lines": 145,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/700f6cbb335e.mermaid",
+    "kind": "documentation",
+    "bytes": 2924,
+    "sha256": "7b078df3e288a9d179847498d65923e22ac4b230750083a998080e8baa94e89b",
+    "lines": 65,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/700f6cbb335e.svg",
+    "kind": "documentation",
+    "bytes": 147623,
+    "sha256": "ef035f3179416cd0bbe66c54c13e3fe508059a24bba5b7705e08e0d12870b97a",
     "lines": 1,
     "tests": []
   },
@@ -977,6 +1065,54 @@
     "tests": []
   },
   {
+    "path": "v2/docs/schema/vcp/9b7f1ac760d9.md",
+    "kind": "documentation",
+    "bytes": 3941,
+    "sha256": "5a1b3f007bb24f2ac97548405e56b3254869ae2e4f06aa3c45da1010053252b0",
+    "lines": 115,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/9b7f1ac760d9.mermaid",
+    "kind": "documentation",
+    "bytes": 2660,
+    "sha256": "2bc92092ceff53569574fe68346b022291e1af57dcec463f0cae200afb4c8f8e",
+    "lines": 60,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/9b7f1ac760d9.svg",
+    "kind": "documentation",
+    "bytes": 139097,
+    "sha256": "5975abfbf0f55842884bf36779eb804ed6cabcf30354f79f2b1810eeae244aef",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/9d5590f3f1a5.md",
+    "kind": "documentation",
+    "bytes": 6187,
+    "sha256": "f81ee984e6a73dfd99ebb8f69e1c5e8d766047019abeeda02306ee367704b3e7",
+    "lines": 185,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/9d5590f3f1a5.mermaid",
+    "kind": "documentation",
+    "bytes": 4600,
+    "sha256": "77d6053cd8ff1b4840e712bbb758370e4a261ed622ac0a1fc13a735c6de254a2",
+    "lines": 99,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/9d5590f3f1a5.svg",
+    "kind": "documentation",
+    "bytes": 241689,
+    "sha256": "7e2361993b54cd7716e154487d5a396e4d2279578f2d20f158bf25dff8640a27",
+    "lines": 1,
+    "tests": []
+  },
+  {
     "path": "v2/docs/schema/vcp/c36db826eebb.md",
     "kind": "documentation",
     "bytes": 1709,
@@ -997,6 +1133,30 @@
     "kind": "documentation",
     "bytes": 77718,
     "sha256": "02e53fa838aa0cc8563c738e76f4285ef0f6784b4d1eae552e08f9516d3a8bfc",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/cfed9cf520fd.md",
+    "kind": "documentation",
+    "bytes": 5545,
+    "sha256": "d23535e92063dddee72e767a4028b160ddc39e1231735938df396061e72ca9fd",
+    "lines": 165,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/cfed9cf520fd.mermaid",
+    "kind": "documentation",
+    "bytes": 3345,
+    "sha256": "ef9bba953767d04637d4e40c2666e7d7837e163652b6c517c70c7628682a4e31",
+    "lines": 73,
+    "tests": []
+  },
+  {
+    "path": "v2/docs/schema/vcp/cfed9cf520fd.svg",
+    "kind": "documentation",
+    "bytes": 161144,
+    "sha256": "4793c2230f01a8ad35209340afa4366b8691210dc069287e6babd53cc7394c4f",
     "lines": 1,
     "tests": []
   },
@@ -1257,9 +1417,9 @@
   {
     "path": "v2/packages/contracts/README.md",
     "kind": "contract",
-    "bytes": 26861,
-    "sha256": "754fa316986d82f50b49e0db880528571a0ef2b006402d363374e2d55511125d",
-    "lines": 449,
+    "bytes": 27820,
+    "sha256": "af1820dacd8fc2e835876b8e679736e54f38b9dc247a0a85aeaf410f9298c0de",
+    "lines": 464,
     "tests": []
   },
   {
@@ -1345,9 +1505,9 @@
   {
     "path": "v2/packages/contracts/connection_bus/v1/asyncapi.yaml",
     "kind": "contract",
-    "bytes": 20223,
-    "sha256": "535545d81ae52d0bbb97ff12852cc2c78b29497ab5e8ed2ac0bbd353bd1932a1",
-    "lines": 451,
+    "bytes": 20984,
+    "sha256": "4ee368b863ad0c1d056bfc4db155560947bae72a14a0c6afffe78b497181ad06",
+    "lines": 463,
     "tests": []
   },
   {
@@ -1521,8 +1681,8 @@
   {
     "path": "v2/packages/contracts/connection_bus/v1/reference.html",
     "kind": "contract",
-    "bytes": 71924,
-    "sha256": "fe078a8228757f9d59fb855bd1959c92f02b849cf1a8281552edf3d453f60cd2",
+    "bytes": 72657,
+    "sha256": "f41bacab1638284270097a63fdd86089151eaa349d00f3a6f59bddd2e04699c5",
     "lines": 33,
     "tests": []
   },
@@ -1585,9 +1745,9 @@
   {
     "path": "v2/packages/contracts/graph_engine/v1/asyncapi.yaml",
     "kind": "contract",
-    "bytes": 68790,
-    "sha256": "401ef74b68e6fd5d7d06be6fa0ee735776daaaf0031ac61817b81866f96cd11d",
-    "lines": 1497,
+    "bytes": 69551,
+    "sha256": "1787154cf44e22ac679c6e3f1c420faeea888743d04dfa206471f1b70276173f",
+    "lines": 1509,
     "tests": []
   },
   {
@@ -2169,8 +2329,8 @@
   {
     "path": "v2/packages/contracts/graph_engine/v1/reference.html",
     "kind": "contract",
-    "bytes": 197152,
-    "sha256": "80340082f393b039b35bfeb29828c79ecde483c732d20fc672dc5176f0652a12",
+    "bytes": 197885,
+    "sha256": "342402c85c43c5e8ac4b2e634a2a8f2424c35546927c636b3680f5f59d121b87",
     "lines": 33,
     "tests": []
   },
@@ -2289,17 +2449,17 @@
   {
     "path": "v2/packages/contracts/internal/workspace_runtime/v1/README.md",
     "kind": "contract",
-    "bytes": 20214,
-    "sha256": "13fceefc8ef4537e41c0bc790490482d11dbe3eec8d0b0bfc3c8d559268c5321",
-    "lines": 337,
+    "bytes": 21765,
+    "sha256": "5eb48ad2866d9070ff3f05857ed3d63f022716e1ce16289b65d378e0acb86c69",
+    "lines": 358,
     "tests": []
   },
   {
     "path": "v2/packages/contracts/internal/workspace_runtime/v1/asyncapi.yaml",
     "kind": "contract",
-    "bytes": 4191,
-    "sha256": "7e0a1255f4869be6f90177f93a60eddf6bbea22ae8c610b267477851ac21adf9",
-    "lines": 146,
+    "bytes": 4875,
+    "sha256": "424ffd1372c9c85f8239978b04ec011390d33e5e10399a93496e781d01203824",
+    "lines": 171,
     "tests": []
   },
   {
@@ -2433,9 +2593,9 @@
   {
     "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/ready.json",
     "kind": "contract",
-    "bytes": 565,
-    "sha256": "c1344e9373504f02bbd9d8ff8b16f596107209863d20b98480c43c7578d6b181",
-    "lines": 26,
+    "bytes": 619,
+    "sha256": "3b3fdb05e2c1266b58ad6ca70ff977f875a769ae51e0b527c6bdfe3eca7d4fd1",
+    "lines": 29,
     "tests": []
   },
   {
@@ -2463,6 +2623,30 @@
     "tests": []
   },
   {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/steer.json",
+    "kind": "contract",
+    "bytes": 845,
+    "sha256": "e69c8dd59ff33f47c5bea739b37127c69a01445cfbe631f974c7f77e14a4e595",
+    "lines": 39,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/steering-applied.json",
+    "kind": "contract",
+    "bytes": 997,
+    "sha256": "4e6002ef05a875d85868929820ebb9f70a4ad4488b41c3bc0d670a27e3128a12",
+    "lines": 43,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/steering-failed.json",
+    "kind": "contract",
+    "bytes": 1350,
+    "sha256": "bbdf7e74c44ee4ecb0fce37c4b0063f091c41913d47a596a678e5a294187acf7",
+    "lines": 56,
+    "tests": []
+  },
+  {
     "path": "v2/packages/contracts/internal/workspace_runtime/v1/examples/update-ack.json",
     "kind": "contract",
     "bytes": 310,
@@ -2481,16 +2665,16 @@
   {
     "path": "v2/packages/contracts/internal/workspace_runtime/v1/messages.schema.json",
     "kind": "contract",
-    "bytes": 26856,
-    "sha256": "52067e363433a3415c22c65dab6850ba4e517b1b829cb894c82aef394834a121",
-    "lines": 1134,
+    "bytes": 31487,
+    "sha256": "1aa2e2c4f2bbe7fa302ff3add006bb5d384906769e76f0e5aae8ebcd0c87bcd7",
+    "lines": 1317,
     "tests": []
   },
   {
     "path": "v2/packages/contracts/internal/workspace_runtime/v1/reference.html",
     "kind": "contract",
-    "bytes": 46294,
-    "sha256": "5044fc4de439ac1b20ec3c6b0bb987affd30a06d15926150e8f37a5c20c9c52d",
+    "bytes": 50070,
+    "sha256": "cc31d635eb1f16498926af4cc7b1074334db76fba0165289fb77bb72a33a01fd",
     "lines": 33,
     "tests": []
   },
@@ -2545,9 +2729,9 @@
   {
     "path": "v2/packages/contracts/src/openengine/contracts/runtime.py",
     "kind": "source/config",
-    "bytes": 8424,
-    "sha256": "4b74c342c5cd95959a5902630d96ab1cb9976dee8eb317551ff25cbc623e9fcb",
-    "lines": 231,
+    "bytes": 9998,
+    "sha256": "5acf99ebee259b3bcbdf1298c0c4eddf5d802bbeb5f974b94228de578fc3ef40",
+    "lines": 275,
     "tests": []
   },
   {
@@ -2594,9 +2778,9 @@
   {
     "path": "v2/packages/contracts/tests/test_contracts.py",
     "kind": "test",
-    "bytes": 18675,
-    "sha256": "689288b72a82c5c71ff0f3c8a016a5dd8bfb006a3da6d116580ef2d89cc94d8b",
-    "lines": 436,
+    "bytes": 20386,
+    "sha256": "33147401ef130a371ea9011c827e1a718e1045ae2e9ab2949981397e660c28c7",
+    "lines": 471,
     "tests": [
       {
         "name": "test_every_message_has_valid_examples",
@@ -2697,6 +2881,14 @@
       {
         "name": "test_account_rejects",
         "line": 435
+      },
+      {
+        "name": "test_node_rejects_a_mutated_account_address",
+        "line": 441
+      },
+      {
+        "name": "test_tenant_identity_types_reject_non_strings",
+        "line": 470
       }
     ]
   },
@@ -2820,9 +3012,9 @@
   {
     "path": "v2/packages/contracts/tests/test_runtime_contract.py",
     "kind": "test",
-    "bytes": 15779,
-    "sha256": "8fc25acba4fad8194c8f94fc1e2fbf358ca02487c3643e4f4424efccef540342",
-    "lines": 440,
+    "bytes": 16181,
+    "sha256": "918bf3fdb1c1d75421ffefdd3358b759450ac350f844e2bc6f873c8e9a0b05b9",
+    "lines": 449,
     "tests": [
       {
         "name": "test_examples_and_all_message_schemas",
@@ -2955,15 +3147,19 @@
       {
         "name": "test_oversized_references_skip_uniqueness_checks",
         "line": 422
+      },
+      {
+        "name": "test_wire_nesting_limit_ignores_brackets_inside_strings",
+        "line": 443
       }
     ]
   },
   {
     "path": "v2/packages/contracts/tool_service/v1/asyncapi.yaml",
     "kind": "contract",
-    "bytes": 40762,
-    "sha256": "37eeb9fc4ea169af311c86fc7201b979412f13fe58235897368b66de109de62e",
-    "lines": 887,
+    "bytes": 41523,
+    "sha256": "9d252cda8e8ad6c85e0cf03a8dd66ed090be1a660362a919e59f81f1dfd10f48",
+    "lines": 899,
     "tests": []
   },
   {
@@ -3281,8 +3477,8 @@
   {
     "path": "v2/packages/contracts/tool_service/v1/reference.html",
     "kind": "contract",
-    "bytes": 110155,
-    "sha256": "51c028032b96833a2f3e83169c0e4019a46fc08fbb8b945abd93e66a8314791e",
+    "bytes": 110888,
+    "sha256": "9a1bc1a6a081edfd332abb7a830e8c4321ebf71e39a3245485752419528407bf",
     "lines": 33,
     "tests": []
   },
@@ -3409,9 +3605,9 @@
   {
     "path": "v2/packages/contracts/virtual_control_plane/v1/asyncapi.yaml",
     "kind": "contract",
-    "bytes": 60793,
-    "sha256": "bcd742afcab014d0afc412603e5a95f66d1dd762b7f6644a28343bdacd5aec0e",
-    "lines": 1430,
+    "bytes": 61724,
+    "sha256": "a4489c06402e1c420a1f539ab5b95f384b93cf092456475427b270932b2a099d",
+    "lines": 1443,
     "tests": []
   },
   {
@@ -3937,8 +4133,8 @@
   {
     "path": "v2/packages/contracts/virtual_control_plane/v1/reference.html",
     "kind": "contract",
-    "bytes": 163412,
-    "sha256": "0a0f5ea576aa284f8b1fde66e108508fe1ad951e904b96b2fc71bd423e64b5c4",
+    "bytes": 164398,
+    "sha256": "1d136c5c822a44096c3e4117786e1528eea616b80a4ebbb19f1ca595aaf260f9",
     "lines": 33,
     "tests": []
   },
@@ -3993,8 +4189,8 @@
   {
     "path": "v2/packages/contracts/virtual_control_plane/v1/schemas/commands.schema.json",
     "kind": "contract",
-    "bytes": 8439,
-    "sha256": "725af4d45864f783cf4d206173d43cca49507304da9c4ca69cd71d48d30b6a73",
+    "bytes": 8525,
+    "sha256": "2e9f3dbc71a9f9081a0271dcc0a225eb9e2564c7cfb3d2aa19acff9431f6756d",
     "lines": 198,
     "tests": []
   },
@@ -4041,9 +4237,9 @@
   {
     "path": "v2/packages/messaging/README.md",
     "kind": "documentation",
-    "bytes": 6166,
-    "sha256": "3d1e046ca32fb1d50a63ba4ed803682ab7a2a6eaa53f9a31e81c829a58916d4b",
-    "lines": 110,
+    "bytes": 6831,
+    "sha256": "b1d46898398857230dd6ebe97f30fc0dd84c19779a72e1df0fe647e0a646dbd1",
+    "lines": 119,
     "tests": []
   },
   {
@@ -4065,9 +4261,9 @@
   {
     "path": "v2/packages/messaging/src/openengine/messaging/client.py",
     "kind": "source/config",
-    "bytes": 5386,
-    "sha256": "7db52b7ce8919933dc75a9a6fe8ca168bdf664f3200b90a8ecfc6c7ce03614f1",
-    "lines": 115,
+    "bytes": 6337,
+    "sha256": "8f778c7594c8a28041d82075131bb7ae48138b565bc2a31f06c3d4e75f5fd389",
+    "lines": 132,
     "tests": []
   },
   {
@@ -4084,6 +4280,14 @@
     "bytes": 2778,
     "sha256": "eab53548d794c86efda822e04e408e4168ea4959876c507bd8c36dd441185524",
     "lines": 74,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/messaging/src/openengine/messaging/retry.py",
+    "kind": "source/config",
+    "bytes": 1355,
+    "sha256": "c597d0dd472f30997eaa9e8e3a492fd077bde802390e69ffcac2dd1327c921ed",
+    "lines": 37,
     "tests": []
   },
   {
@@ -4105,9 +4309,9 @@
   {
     "path": "v2/packages/messaging/tests/test_client.py",
     "kind": "test",
-    "bytes": 4163,
-    "sha256": "61fcf35bb7ebeb4b3da7297daab4a6c69ca9f4ac97f6aebe651919d5f8756440",
-    "lines": 114,
+    "bytes": 4952,
+    "sha256": "d610c1da943a0ece2b4016d5ffecb62cf23a3222ddc8b831d67c67da7be61b42",
+    "lines": 131,
     "tests": [
       {
         "name": "test_a_command_whose_reply_was_lost_is_resent_with_the_same_command_id",
@@ -4136,6 +4340,27 @@
       {
         "name": "test_a_connection_lost_while_waiting_reports_unavailable",
         "line": 107
+      },
+      {
+        "name": "test_send_resends_exact_bytes_and_returns_the_reply_undecoded",
+        "line": 117
+      },
+      {
+        "name": "test_send_reports_loss_as_unavailable_without_decoding",
+        "line": 128
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/messaging/tests/test_retry.py",
+    "kind": "test",
+    "bytes": 465,
+    "sha256": "d0bbcb1d162212fed9c83221658b476d6fe44a61ca48215cd9d5f70c6320b0cb",
+    "lines": 14,
+    "tests": [
+      {
+        "name": "test_backoff_doubles_to_its_cap_and_resets_on_success",
+        "line": 6
       }
     ]
   },
@@ -4284,25 +4509,25 @@
   {
     "path": "v2/packages/persistence/README.md",
     "kind": "documentation",
-    "bytes": 3258,
-    "sha256": "6360b4e75775547fc0d4d5bfd4932f3169111454a2626286f0cb898ada54c3b7",
-    "lines": 64,
+    "bytes": 5650,
+    "sha256": "455d1096a05d2767e857f99114b7b758976d7c30c6b09147001959fc169c7a89",
+    "lines": 101,
     "tests": []
   },
   {
     "path": "v2/packages/persistence/pyproject.toml",
     "kind": "source/config",
     "bytes": 427,
-    "sha256": "4ede11c7285715e240111a79b8499d8a1771efdcf28d4eba46fa9d7a972219d8",
+    "sha256": "e754460373426b4796cd70ab4cd971c9d50d38f62cb37795e328e1138da3e904",
     "lines": 17,
     "tests": []
   },
   {
     "path": "v2/packages/persistence/src/openengine/persistence/__init__.py",
     "kind": "source/config",
-    "bytes": 621,
-    "sha256": "9b584e42bd47b3854927c94a5ac8dd961b7e1c089e161868cc9edfab8e277e15",
-    "lines": 20,
+    "bytes": 1118,
+    "sha256": "95352316cd3f72b0f75d5e8de39402e4b6c942761da1b4f128513737db1e9043",
+    "lines": 45,
     "tests": []
   },
   {
@@ -4348,9 +4573,9 @@
   {
     "path": "v2/packages/persistence/src/openengine/persistence/service.py",
     "kind": "source/config",
-    "bytes": 2185,
-    "sha256": "387ae06e51bd21ee020d7f6407bceb446d1ce8a0165d7518a4b2fc1e25f20dad",
-    "lines": 58,
+    "bytes": 2970,
+    "sha256": "e9675eb509327b9b5417a49e67dff9d47be6aa37515dab11bf8660ed13ee336f",
+    "lines": 76,
     "tests": []
   },
   {
@@ -4383,6 +4608,30 @@
     "bytes": 609,
     "sha256": "14835395d45370c6d7d45f9a41a864c4a09a48ddc7271961494a613d9d340110",
     "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/tenancy/__init__.py",
+    "kind": "source/config",
+    "bytes": 13828,
+    "sha256": "73e0f34ee0e41e9d89521e4fcaebd2e22610f564cc5b8fdd4a2ef4ffc74f9041",
+    "lines": 324,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/tenancy/__main__.py",
+    "kind": "source/config",
+    "bytes": 1356,
+    "sha256": "99d15c1ba6e889f041503957e9dd1dfd816546ac21fab18b2b8f05c0455c9176",
+    "lines": 34,
+    "tests": []
+  },
+  {
+    "path": "v2/packages/persistence/src/openengine/persistence/tenancy/global_tables.toml",
+    "kind": "source/config",
+    "bytes": 418,
+    "sha256": "bb03920cd42d944ff8d5861c964b947d89442d88646bfc843e5ce8a22d6ae04e",
+    "lines": 9,
     "tests": []
   },
   {
@@ -4433,45 +4682,134 @@
   {
     "path": "v2/packages/persistence/tests/test_persistence.py",
     "kind": "test",
-    "bytes": 6205,
-    "sha256": "e0016f2971d1ceaced6ff0b426b1fbb7f6f53342d0f47b0e563c0eed0b7a7b16",
-    "lines": 168,
+    "bytes": 6253,
+    "sha256": "ee42364cf9eb0757804acd45af14574405fc191b26c8f832a28c9e20a69d07c3",
+    "lines": 169,
     "tests": [
       {
         "name": "test_defaults_to_sqlite_under_the_state_directory",
-        "line": 59
+        "line": 60
       },
       {
         "name": "test_one_variable_switches_every_service_to_postgres",
-        "line": 68
+        "line": 69
       },
       {
         "name": "test_refuses_an_unknown_backend",
-        "line": 75
+        "line": 76
       },
       {
         "name": "test_postgres_is_a_stub_that_fails_on_use",
-        "line": 80
+        "line": 81
       },
       {
         "name": "test_reports_a_service_without_a_store_for_the_backend",
-        "line": 87
+        "line": 88
       },
       {
         "name": "test_scaffold_keeps_a_service_edited_env",
-        "line": 94
+        "line": 95
       },
       {
         "name": "test_migrates_and_serves_a_service_on_sqlite",
-        "line": 104
+        "line": 105
       },
       {
         "name": "test_sqlite_connections_enforce_foreign_keys_and_use_wal",
-        "line": 125
+        "line": 126
       },
       {
         "name": "test_cold_connection_waits_for_journal_mode_lock_without_blocking_the_loop",
-        "line": 139
+        "line": 140
+      }
+    ]
+  },
+  {
+    "path": "v2/packages/persistence/tests/test_tenancy.py",
+    "kind": "test",
+    "bytes": 16276,
+    "sha256": "6e41d350847aafc98a32e2d9f4764db473dffa81f62bf4cc8385435104fb0e2c",
+    "lines": 372,
+    "tests": [
+      {
+        "name": "test_tenant_table_puts_tenant_id_first_in_the_key_uniques_and_foreign_keys",
+        "line": 71
+      },
+      {
+        "name": "test_a_child_row_cannot_point_at_another_tenants_parent",
+        "line": 87
+      },
+      {
+        "name": "test_unique_indexes_keep_their_expressions_and_predicates",
+        "line": 102
+      },
+      {
+        "name": "test_a_foreign_key_that_already_names_tenant_id_keeps_one",
+        "line": 128
+      },
+      {
+        "name": "test_a_global_table_may_be_declared_after_the_tables_that_reference_it",
+        "line": 141
+      },
+      {
+        "name": "test_scoping_keeps_column_keys_and_constraint_options",
+        "line": 152
+      },
+      {
+        "name": "test_a_foreign_key_to_a_tenants_table_cannot_clear_the_tenant",
+        "line": 174
+      },
+      {
+        "name": "test_a_global_table_is_found_in_the_metadatas_default_schema",
+        "line": 184
+      },
+      {
+        "name": "test_reports_tables_that_are_not_tenant_scoped",
+        "line": 204
+      },
+      {
+        "name": "test_a_global_table_must_be_registered_and_every_registration_declared",
+        "line": 227
+      },
+      {
+        "name": "test_the_registry_starts_empty",
+        "line": 247
+      },
+      {
+        "name": "test_tenant_ids_round_trip_in_canonical_form_on_sqlite_and_refuse_nil",
+        "line": 251
+      },
+      {
+        "name": "test_parsing_accepts_only_a_non_nil_canonical_uuid",
+        "line": 274
+      },
+      {
+        "name": "test_the_local_tenant_is_fixed_and_not_nil",
+        "line": 279
+      },
+      {
+        "name": "test_new_ids_are_uuid7_and_sort_in_creation_order",
+        "line": 285
+      },
+      {
+        "name": "test_scoped_stores_tag_every_transaction_with_their_tenant",
+        "line": 309
+      },
+      {
+        "name": "test_an_invalidated_connection_keeps_its_original_error",
+        "line": 327
+      },
+      {
+        "name": "test_open_offers_no_store_without_a_tenant",
+        "line": 344
+      },
+      {
+        "name": "test_lists_every_services_violations",
+        "line": 361
+      },
+      {
+        "name": "test_reports_success_when_no_service_has_violations",
+        "line": 370
       }
     ]
   },
@@ -4587,9 +4925,9 @@
   {
     "path": "v2/pyproject.toml",
     "kind": "source/config",
-    "bytes": 1759,
-    "sha256": "61fdf43db70d9636f2d345232955615fd3ea7356f042a3017fc968530b5434f6",
-    "lines": 50,
+    "bytes": 1913,
+    "sha256": "fc3a1b1f0b33fb64e6676595216801e943c438b56c3e26ebc7b3c8d23031242e",
+    "lines": 53,
     "tests": []
   },
   {
@@ -4683,8 +5021,8 @@
   {
     "path": "v2/services/connection_bus/tests/test_persistence.py",
     "kind": "test",
-    "bytes": 1977,
-    "sha256": "ed77635661ac6d01c97f848d5df2aa30ae6bb769165955dc6578fa06b3dd4490",
+    "bytes": 2033,
+    "sha256": "e37a831146d4c48c8d60be04f1d86a4f635a18338ac40e9df9547f82ffeb5baf",
     "lines": 56,
     "tests": [
       {
@@ -4708,16 +5046,16 @@
   {
     "path": "v2/services/graph_engine/README.md",
     "kind": "documentation",
-    "bytes": 5744,
-    "sha256": "b8ba4a42806e4b3204bc5a97c069d1947bccea854dc610af5c1acb688da2be67",
-    "lines": 98,
+    "bytes": 6620,
+    "sha256": "0660007f6c3fe2678050e5a21715211e38ba175f02f4c18ae0ed7cbbfdd5ec2b",
+    "lines": 112,
     "tests": []
   },
   {
     "path": "v2/services/graph_engine/__main__.py",
     "kind": "source/config",
-    "bytes": 6484,
-    "sha256": "c98074ec1fa6a3774575f78d31b4f70da53c5bb7c3b52a59c20d42d2ccd3a825",
+    "bytes": 6532,
+    "sha256": "c6ef026cf19e50d092f536a8ba8860bb01339062d0d1bdad3a1fce7c690293b9",
     "lines": 165,
     "tests": []
   },
@@ -4754,6 +5092,14 @@
     "tests": []
   },
   {
+    "path": "v2/services/graph_engine/persistence/migrations/versions/5cce010cee3d_scope_ge_tables_to_tenants.py",
+    "kind": "source/config",
+    "bytes": 2861,
+    "sha256": "98a47e0d1cb624704f87e96c06d7578d350c4d882919728a5b7bdbd742c5f4ea",
+    "lines": 74,
+    "tests": []
+  },
+  {
     "path": "v2/services/graph_engine/persistence/migrations/versions/b552e26457cd_create_graphs.py",
     "kind": "source/config",
     "bytes": 1107,
@@ -4780,25 +5126,25 @@
   {
     "path": "v2/services/graph_engine/persistence/schema.py",
     "kind": "source/config",
-    "bytes": 2777,
-    "sha256": "e0f68858950ab396ca21212d56eddf62d1ec1f8c189f066a7a2fecdc98bb1a06",
+    "bytes": 2807,
+    "sha256": "74c7099fa6b0cebe7587dce9ab728bef328f28ad53f165bbd2e06df67ff8c1c5",
     "lines": 64,
     "tests": []
   },
   {
     "path": "v2/services/graph_engine/persistence/sqlite/__init__.py",
     "kind": "source/config",
-    "bytes": 7677,
-    "sha256": "c9d3f364dd71beef43efd06dd7640423af99db3a954fa560b8cb9c64e9af00a7",
-    "lines": 157,
+    "bytes": 9229,
+    "sha256": "d8605f8b0b6d973c2e51c491b84f1cb2691ee85d3c7844c80b2f997be668c4f6",
+    "lines": 174,
     "tests": []
   },
   {
     "path": "v2/services/graph_engine/persistence/store.py",
     "kind": "source/config",
-    "bytes": 4629,
-    "sha256": "3d04a2a2d43fa17fdc36c2dd1cf35f96f39b6135e4865f044984c4eaa84ce290",
-    "lines": 137,
+    "bytes": 4865,
+    "sha256": "d310e5ccbd5a6bcdd1621f1211f9e7af37f52c914da813ddcd2e630d42e53f38",
+    "lines": 143,
     "tests": []
   },
   {
@@ -4812,17 +5158,17 @@
   {
     "path": "v2/services/graph_engine/registry.py",
     "kind": "source/config",
-    "bytes": 14744,
-    "sha256": "1e910a02760820fa1e6306e08d3f95540674d14ee417358235ddb5d058deaa93",
-    "lines": 297,
+    "bytes": 15220,
+    "sha256": "da370d281357928ae6c44b37f1f281ae54bc1e76adb5bbbc48761354a355d910",
+    "lines": 304,
     "tests": []
   },
   {
     "path": "v2/services/graph_engine/tests/test_persistence.py",
     "kind": "test",
-    "bytes": 14418,
-    "sha256": "02fd1b2eef9cc83530820e262ae2a8a0742a48ffe53a054293d33649336119f0",
-    "lines": 287,
+    "bytes": 20491,
+    "sha256": "610fea1640b7f54b1a340bddbd6a966e7fbc5ca8494fbc8b3c5afa2b9234ebcd",
+    "lines": 407,
     "tests": [
       {
         "name": "test_migrations_match_the_schema",
@@ -4849,37 +5195,53 @@
         "line": 117
       },
       {
-        "name": "test_concurrent_applies_neither_duplicate_nor_skip_revisions",
+        "name": "test_request_scoped_writes_share_the_database_queue",
         "line": 140
       },
       {
+        "name": "test_concurrent_applies_neither_duplicate_nor_skip_revisions",
+        "line": 167
+      },
+      {
         "name": "test_graphs_are_listed_by_name_and_paged_after_a_key",
-        "line": 162
+        "line": 189
       },
       {
         "name": "test_names_command_ids_and_listings_are_per_project",
-        "line": 188
+        "line": 215
       },
       {
         "name": "test_the_project_migration_keeps_existing_graphs_under_default",
-        "line": 220
+        "line": 247
       },
       {
         "name": "test_any_revision_of_a_graph_is_read_back",
-        "line": 263
+        "line": 290
       },
       {
         "name": "test_postgres_store_is_a_stub",
-        "line": 285
+        "line": 312
+      },
+      {
+        "name": "test_two_tenants_isolate_graphs_revisions_operations_pages_and_receipts",
+        "line": 317
+      },
+      {
+        "name": "test_tenant_migration_refuses_unsafe_downgrade_and_cross_tenant_foreign_keys",
+        "line": 354
+      },
+      {
+        "name": "test_populated_local_tenant_rows_survive_downgrade_and_upgrade",
+        "line": 379
       }
     ]
   },
   {
     "path": "v2/services/graph_engine/tests/test_registry.py",
     "kind": "test",
-    "bytes": 22108,
-    "sha256": "277942dca197b8d784fdca2e8943ba3b9b2643d46fd8bbef435006f2354ec414",
-    "lines": 445,
+    "bytes": 24804,
+    "sha256": "b8cbf66a322eec89496bca45e668743e815d879c55fc4a87947e7d8dcfaef0a3",
+    "lines": 494,
     "tests": [
       {
         "name": "test_apply_creates_then_keeps_or_adds_revisions_under_one_graph_id",
@@ -4968,15 +5330,19 @@
       {
         "name": "test_a_receipt_kept_before_projects_still_replays",
         "line": 421
+      },
+      {
+        "name": "test_two_tenant_handlers_isolate_acceptance_rejection_conflicts_and_pages",
+        "line": 448
       }
     ]
   },
   {
     "path": "v2/services/tool_service/README.md",
     "kind": "documentation",
-    "bytes": 1417,
-    "sha256": "a6c6dfb1b58d21f783e36f12f7f6adbae5408a1ddae6e055d09cca0314148155",
-    "lines": 21,
+    "bytes": 1919,
+    "sha256": "a797a12f71731dd5c7ea3a2d36172982142da3ebff78fcab90f592e8899eab45",
+    "lines": 29,
     "tests": []
   },
   {
@@ -5028,6 +5394,14 @@
     "tests": []
   },
   {
+    "path": "v2/services/tool_service/persistence/migrations/versions/1f78d3a45137_tenant_scope_tool_persistence.py",
+    "kind": "source/config",
+    "bytes": 3441,
+    "sha256": "9692b5e807ad33b9fcfe9a1a5249f7ccd0ee3c1ff5e8cb01ababbd89756a2af5",
+    "lines": 89,
+    "tests": []
+  },
+  {
     "path": "v2/services/tool_service/persistence/migrations/versions/39e856077000_create_tools_and_tool_grants.py",
     "kind": "source/config",
     "bytes": 3195,
@@ -5046,9 +5420,9 @@
   {
     "path": "v2/services/tool_service/persistence/schema.py",
     "kind": "source/config",
-    "bytes": 6209,
-    "sha256": "785502be8cc0f84a14a9f1960b17af65a1c6f56e1c7adc999bbf7c262a9739b2",
-    "lines": 128,
+    "bytes": 6302,
+    "sha256": "5ceecab334f533a5c7a6decabe875f3b7d8653438f5ac7f2b0fc07298e4be8d7",
+    "lines": 129,
     "tests": []
   },
   {
@@ -5167,46 +5541,66 @@
   {
     "path": "v2/services/tool_service/tests/test_persistence.py",
     "kind": "test",
-    "bytes": 2298,
-    "sha256": "a0fb0f363fffb2f173ef1f1674b4df89ae2f15c16c5c404ea935259b5c69c554",
-    "lines": 57,
+    "bytes": 9437,
+    "sha256": "3f60bc599e75d7c1df67b484b55901320b376b6da91052bf929db83bb8aa1a49",
+    "lines": 203,
     "tests": [
       {
         "name": "test_migrations_match_the_schema",
-        "line": 22
+        "line": 28
       },
       {
-        "name": "test_migrations_create_the_tables_in_three_revisions",
-        "line": 26
+        "name": "test_migrations_create_the_tables_in_four_revisions",
+        "line": 33
       },
       {
         "name": "test_migrations_roll_back",
-        "line": 40
-      },
-      {
-        "name": "test_resources_are_unique_by_namespace_and_name",
         "line": 47
       },
       {
-        "name": "test_there_is_no_store_yet",
+        "name": "test_resources_are_unique_by_namespace_and_name",
         "line": 54
+      },
+      {
+        "name": "test_there_is_no_store_yet",
+        "line": 61
+      },
+      {
+        "name": "test_migrated_tenant_leading_keys",
+        "line": 87
+      },
+      {
+        "name": "test_two_tenants_share_names_and_row_ids",
+        "line": 104
+      },
+      {
+        "name": "test_attempt_fk_and_cascade_isolation",
+        "line": 130
+      },
+      {
+        "name": "test_populated_upgrade_and_local_downgrade",
+        "line": 149
+      },
+      {
+        "name": "test_downgrade_guards_every_table",
+        "line": 191
       }
     ]
   },
   {
     "path": "v2/services/virtual_control_plane/README.md",
     "kind": "documentation",
-    "bytes": 20578,
-    "sha256": "464ef0359801ef7ea9ed5ef2a112b61d0630a04fbcfff6edfc8780ecbd207424",
-    "lines": 331,
+    "bytes": 54202,
+    "sha256": "af4485f817e1bcb101749016bcf2e816e16b922dcc92ebd82f61ced2204caa71",
+    "lines": 844,
     "tests": []
   },
   {
     "path": "v2/services/virtual_control_plane/__main__.py",
     "kind": "source/config",
-    "bytes": 9636,
-    "sha256": "0287a55d873978a3f8705d036dffdfbceac724fdc26beba6b2e509a9d5362120",
-    "lines": 221,
+    "bytes": 15029,
+    "sha256": "53cd8f79a5c2d8912c85de729176034123f3496623d4e6e43297f24a1c260449",
+    "lines": 307,
     "tests": []
   },
   {
@@ -5218,11 +5612,19 @@
     "tests": []
   },
   {
+    "path": "v2/services/virtual_control_plane/application/execution.py",
+    "kind": "source/config",
+    "bytes": 25764,
+    "sha256": "880af9265eb5d77125de8b3ff688c28ee53242a46dcaf852138f459d10ac9d57",
+    "lines": 399,
+    "tests": []
+  },
+  {
     "path": "v2/services/virtual_control_plane/application/lifecycle.py",
     "kind": "source/config",
-    "bytes": 24606,
-    "sha256": "d38d8b9a995c490d90c1737d5af828b217a05ac791f08c8e0d76c06a70a70164",
-    "lines": 417,
+    "bytes": 28827,
+    "sha256": "e798f209bd04e74f3bbc6565b60286205225edcb68e5e183489a757012f68f4d",
+    "lines": 489,
     "tests": []
   },
   {
@@ -5236,17 +5638,33 @@
   {
     "path": "v2/services/virtual_control_plane/application/ports.py",
     "kind": "source/config",
-    "bytes": 7086,
-    "sha256": "7b19d80873c4d4df1a178fce556d3e1cf851637ad0ad6b95bfff828cb64230b8",
-    "lines": 186,
+    "bytes": 8849,
+    "sha256": "f55e80f1ca9c21567887c29665c41860078862821c4f3ec715a64f014942f3cf",
+    "lines": 223,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/application/runtime_delivery.py",
+    "kind": "source/config",
+    "bytes": 16029,
+    "sha256": "155a1ad94d6270027e667a1a7c3c8402934586fa92118d968a5d86e3d243ef39",
+    "lines": 275,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/application/steering.py",
+    "kind": "source/config",
+    "bytes": 10347,
+    "sha256": "0df706d10dd51f92f107238f4db776bc8c26dbfce9e388293cbbcca5842e2dae",
+    "lines": 163,
     "tests": []
   },
   {
     "path": "v2/services/virtual_control_plane/application/transactions.py",
     "kind": "source/config",
-    "bytes": 3962,
-    "sha256": "74fda47cbbaf478b84d49ad36a7192afc330b1984acb18eb75472ec9b264f75c",
-    "lines": 103,
+    "bytes": 6225,
+    "sha256": "7664b03cf393c8ed7861da4f9f88ab44119570ac7a4a4c365505a0268b166ba2",
+    "lines": 155,
     "tests": []
   },
   {
@@ -5282,11 +5700,19 @@
     "tests": []
   },
   {
+    "path": "v2/services/virtual_control_plane/persistence/credentials.py",
+    "kind": "source/config",
+    "bytes": 2943,
+    "sha256": "3d63f1f32b435d94d340c83718af682760f17e59af738a8f413d4f07ea5a5a50",
+    "lines": 65,
+    "tests": []
+  },
+  {
     "path": "v2/services/virtual_control_plane/persistence/durable.py",
     "kind": "source/config",
-    "bytes": 10382,
-    "sha256": "57f8a609a808e22174f31fe5e83eed167e4148ecb97cd2dc1611982d428b7dd5",
-    "lines": 217,
+    "bytes": 17227,
+    "sha256": "417a8483d3434ca3d449e9f03f3c274c2c6fd7232fef464beb7b33bdee4b517a",
+    "lines": 326,
     "tests": []
   },
   {
@@ -5314,6 +5740,14 @@
     "tests": []
   },
   {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/1b2226fa7c9a_persist_steering_commands_and_session_.py",
+    "kind": "source/config",
+    "bytes": 4496,
+    "sha256": "d381bbfc7ab779c597044637a004fb9d51b66dca4b5dd783e144cd28a8e8821b",
+    "lines": 83,
+    "tests": []
+  },
+  {
     "path": "v2/services/virtual_control_plane/persistence/migrations/versions/591de3f10346_index_unfinished_workspace_operations.py",
     "kind": "source/config",
     "bytes": 1117,
@@ -5327,6 +5761,14 @@
     "bytes": 703,
     "sha256": "350789043477f4d605d7c233213befc9644653d4e68a1affebf5cc1a5c055273",
     "lines": 26,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/700f6cbb335e_add_durable_execution_acceptance.py",
+    "kind": "source/config",
+    "bytes": 1066,
+    "sha256": "7982274f16c2c7038cba9470de8b772694fb2b512657ad41a4fa4e00bbab324e",
+    "lines": 31,
     "tests": []
   },
   {
@@ -5346,11 +5788,35 @@
     "tests": []
   },
   {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/9b7f1ac760d9_index_session_pages.py",
+    "kind": "source/config",
+    "bytes": 933,
+    "sha256": "c3d9735b0534a683bbb46563007c300ca062096957ca083b2d1ed1cbd37c59f7",
+    "lines": 28,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/9d5590f3f1a5_add_runtime_broker_credentials.py",
+    "kind": "source/config",
+    "bytes": 1639,
+    "sha256": "068348f7347a3f3f3126a7b4b77e179c3bdaa7979689f38aaa8f9510427dfbb5",
+    "lines": 41,
+    "tests": []
+  },
+  {
     "path": "v2/services/virtual_control_plane/persistence/migrations/versions/c36db826eebb_index_pending_outbox_events_by_workspace.py",
     "kind": "source/config",
     "bytes": 705,
     "sha256": "3765d234dfb871296122a574c20ebc3140cacfb909840d04989f3100856ebe4c",
     "lines": 28,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/persistence/migrations/versions/cfed9cf520fd_track_runtime_command_delivery_and_.py",
+    "kind": "source/config",
+    "bytes": 2655,
+    "sha256": "f408bdc3896fb3e61cfec53360f846aecb58d9800ae7ca1b31d3284ca90ee799",
+    "lines": 54,
     "tests": []
   },
   {
@@ -5380,9 +5846,9 @@
   {
     "path": "v2/services/virtual_control_plane/persistence/schema.py",
     "kind": "source/config",
-    "bytes": 3758,
-    "sha256": "76fcdf9434606c928c89950a494cb2732b9ea5d67c50fbb272cc0edf696cce03",
-    "lines": 64,
+    "bytes": 8759,
+    "sha256": "9303e8ab415a7abdae9af7b2bd5944b0a44d4f753a4125fc5b0e7a2c7102d46a",
+    "lines": 140,
     "tests": []
   },
   {
@@ -5410,6 +5876,14 @@
     "tests": []
   },
   {
+    "path": "v2/services/virtual_control_plane/providers/errors.py",
+    "kind": "source/config",
+    "bytes": 688,
+    "sha256": "8586260f582dbb9f9bacc4e705c4f08be2b6b881f548fa7e2b5d5bf6f3e8ad85",
+    "lines": 17,
+    "tests": []
+  },
+  {
     "path": "v2/services/virtual_control_plane/providers/smolvm/__init__.py",
     "kind": "source/config",
     "bytes": 298,
@@ -5420,25 +5894,97 @@
   {
     "path": "v2/services/virtual_control_plane/providers/smolvm/provider.py",
     "kind": "source/config",
-    "bytes": 15286,
-    "sha256": "f7d9dfdb3eb7eaa2bdb222acb3440494eafddb1b895b6238766d193cb313c4f6",
-    "lines": 296,
+    "bytes": 16184,
+    "sha256": "d467257d7eaf3f3aec6fe46f337e1e9854395eff52f85c1ffa5de1c2dd24a026",
+    "lines": 313,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/providers/worktree/__init__.py",
+    "kind": "source/config",
+    "bytes": 342,
+    "sha256": "e797303a0c89a17b0c8e5411c0731f09c77235f9c21d1586b879a77e7caa9c74",
+    "lines": 6,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/providers/worktree/daemon.py",
+    "kind": "source/config",
+    "bytes": 8792,
+    "sha256": "d59f144b4c1272c676cd60c24360f54f1bda540296e400ac42ac1506f14a87b0",
+    "lines": 180,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/providers/worktree/files.py",
+    "kind": "source/config",
+    "bytes": 812,
+    "sha256": "0e03b2770827375bd80c5834dd5dd17a5e4480ba3934efd1218bcdf7e48f9e9a",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/providers/worktree/provider.py",
+    "kind": "source/config",
+    "bytes": 33181,
+    "sha256": "0203d226e282fd8896448b721656c449b352ccfb725ac04e205e7fcec70e5cb4",
+    "lines": 628,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/provisioning/__init__.py",
+    "kind": "source/config",
+    "bytes": 91,
+    "sha256": "3ee0e21721a53f8efb4a0d30d05e6aabd0897cab114d2b87d4a2ff324d0f1599",
+    "lines": 1,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/provisioning/broker.py",
+    "kind": "source/config",
+    "bytes": 32194,
+    "sha256": "d0cdd5d25fa49086d6037c6854ce74a96814f98572f4360fd6fc5531ff97ddd1",
+    "lines": 686,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/provisioning/broker_process.py",
+    "kind": "source/config",
+    "bytes": 1956,
+    "sha256": "27fafd6503201d352be94ac5e72648c22fc384b952b79387f3b80d96ebf8e8e8",
+    "lines": 52,
     "tests": []
   },
   {
     "path": "v2/services/virtual_control_plane/pyproject.toml",
     "kind": "source/config",
-    "bytes": 1003,
-    "sha256": "26f2072c2791ab8ca8f21cd077f9826956e15c209c7662d183db704722bef7ae",
-    "lines": 25,
+    "bytes": 1286,
+    "sha256": "993b5c0c03f75c79eaf27d96cfd3d8053bd276d0c2ec1a7290456bf01df98c1a",
+    "lines": 28,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/runtime_nats.py",
+    "kind": "source/config",
+    "bytes": 3367,
+    "sha256": "f35e3153c76588b66cb0237b132ff7646be841c529b893431c66c4799220f3dd",
+    "lines": 86,
+    "tests": []
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/conftest.py",
+    "kind": "test",
+    "bytes": 454,
+    "sha256": "9cf1e6f9e8071defc8397c58b129bfa7d386b18744caa612244744f30790b347",
+    "lines": 15,
     "tests": []
   },
   {
     "path": "v2/services/virtual_control_plane/tests/fakes.py",
     "kind": "test",
-    "bytes": 5137,
-    "sha256": "8670f6c960bf40b373e8dbc6194e1928de8f114eef0457244ad90a36cbf4c869",
-    "lines": 124,
+    "bytes": 5463,
+    "sha256": "f4809b95ea7d12fb72c404b766b2a575e1776b2851e80c89c189593540618dca",
+    "lines": 133,
     "tests": []
   },
   {
@@ -5452,9 +5998,9 @@
   {
     "path": "v2/services/virtual_control_plane/tests/test_boundaries.py",
     "kind": "test",
-    "bytes": 1969,
-    "sha256": "de98ef162cbeffc6089e7b955eb7483d538597da3a31cc9ad35d4ac5ba7fb442",
-    "lines": 53,
+    "bytes": 2636,
+    "sha256": "b5e8404b93e38f93b91392ff2ee90d96e90dbec4bf9f68cfe82e3c60ab7f1e0e",
+    "lines": 68,
     "tests": [
       {
         "name": "test_the_application_layer_imports_no_transport_storage_library_or_provider",
@@ -5463,15 +6009,72 @@
       {
         "name": "test_the_smolvm_adapter_keeps_its_guest_layout_and_cli_to_itself",
         "line": 47
+      },
+      {
+        "name": "test_the_worktree_adapter_keeps_git_and_host_processes_to_itself",
+        "line": 56
+      },
+      {
+        "name": "test_runtime_delivery_never_reads_placement_metadata",
+        "line": 63
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_cancellation.py",
+    "kind": "test",
+    "bytes": 22856,
+    "sha256": "f67f2e74021a439b7077dbd67cba7506b5bcef19bf52378f71b1003001cc9c5e",
+    "lines": 462,
+    "tests": [
+      {
+        "name": "test_cancel_before_delivery_tombstones_and_late_execute_never_launches",
+        "line": 150
+      },
+      {
+        "name": "test_cancel_of_a_recorded_attempt_never_launches",
+        "line": 170
+      },
+      {
+        "name": "test_cancel_while_launching_reports_started_then_cancelled",
+        "line": 183
+      },
+      {
+        "name": "test_duplicate_cancels_and_lost_acknowledgements_settle_one_logical_outcome",
+        "line": 213
+      },
+      {
+        "name": "test_cancelled_transition_without_the_winning_cancel_is_an_invalid_transition",
+        "line": 241
+      },
+      {
+        "name": "test_completion_that_wins_the_race_keeps_its_outcome",
+        "line": 255
+      },
+      {
+        "name": "test_unconfirmed_termination_keeps_destroy_refused_until_cancelled",
+        "line": 277
+      },
+      {
+        "name": "test_cancel_of_an_unknown_attempt_or_unowned_runtime_is_rejected",
+        "line": 308
+      },
+      {
+        "name": "test_daemon_killed_while_cancelling_recovers_the_intent_over_real_nats",
+        "line": 389
+      },
+      {
+        "name": "test_cancel_accepted_before_delivery_survives_vcp_and_daemon_restarts_over_real_nats",
+        "line": 422
       }
     ]
   },
   {
     "path": "v2/services/virtual_control_plane/tests/test_durable.py",
     "kind": "test",
-    "bytes": 14774,
-    "sha256": "0800cab29a0e175bc8672775117fb574e509b8c6e1f2f5d4e7ef0bfe98be9c3b",
-    "lines": 322,
+    "bytes": 17167,
+    "sha256": "fbe518d9ace9bb7400a3d865d1de6fb547e72d67776453f5e74c6fddb9a8638c",
+    "lines": 365,
     "tests": [
       {
         "name": "test_failure_rolls_back_every_record",
@@ -5508,6 +6111,10 @@
       {
         "name": "test_upgrade_preserves_legacy_rows_without_adopting_them",
         "line": 241
+      },
+      {
+        "name": "test_runtime_delivery_tables_enforce_their_relations",
+        "line": 326
       }
     ]
   },
@@ -5533,105 +6140,182 @@
     ]
   },
   {
+    "path": "v2/services/virtual_control_plane/tests/test_execution.py",
+    "kind": "test",
+    "bytes": 24037,
+    "sha256": "242fd240803bd3d59785c10af9a54b6c3a28561a94771c26668be98a0bc0ace3",
+    "lines": 442,
+    "tests": [
+      {
+        "name": "test_duplicates_conflicts_restart_and_queries",
+        "line": 76
+      },
+      {
+        "name": "test_rejections_leave_no_partial_acceptance",
+        "line": 118
+      },
+      {
+        "name": "test_storage_failure_rolls_back_acceptance",
+        "line": 158
+      },
+      {
+        "name": "test_sessions_parallel_continuation_pagination_and_transitions",
+        "line": 176
+      },
+      {
+        "name": "test_destroy_and_execute_share_atomic_admission",
+        "line": 233
+      },
+      {
+        "name": "test_public_routes_validate_acceptance_and_session_snapshots",
+        "line": 266
+      },
+      {
+        "name": "test_accepted_binding_and_command_cannot_be_overwritten",
+        "line": 289
+      },
+      {
+        "name": "test_completion_requires_result_before_mutation",
+        "line": 310
+      },
+      {
+        "name": "test_session_pages_use_indexes_without_writer_reservation",
+        "line": 332
+      },
+      {
+        "name": "test_preparation_releases_writer_and_revalidates",
+        "line": 364
+      },
+      {
+        "name": "test_malformed_context_records_rejection",
+        "line": 430
+      }
+    ]
+  },
+  {
     "path": "v2/services/virtual_control_plane/tests/test_lifecycle.py",
     "kind": "test",
-    "bytes": 38157,
-    "sha256": "4f67895647acad714dfbead7996ac61f0e4c130e91c908e375b498c88c9b5a13",
-    "lines": 710,
+    "bytes": 47131,
+    "sha256": "d4c9011bdec21796a940295207ea52d6d2964aeed985a990a8036b355f1bad80",
+    "lines": 862,
     "tests": [
       {
         "name": "test_nats_retry_concurrency_restart_and_typed_queries",
-        "line": 90
+        "line": 82
       },
       {
         "name": "test_denied_requests_cannot_replay_reserve_or_read",
-        "line": 156
+        "line": 148
       },
       {
         "name": "test_loopback_dial_to_public_broker_is_denied",
-        "line": 187
+        "line": 179
       },
       {
         "name": "test_crash_after_allocation_recovers_same_runtime_and_failed_allocation_retains_ownership",
-        "line": 204
+        "line": 196
       },
       {
         "name": "test_durable_rejections_and_atomic_rollback",
-        "line": 253
+        "line": 245
       },
       {
         "name": "test_allocation_pages_are_indexed_bounded_concurrent_and_claimed",
-        "line": 304
+        "line": 296
       },
       {
         "name": "test_stalled_allocation_refills_slots_and_times_out_pending",
-        "line": 372
+        "line": 364
       },
       {
         "name": "test_workspace_queries_use_indexes_and_do_not_reserve_writer",
-        "line": 414
+        "line": 406
       },
       {
         "name": "test_provider_cancellation_keeps_background_worker_alive",
-        "line": 446
+        "line": 438
       },
       {
         "name": "test_status_queries_do_not_reserve_writer",
-        "line": 479
+        "line": 471
       },
       {
         "name": "test_ensure_is_idempotent_and_recovers_pending_and_running_operations",
-        "line": 515
+        "line": 507
       },
       {
         "name": "test_missing_provider_fails_operations_explicitly_without_stalling_other_work",
-        "line": 622
+        "line": 614
       },
       {
         "name": "test_transient_failures_back_off_with_a_cap_and_eventually_fail",
-        "line": 679
+        "line": 680
+      },
+      {
+        "name": "test_destroy_admission_and_active_attempt_guard",
+        "line": 726
+      },
+      {
+        "name": "test_destroy_retry_schedule_and_exhaustion_survive_restart",
+        "line": 765
+      },
+      {
+        "name": "test_destroy_completion_rollback_keeps_ownership_for_restart",
+        "line": 813
+      },
+      {
+        "name": "test_fresh_apply_is_rejected_for_a_destroyed_workspace_but_the_original_replays",
+        "line": 845
       }
     ]
   },
   {
     "path": "v2/services/virtual_control_plane/tests/test_main.py",
     "kind": "test",
-    "bytes": 3815,
-    "sha256": "cc39c8a1b167db8c376e7ab69716ca3e64c8a21336f1cc98f8f4aacb8ad5adab",
-    "lines": 98,
+    "bytes": 6085,
+    "sha256": "24dd6f93463268d3cd667517db155eacb88fa70161f6f6fd3c747d726683c3fd",
+    "lines": 133,
     "tests": [
       {
         "name": "test_capabilities_get_truthfully_reports_no_providers",
-        "line": 37
+        "line": 38
       },
       {
         "name": "test_a_rejecting_authorizer_prevents_the_handler_from_running",
-        "line": 44
+        "line": 45
       },
       {
         "name": "test_local_operator_refuses_a_broker_listening_beyond_loopback",
-        "line": 61
+        "line": 62
       },
       {
         "name": "test_local_operator_allows_a_loopback_broker_as_the_local_tenant",
-        "line": 67
+        "line": 68
       },
       {
         "name": "test_main_fails_startup_rather_than_racing_a_running_vcp_for_the_state_directory",
-        "line": 73
+        "line": 74
       },
       {
         "name": "test_providers_are_configured_from_the_environment_and_default_to_none",
-        "line": 85
+        "line": 86
+      },
+      {
+        "name": "test_the_worktree_provider_needs_a_root_and_explicit_daemon_credentials",
+        "line": 102
+      },
+      {
+        "name": "test_the_internal_runtime_broker_is_opt_in_and_lives_in_the_state_directory",
+        "line": 123
       }
     ]
   },
   {
     "path": "v2/services/virtual_control_plane/tests/test_outbox.py",
     "kind": "test",
-    "bytes": 32958,
-    "sha256": "4cedb0cdadf8c19c68866f86ed2c1df09c37bc1b33a7089e7c81807327634eee",
-    "lines": 717,
+    "bytes": 36520,
+    "sha256": "b15d60f17a695310fc7baa8adf558ce58d7388ea06990ad5ec2e8eb717ba73c9",
+    "lines": 775,
     "tests": [
       {
         "name": "test_failure_rolls_back_events_with_lifecycle_records",
@@ -5708,15 +6392,19 @@
       {
         "name": "test_service_restart_publishes_events_committed_before_a_crash",
         "line": 684
+      },
+      {
+        "name": "test_real_nats_create_ensure_destroy_observes_durable_lifecycle",
+        "line": 721
       }
     ]
   },
   {
     "path": "v2/services/virtual_control_plane/tests/test_persistence.py",
     "kind": "test",
-    "bytes": 5244,
-    "sha256": "40145774bd06c88b53bd266341ccce8ab313ea13838508c8a290c3a160120d4a",
-    "lines": 126,
+    "bytes": 5925,
+    "sha256": "336e9277d0ffdc9b5d03bb865d3f937809c90d1910b10fe6fb80b60bc20ef315",
+    "lines": 138,
     "tests": [
       {
         "name": "test_migrations_match_the_schema",
@@ -5741,52 +6429,243 @@
       {
         "name": "test_list_filters_in_sql_using_legacy_status_index",
         "line": 81
+      },
+      {
+        "name": "test_downgrade_keeps_issued_runtime_credentials",
+        "line": 129
       }
     ]
   },
   {
     "path": "v2/services/virtual_control_plane/tests/test_provider_conformance.py",
     "kind": "test",
-    "bytes": 16265,
-    "sha256": "cc190c421400aef3db6b237d89ebba7fee4c29ebeb914fbd3e7f7ee6da19d3c1",
-    "lines": 355,
+    "bytes": 25557,
+    "sha256": "9d32585f3b5592fea6cdf1c0320a8bd919ab66635cfa5b24721b1c212ef82f7a",
+    "lines": 526,
     "tests": [
       {
         "name": "test_create_persists_the_providers_locator_and_becomes_ready",
-        "line": 35
+        "line": 34
       },
       {
         "name": "test_ownership_survives_a_restart",
-        "line": 54
+        "line": 53
       },
       {
         "name": "test_destroy_releases_the_workspace_through_its_own_provider",
-        "line": 84
+        "line": 83
       },
       {
         "name": "test_create_then_idempotent_ensure_and_honest_capabilities",
-        "line": 222
+        "line": 267
       },
       {
         "name": "test_ownership_mismatch_fails_without_touching_the_foreign_compute",
-        "line": 271
+        "line": 316
       },
       {
         "name": "test_failed_preparation_fails_the_workspace_and_retains_ownership",
-        "line": 298
+        "line": 343
       },
       {
         "name": "test_allocation_before_a_crash_is_reconciled_after_restart",
-        "line": 327
+        "line": 378
+      },
+      {
+        "name": "test_destroy_is_restart_safe_and_replays_one_outcome",
+        "line": 417
+      },
+      {
+        "name": "test_destroy_refuses_foreign_compute_and_retains_ownership",
+        "line": 477
+      },
+      {
+        "name": "test_destroy_refuses_active_attempts_without_touching_compute",
+        "line": 504
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_runtime_broker.py",
+    "kind": "test",
+    "bytes": 36625,
+    "sha256": "8d1dd7344694b8abfd695aac94c420b649d72c4fa863c778c5c1523d744d6c6b",
+    "lines": 778,
+    "tests": [
+      {
+        "name": "test_runtime_credentials_reach_only_their_own_subjects_and_inbox",
+        "line": 168
+      },
+      {
+        "name": "test_the_scope_probe_detects_widened_permissions",
+        "line": 174
+      },
+      {
+        "name": "test_a_received_request_permits_exactly_one_response",
+        "line": 184
+      },
+      {
+        "name": "test_credentials_are_private_and_stable_across_broker_restart",
+        "line": 212
+      },
+      {
+        "name": "test_revocation_refuses_new_and_closes_existing_connections_and_survives_restart",
+        "line": 242
+      },
+      {
+        "name": "test_an_interrupted_revocation_is_never_restored_and_finishes_on_restart",
+        "line": 275
+      },
+      {
+        "name": "test_vcp_sigkill_leaves_no_broker_port_or_lock_and_restart_reuses_the_endpoint",
+        "line": 332
+      },
+      {
+        "name": "test_a_server_that_exits_fails_startup_promptly",
+        "line": 382
+      },
+      {
+        "name": "test_an_unresponsive_server_fails_at_the_deadline_and_is_reaped",
+        "line": 392
+      },
+      {
+        "name": "test_an_occupied_port_fails_and_the_foreign_listener_is_left_alone",
+        "line": 403
+      },
+      {
+        "name": "test_a_changed_endpoint_is_refused",
+        "line": 427
+      },
+      {
+        "name": "test_a_cut_socket_reconnects",
+        "line": 437
+      },
+      {
+        "name": "test_runtime_ids_must_be_single_subject_tokens",
+        "line": 476
+      },
+      {
+        "name": "test_runtime_permissions_are_exactly_the_contract_block",
+        "line": 483
+      },
+      {
+        "name": "test_vcp_answers_an_update_only_on_its_senders_own_inbox",
+        "line": 501
+      },
+      {
+        "name": "test_a_runtime_named_vcp_gets_its_own_user",
+        "line": 528
+      },
+      {
+        "name": "test_wildcard_listen_addresses_are_refused_in_every_spelling_and_ipv6_is_bracketed",
+        "line": 541
+      },
+      {
+        "name": "test_a_crashed_broker_is_relaunched_and_still_revokes",
+        "line": 552
+      },
+      {
+        "name": "test_a_reconnect_never_sends_the_password_to_an_unverified_listener",
+        "line": 583
+      },
+      {
+        "name": "test_a_relaunch_rotates_the_vcp_password_and_reverifies",
+        "line": 632
+      },
+      {
+        "name": "test_a_reload_racing_a_relaunch_is_retryable",
+        "line": 651
+      },
+      {
+        "name": "test_a_credential_probe_never_sends_the_secret_to_an_impostor_replaying_the_exact_identity",
+        "line": 685
+      },
+      {
+        "name": "test_a_database_error_during_relaunch_is_retried",
+        "line": 735
+      },
+      {
+        "name": "test_the_reverifier_keeps_retrying_after_any_verification_error",
+        "line": 762
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_runtime_delivery.py",
+    "kind": "test",
+    "bytes": 33852,
+    "sha256": "7c2959e9e4ddcb564e7614379f64ba0bf5f284e69c8e037becc424db6b9ba0cf",
+    "lines": 644,
+    "tests": [
+      {
+        "name": "test_host_and_guest_placements_encode_replay_and_project_identically",
+        "line": 170
+      },
+      {
+        "name": "test_lost_acknowledgements_resend_identical_bytes_without_duplicate_effects",
+        "line": 196
+      },
+      {
+        "name": "test_update_gaps_duplicates_conflicts_and_stale_bindings",
+        "line": 244
+      },
+      {
+        "name": "test_update_projection_rolls_back_as_one_transaction",
+        "line": 294
+      },
+      {
+        "name": "test_daemon_rejections_fail_unstarted_work_or_block_unresolved_ownership",
+        "line": 331
+      },
+      {
+        "name": "test_committed_updates_stay_committed_after_the_workspace_leaves_ready",
+        "line": 366
+      },
+      {
+        "name": "test_an_unreachable_runtime_does_not_hold_up_other_runtimes",
+        "line": 389
+      },
+      {
+        "name": "test_ready_during_provisioning_is_retried_not_committed",
+        "line": 426
+      },
+      {
+        "name": "test_daemon_subprocess_completes_fake_tasks_over_real_nats",
+        "line": 537
+      },
+      {
+        "name": "test_vcp_and_daemon_restarts_replay_without_duplicate_launch",
+        "line": 561
+      },
+      {
+        "name": "test_denied_public_request_and_forged_internal_messages_have_no_effect",
+        "line": 601
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_runtime_progress.py",
+    "kind": "test",
+    "bytes": 7935,
+    "sha256": "c800efc3996c1a533449e7696b04f5f87c927da2db388b9d133adbb405923d33",
+    "lines": 129,
+    "tests": [
+      {
+        "name": "test_conversation_and_usage_project_atomically_once_and_continue_the_conversation",
+        "line": 61
+      },
+      {
+        "name": "test_overlapping_usage_and_unregistered_progress_are_conflicts",
+        "line": 99
       }
     ]
   },
   {
     "path": "v2/services/virtual_control_plane/tests/test_smolvm_provider.py",
     "kind": "test",
-    "bytes": 10483,
-    "sha256": "a64dd1b02168ad76183a51d1a09138102765d8b37b389c763eb81a128c621c8e",
-    "lines": 215,
+    "bytes": 14041,
+    "sha256": "ebdece590a8e07b8d579183683672f4d6713d33a3f32d48952d98d21cd22ca7d",
+    "lines": 293,
     "tests": [
       {
         "name": "test_capabilities_report_microvm_isolation_and_the_configured_tools_only",
@@ -5819,6 +6698,30 @@
       {
         "name": "test_cli_failures_are_transient_while_a_missing_or_hung_cli_is_handled",
         "line": 193
+      },
+      {
+        "name": "test_destroy_checks_every_ownership_label",
+        "line": 219
+      },
+      {
+        "name": "test_destroy_confirms_absence_and_retries_cli_failure",
+        "line": 233
+      },
+      {
+        "name": "test_destroy_never_treats_unreadable_inventory_as_absence",
+        "line": 251
+      },
+      {
+        "name": "test_destroy_does_not_report_success_until_compute_is_absent",
+        "line": 262
+      },
+      {
+        "name": "test_ensure_finds_its_machine_across_a_generation_bump",
+        "line": 277
+      },
+      {
+        "name": "test_only_destroy_treats_empty_inventory_output_as_unreadable",
+        "line": 287
       }
     ]
   },
@@ -5836,10 +6739,79 @@
     ]
   },
   {
+    "path": "v2/services/virtual_control_plane/tests/test_steering.py",
+    "kind": "test",
+    "bytes": 30197,
+    "sha256": "87d0349c7c507b7a2c6656e0161b9521479530bf8de9ac882831ff151aab5b88",
+    "lines": 584,
+    "tests": [
+      {
+        "name": "test_retry_lost_ack_ordered_effects_and_final_result",
+        "line": 113
+      },
+      {
+        "name": "test_terminal_races_settle_without_changing_task_outcome",
+        "line": 147
+      },
+      {
+        "name": "test_restart_never_reapplies_or_retargets",
+        "line": 181
+      },
+      {
+        "name": "test_rejects_before_acceptance_or_executor_effects",
+        "line": 226
+      },
+      {
+        "name": "test_acceptance_and_projection_roll_back_as_units",
+        "line": 261
+      },
+      {
+        "name": "test_history_mixed_attempts_filters_pages_concurrent_append_and_restart",
+        "line": 295
+      },
+      {
+        "name": "test_history_cursors_reject_malformed_mismatched_and_foreign_scope",
+        "line": 349
+      },
+      {
+        "name": "test_steering_and_history_cursor_survive_vcp_restart_over_real_nats",
+        "line": 371
+      },
+      {
+        "name": "test_history_cursor_retention_is_bounded_and_survives_restart",
+        "line": 403
+      },
+      {
+        "name": "test_migration_preserves_preexisting_published_conversation_history",
+        "line": 436
+      },
+      {
+        "name": "test_history_filter_combinations_use_ordered_index_seeks",
+        "line": 473
+      },
+      {
+        "name": "test_history_pages_bound_encoded_bytes",
+        "line": 498
+      },
+      {
+        "name": "test_downgrade_refuses_accepted_steering",
+        "line": 520
+      },
+      {
+        "name": "test_history_single_entry_above_page_budget",
+        "line": 537
+      },
+      {
+        "name": "test_history_entry_exceeding_transport_returns_small_error",
+        "line": 566
+      }
+    ]
+  },
+  {
     "path": "v2/services/virtual_control_plane/tests/test_workspaces_service.py",
     "kind": "test",
-    "bytes": 3820,
-    "sha256": "8136431e0ce8899d8f9255784f886b31d7e9a5638fb90f9852f09d5a4917e67e",
+    "bytes": 3918,
+    "sha256": "215e7cb215b2b8c3c0f62a5650d8316d8ff7e659cbe13bffe8700524bf9002ad",
     "lines": 102,
     "tests": [
       {
@@ -5861,19 +6833,551 @@
     ]
   },
   {
+    "path": "v2/services/virtual_control_plane/tests/test_worktree_nats.py",
+    "kind": "test",
+    "bytes": 8091,
+    "sha256": "75ce3bb8a6f040c5acbbf1bac3dee1889a338e36fb153b24f0665725b84cb3b4",
+    "lines": 160,
+    "tests": [
+      {
+        "name": "test_create_rediscover_after_restart_and_destroy_over_public_nats",
+        "line": 79
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/test_worktree_provider.py",
+    "kind": "test",
+    "bytes": 30822,
+    "sha256": "d91a4873e379e248ba3ea65baa066de69f26f5756f2b0781eefb4168133e61a8",
+    "lines": 612,
+    "tests": [
+      {
+        "name": "test_capabilities_are_process_level_and_validation_rejects_what_a_host_cannot_honor",
+        "line": 101
+      },
+      {
+        "name": "test_a_repository_outside_the_allowed_source_roots_is_never_checked_out",
+        "line": 136
+      },
+      {
+        "name": "test_source_repository_hooks_and_fsmonitor_never_run",
+        "line": 149
+      },
+      {
+        "name": "test_provision_creates_an_independent_detached_worktree_and_leaves_the_caller_alone",
+        "line": 166
+      },
+      {
+        "name": "test_default_revision_is_the_source_head_and_a_missing_ref_is_terminal",
+        "line": 201
+      },
+      {
+        "name": "test_a_crash_after_worktree_creation_resumes_without_a_second_worktree",
+        "line": 213
+      },
+      {
+        "name": "test_partial_creation_is_finished_from_a_stale_registration_or_an_unregistered_directory",
+        "line": 248
+      },
+      {
+        "name": "test_failed_preparation_retries_transient_git_failures_and_cleans_up",
+        "line": 270
+      },
+      {
+        "name": "test_foreign_or_unrecorded_directories_and_symlinked_runtime_directories_are_never_adopted",
+        "line": 296
+      },
+      {
+        "name": "test_context_files_cannot_escape_through_symlinks",
+        "line": 331
+      },
+      {
+        "name": "test_stale_git_metadata_fails_ensure_and_destroy_removes_only_what_is_provably_owned",
+        "line": 349
+      },
+      {
+        "name": "test_a_generation_the_directory_was_not_created_for_is_never_adopted",
+        "line": 379
+      },
+      {
+        "name": "test_files_outside_the_worktrees_that_vcp_did_not_write_are_never_silently_deleted",
+        "line": 393
+      },
+      {
+        "name": "test_removal_never_follows_a_parent_swapped_for_a_symlink",
+        "line": 426
+      },
+      {
+        "name": "test_dirty_or_unreferenced_work_is_refused_and_branches_are_never_deleted",
+        "line": 444
+      },
+      {
+        "name": "test_destroy_refuses_an_unrelated_worktree_placed_inside_the_workspace",
+        "line": 482
+      },
+      {
+        "name": "test_a_foreign_lock_on_our_path_is_an_ownership_mismatch",
+        "line": 495
+      },
+      {
+        "name": "test_the_daemon_is_started_once_rediscovered_after_restart_and_stopped_before_removal",
+        "line": 522
+      },
+      {
+        "name": "test_destroy_escalates_to_sigkill_and_keeps_ownership_when_termination_is_unconfirmed",
+        "line": 548
+      },
+      {
+        "name": "test_the_daemon_gets_a_minimal_environment",
+        "line": 573
+      },
+      {
+        "name": "test_a_daemon_started_before_its_record_was_written_is_still_found_and_stopped",
+        "line": 585
+      },
+      {
+        "name": "test_an_unidentifiable_journal_lock_holder_is_never_signalled",
+        "line": 595
+      }
+    ]
+  },
+  {
+    "path": "v2/services/virtual_control_plane/tests/worktree_daemon_fake.py",
+    "kind": "test",
+    "bytes": 1215,
+    "sha256": "2074f2f0a9687df5952b6594a8b449f74d69d73b6cde1efd688f4db5fdef4f71",
+    "lines": 38,
+    "tests": []
+  },
+  {
     "path": "v2/services/workspace_daemon/README.md",
     "kind": "documentation",
-    "bytes": 0,
-    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "lines": 0,
+    "bytes": 15851,
+    "sha256": "dba86d7aefb0cc4a3588bd3d6b64648e34c89116ae7c1606f2340b7f3be52057",
+    "lines": 245,
     "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/__main__.py",
+    "kind": "source/config",
+    "bytes": 11766,
+    "sha256": "d16fc451ad2f052f59b3aa9448c6bd77ba0fb94ed64d8e2badf436a21fd06e04",
+    "lines": 236,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/acp.py",
+    "kind": "source/config",
+    "bytes": 8833,
+    "sha256": "e745c39e7c9aa17bfc6f5b623272a92ea6dbe49b7867ce68607bb09c141af414",
+    "lines": 169,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/codex.py",
+    "kind": "source/config",
+    "bytes": 10851,
+    "sha256": "d178e83d4bda284067c6aa771d430387bb0dffccc802496624f7bc6d86a1007b",
+    "lines": 211,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/context.py",
+    "kind": "source/config",
+    "bytes": 2329,
+    "sha256": "4edf487966be40101ee640aaf6c316de3271a543537d2f64cbab212b75aad522",
+    "lines": 53,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/executor.py",
+    "kind": "source/config",
+    "bytes": 16708,
+    "sha256": "b8035e2aba30507bb584bac56bcdacaa6f0b8cd76300324de0ca2248d7bb24ab",
+    "lines": 325,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/initialization.py",
+    "kind": "source/config",
+    "bytes": 4144,
+    "sha256": "fda2b29087807e123636c595d35786a309284f8cd881032cd688ba7ac55a6d34",
+    "lines": 99,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/journal.py",
+    "kind": "source/config",
+    "bytes": 20764,
+    "sha256": "9581d32a1595ac5a322fff9c8f6468f27a3e535d2ab62962a13cdbd099b8c0a8",
+    "lines": 337,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/launch.py",
+    "kind": "source/config",
+    "bytes": 1201,
+    "sha256": "7389860e4668ff075d237b663ff240b550965881274111ea4fb1a912fb7e1db1",
+    "lines": 32,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/migrations/env.py",
+    "kind": "source/config",
+    "bytes": 201,
+    "sha256": "f41a5b7212950314e7a0c93be4e707055026d59f37ce9589e4d283e2e629556e",
+    "lines": 7,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/migrations/script.py.mako",
+    "kind": "source/config",
+    "bytes": 609,
+    "sha256": "14835395d45370c6d7d45f9a41a864c4a09a48ddc7271961494a613d9d340110",
+    "lines": 25,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/migrations/versions/2b6e990cf980_persist_executor_sessions.py",
+    "kind": "source/config",
+    "bytes": 936,
+    "sha256": "564eb25a2540b0ea6bf42591a6a6fdbd73be8189f0ecae7f3e1085a189a78f7c",
+    "lines": 29,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/migrations/versions/87d0ad5eb697_create_runtime_journal.py",
+    "kind": "source/config",
+    "bytes": 5917,
+    "sha256": "20cd9d72b19d3c76166e61060bf1d573c8d34c44b295bc4b5b547d22f721a9a5",
+    "lines": 108,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/migrations/versions/c010e70c82f6_journal_attempt_cancellation.py",
+    "kind": "source/config",
+    "bytes": 2722,
+    "sha256": "7956246ca839ec30e31629626c78199994b00f5955b5b2df186cf0ceb36dd5be",
+    "lines": 59,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/outbox.py",
+    "kind": "source/config",
+    "bytes": 3808,
+    "sha256": "ab3a82a86f6f2e2cbfab8d31538bdca5326260c10ab1f42b4df95bf59cde7e26",
+    "lines": 92,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/pyproject.toml",
+    "kind": "source/config",
+    "bytes": 1046,
+    "sha256": "66e0fb81aeba3c120f6605e39a0c2173bcd131cbe14dd4782f854eb811c6d2ce",
+    "lines": 27,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/store.py",
+    "kind": "source/config",
+    "bytes": 15346,
+    "sha256": "dce6cec4b3cd5c5bfa597717a8ef423bdea46ea03f70a41a55a84f3200d018fe",
+    "lines": 280,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/supervision.py",
+    "kind": "source/config",
+    "bytes": 5848,
+    "sha256": "37620260cad6721749f79f941d1345558b9a96ac090a3ebe4b9ce494f3cdeffa",
+    "lines": 129,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/tests/acp_agent.py",
+    "kind": "test",
+    "bytes": 5277,
+    "sha256": "00ac6f91189e5c688d95866274752e920670c1b3575fdce89dedf70c2b1ffbb2",
+    "lines": 115,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/tests/acp_fixture.py",
+    "kind": "test",
+    "bytes": 2445,
+    "sha256": "1ed886072f0698ee094dfc9a4c0bca10c55e7daa6ae77d2503d9674cd08085bc",
+    "lines": 71,
+    "tests": []
+  },
+  {
+    "path": "v2/services/workspace_daemon/tests/test_boundaries.py",
+    "kind": "test",
+    "bytes": 710,
+    "sha256": "c8e90f8818596b0be727901f756ff6ec54a10e6de20cb4707daa07126e3eb0c8",
+    "lines": 19,
+    "tests": [
+      {
+        "name": "test_the_daemon_imports_nothing_from_vcp",
+        "line": 11
+      }
+    ]
+  },
+  {
+    "path": "v2/services/workspace_daemon/tests/test_cancellation.py",
+    "kind": "test",
+    "bytes": 25470,
+    "sha256": "6179ec583757cf1bc04d60a6285189ed0870081232c90aaf4b98203c372cef0b",
+    "lines": 507,
+    "tests": [
+      {
+        "name": "test_cancel_before_execute_journals_a_tombstone_that_late_execute_never_launches",
+        "line": 68
+      },
+      {
+        "name": "test_cancel_of_a_recorded_attempt_ends_it_before_launch",
+        "line": 106
+      },
+      {
+        "name": "test_cancel_conflicting_with_the_journaled_execution_is_rejected_without_effect",
+        "line": 123
+      },
+      {
+        "name": "test_completion_that_won_keeps_its_outcome",
+        "line": 137
+      },
+      {
+        "name": "test_running_fake_attempt_is_cancelled_gracefully_or_at_the_deadline",
+        "line": 153
+      },
+      {
+        "name": "test_the_deadline_does_not_cut_short_a_fence_in_progress",
+        "line": 179
+      },
+      {
+        "name": "test_cancel_while_launching_keeps_cancelling_through_started",
+        "line": 217
+      },
+      {
+        "name": "test_graceful_acp_cancel_then_the_whole_process_tree_is_fenced",
+        "line": 248
+      },
+      {
+        "name": "test_blocked_acp_stdin_cannot_defeat_the_cancellation_deadline",
+        "line": 280
+      },
+      {
+        "name": "test_cancel_during_acp_launch_never_prompts",
+        "line": 302
+      },
+      {
+        "name": "test_full_progress_outbox_cannot_prevent_cancellation",
+        "line": 322
+      },
+      {
+        "name": "test_final_progress_blocked_after_the_fence_cannot_stall_cancellation",
+        "line": 341
+      },
+      {
+        "name": "test_failed_fencing_keeps_cancelling_ownership_until_confirmed",
+        "line": 372
+      },
+      {
+        "name": "test_failed_terminal_write_is_retried_while_ownership_is_kept",
+        "line": 402
+      },
+      {
+        "name": "test_restart_recovers_the_cancel_intent_and_fences_without_relaunch",
+        "line": 427
+      },
+      {
+        "name": "test_cancel_receipts_and_updates_survive_a_journal_reopen",
+        "line": 456
+      },
+      {
+        "name": "test_downgrade_is_refused_while_a_cancellation_is_journaled",
+        "line": 475
+      },
+      {
+        "name": "test_a_journal_without_cancellations_still_downgrades",
+        "line": 494
+      }
+    ]
+  },
+  {
+    "path": "v2/services/workspace_daemon/tests/test_codex.py",
+    "kind": "test",
+    "bytes": 23520,
+    "sha256": "a9d2491732ccee2cbeab89b2c6c578c91b6dedc4aa9e77d60b7c084739a317d5",
+    "lines": 459,
+    "tests": [
+      {
+        "name": "test_context_progress_usage_permission_denial_and_continuation",
+        "line": 81
+      },
+      {
+        "name": "test_missing_or_unloadable_conversations_are_never_replaced",
+        "line": 133
+      },
+      {
+        "name": "test_unsupported_model_or_mode_fails_launch_without_prompting",
+        "line": 158
+      },
+      {
+        "name": "test_blocked_io_and_crashes_fail_only_after_the_tree_is_fenced",
+        "line": 174
+      },
+      {
+        "name": "test_timed_out_agent_is_fenced_before_buffered_text_waits_for_outbox_capacity",
+        "line": 191
+      },
+      {
+        "name": "test_cancelled_wait_fences_and_skips_journaling",
+        "line": 216
+      },
+      {
+        "name": "test_launcher_directories_must_not_be_writable_by_the_agent",
+        "line": 234
+      },
+      {
+        "name": "test_unexpected_wait_errors_fail_the_fenced_attempt_rather_than_lose_it",
+        "line": 246
+      },
+      {
+        "name": "test_unconfirmed_fencing_keeps_ownership_until_termination_is_confirmed",
+        "line": 264
+      },
+      {
+        "name": "test_failed_terminal_journaling_is_resolved_by_fencing_not_reexecution",
+        "line": 292
+      },
+      {
+        "name": "test_restart_mid_prompt_fences_the_journaled_launch_and_never_reprompts",
+        "line": 315
+      },
+      {
+        "name": "test_progress_waits_for_outbox_capacity_and_drops_nothing",
+        "line": 344
+      },
+      {
+        "name": "test_fencing_removes_the_whole_fixture_process_group",
+        "line": 367
+      },
+      {
+        "name": "test_launch_and_wait_exceptions_are_not_evidence_of_termination",
+        "line": 386
+      },
+      {
+        "name": "test_instruction_reads_refuse_symlinks_even_inside_the_root",
+        "line": 421
+      },
+      {
+        "name": "test_installed_runtime_has_no_fence_bypass_or_langgraph",
+        "line": 430
+      }
+    ]
+  },
+  {
+    "path": "v2/services/workspace_daemon/tests/test_journal.py",
+    "kind": "test",
+    "bytes": 17901,
+    "sha256": "b3ed1ed4d1af4b5e12b2b798cd9218d933393dd715fdaa363a1a772941dd9221",
+    "lines": 351,
+    "tests": [
+      {
+        "name": "test_execute_is_journaled_once_and_launched_once",
+        "line": 91
+      },
+      {
+        "name": "test_capacity_counts_only_active_attempts",
+        "line": 122
+      },
+      {
+        "name": "test_journal_relations_and_one_active_attempt_per_session_are_enforced",
+        "line": 138
+      },
+      {
+        "name": "test_stale_and_wrong_bindings_are_rejected_before_the_journal",
+        "line": 167
+      },
+      {
+        "name": "test_task_context_cannot_reach_the_journal",
+        "line": 189
+      },
+      {
+        "name": "test_restart_launches_recorded_work_once_and_never_relaunches_uncertain_work",
+        "line": 206
+      },
+      {
+        "name": "test_unfenceable_interrupted_work_refuses_recovery",
+        "line": 243
+      },
+      {
+        "name": "test_gaps_replay_retained_updates_and_rejections_block",
+        "line": 267
+      },
+      {
+        "name": "test_initialization_is_resumable_and_an_established_journal_is_never_recreated",
+        "line": 299
+      },
+      {
+        "name": "test_the_process_refuses_damaged_journals_before_listening",
+        "line": 329
+      }
+    ]
+  },
+  {
+    "path": "v2/services/workspace_daemon/tests/test_linux_supervision.py",
+    "kind": "test",
+    "bytes": 4367,
+    "sha256": "fecaa5ec46512b70df5437d64683e4963e0ce7310d91a1cc246163e0c9517391",
+    "lines": 84,
+    "tests": [
+      {
+        "name": "test_fencing_empties_and_removes_the_whole_process_tree",
+        "line": 40
+      },
+      {
+        "name": "test_live_codex_task_runs_read_only_and_reports_progress",
+        "line": 70
+      }
+    ]
+  },
+  {
+    "path": "v2/services/workspace_daemon/tests/test_steering.py",
+    "kind": "test",
+    "bytes": 8144,
+    "sha256": "9ce7c018dbcce5550ec3a275dfb0b1aafc80d45836698577b688e371d6921fb7",
+    "lines": 167,
+    "tests": [
+      {
+        "name": "test_effect_receipt_and_update_roll_back_and_retry_exactly_once",
+        "line": 26
+      },
+      {
+        "name": "test_rejects_unsupported_and_stale_bindings_without_effects",
+        "line": 62
+      },
+      {
+        "name": "test_concurrent_terminal_application_serializes_and_late_delivery_is_final",
+        "line": 87
+      },
+      {
+        "name": "test_codex_is_rejected_even_when_it_advertises_steering",
+        "line": 134
+      },
+      {
+        "name": "test_maximum_message_does_not_make_the_fake_terminal_result_unsendable",
+        "line": 151
+      }
+    ]
   },
   {
     "path": "v2/uv.lock",
     "kind": "source/config",
-    "bytes": 235232,
-    "sha256": "86a6d493ce456cbe7def68f8d43999d76e08d8e7ebcd8c7f20237aefce834e8c",
-    "lines": 1309,
+    "bytes": 212344,
+    "sha256": "78cda0d8cb4b7b4626cd00ba357a37df64aec755a30d9be0165d7647e63bdbbb",
+    "lines": 1299,
     "tests": []
   }
 ]
