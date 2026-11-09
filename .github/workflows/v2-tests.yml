@@ -30,7 +30,7 @@ jobs:
       - name: Install Python
         run: uv python install "$UV_PYTHON"
       - name: Lint V2
-        run: uvx --from ruff==0.17.0 ruff check v2
+        run: uvx --from ruff==0.17.4 ruff check v2
       - uses: actions/setup-node@v7
         with:
           node-version: "24"
