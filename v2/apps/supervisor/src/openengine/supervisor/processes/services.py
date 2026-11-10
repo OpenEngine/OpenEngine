@@ -31,9 +31,7 @@ def start(module: str, log: IO[bytes], *, nats_url: str, environment: dict[str, 
         stdin=subprocess.DEVNULL,
         stdout=log,
         stderr=subprocess.STDOUT,
-        env={**os.environ, NATS_URL_VARIABLE: nats_url, **(environment or {}),
-             "OE_TENANCY_MODE": "dedicated", "OE_TENANT_ID": "00000000-0000-7000-8000-000000000001",
-             "OE_AUTHORIZATION": "local", "OE_NATS_CREDENTIALS": "", "OE_ACCOUNT_TENANTS": ""},
+        env={**os.environ, NATS_URL_VARIABLE: nats_url, **(environment or {})},
     )
 
 

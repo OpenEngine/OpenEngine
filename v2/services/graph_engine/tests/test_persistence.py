@@ -8,7 +8,7 @@ import pytest
 import sqlalchemy as sa
 from sqlalchemy import inspect
 
-from openengine.persistence import LOCAL_TENANT, Backend, BackendNotImplemented, DatabaseConfig, new_tenant
+from openengine.persistence import Backend, BackendNotImplemented, DatabaseConfig
 from openengine.persistence.migrations import downgrade
 
 from graph_engine.persistence import PERSISTENCE
@@ -50,7 +50,7 @@ def _definition(source: str, name: str = "triage") -> Definition:
 
 def test_an_unchanged_apply_keeps_the_revision_and_a_changed_one_adds_the_next(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
+        graphs = PERSISTENCE.open(config)
         try:
             first = await graphs.apply(_command("cmd_1"), _definition('{"a":1}'))
             again = await graphs.apply(_command("cmd_2"), _definition('{"a":1}'))
@@ -76,7 +76,7 @@ def test_an_unchanged_apply_keeps_the_revision_and_a_changed_one_adds_the_next(c
 
 def test_a_command_id_returns_its_receipt_or_conflicts(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
+        graphs = PERSISTENCE.open(config)
         try:
             first = await graphs.apply(_command("cmd_1"), _definition('{"a":1}'))
             assert await graphs.apply(_command("cmd_1"), _definition('{"a":1}')) == first
@@ -97,7 +97,7 @@ def test_a_command_id_returns_its_receipt_or_conflicts(config: DatabaseConfig) -
 
 def test_expected_version_must_be_the_latest_revision(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
+        graphs = PERSISTENCE.open(config)
         try:
             with pytest.raises(VersionConflict) as missing:
                 await graphs.apply(_command("cmd_1"), _definition('{"a":1}'), expected_version=1)
@@ -116,7 +116,7 @@ def test_expected_version_must_be_the_latest_revision(config: DatabaseConfig) ->
 
 def test_the_deadline_is_checked_once_the_apply_holds_the_lock(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
+        graphs = PERSISTENCE.open(config)
         try:
             accepted = await graphs.apply(_command("cmd_1"), _definition("{}"))
             # Waiting behind another write carries this apply past its deadline.
@@ -137,36 +137,9 @@ def test_the_deadline_is_checked_once_the_apply_holds_the_lock(config: DatabaseC
     asyncio.run(scenario())
 
 
-def test_request_scoped_writes_share_the_database_queue(config: DatabaseConfig) -> None:
-    async def scenario() -> None:
-        persistence = PERSISTENCE.open(config)
-        first = persistence.scoped(LOCAL_TENANT)
-        second = persistence.scoped(LOCAL_TENANT)
-        other = persistence.scoped(new_tenant())
-        tasks = []
-        try:
-            async with first._writing:  # noqa: SLF001
-                tasks = [
-                    asyncio.create_task(second.apply(_command("queued"), _definition("{}"))),
-                    asyncio.create_task(other.reject(_command("queued"), {"status": "rejected"})),
-                ]
-                await asyncio.sleep(0.05)
-                assert all(not task.done() for task in tasks)
-                assert await second.graphs("default", 10) == []
-            accepted, rejected = await asyncio.gather(*tasks)
-            assert accepted["status"] == "accepted"
-            assert rejected == {"status": "rejected"}
-            assert await second.apply(_command("queued"), _definition("{}")) == accepted
-        finally:
-            await asyncio.gather(*tasks, return_exceptions=True)
-            await persistence.close()
-
-    asyncio.run(scenario())
-
-
 def test_concurrent_applies_neither_duplicate_nor_skip_revisions(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
+        graphs = PERSISTENCE.open(config)
         try:
             same = await asyncio.gather(*(graphs.apply(_command(f"cmd_same_{n}"), _definition("{}")) for n in range(8)))
             changed = await asyncio.gather(
@@ -188,7 +161,7 @@ def test_concurrent_applies_neither_duplicate_nor_skip_revisions(config: Databas
 
 def test_graphs_are_listed_by_name_and_paged_after_a_key(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
+        graphs = PERSISTENCE.open(config)
         try:
             for name in ("review", "triage", "review-fast", "Review", "re_view", "deploy"):
                 await graphs.apply(_command(f"cmd_{name}"), _definition("{}", name))
@@ -214,7 +187,7 @@ def test_graphs_are_listed_by_name_and_paged_after_a_key(config: DatabaseConfig)
 
 def test_names_command_ids_and_listings_are_per_project(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
+        graphs = PERSISTENCE.open(config)
         try:
             alpha = await graphs.apply(_command("cmd_1", project="alpha"), _definition('{"a":1}'))
             # The same name and command ID in another project are another graph and another command.
@@ -268,7 +241,7 @@ def test_the_project_migration_keeps_existing_graphs_under_default(tmp_path: Pat
     PERSISTENCE.upgrade(config)
 
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
+        graphs = PERSISTENCE.open(config)
         try:
             listed = await graphs.graphs("default", 50)
             assert [(graph.graph_id, graph.project, graph.name, graph.latest_revision) for graph in listed] == [
@@ -289,7 +262,7 @@ def test_the_project_migration_keeps_existing_graphs_under_default(tmp_path: Pat
 
 def test_any_revision_of_a_graph_is_read_back(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        graphs = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
+        graphs = PERSISTENCE.open(config)
         try:
             graph_id = (await graphs.apply(_command("cmd_1"), _definition('{"a":1}')))["resource_id"]
             await graphs.apply(_command("cmd_2"), _definition('{"a":2}'))
@@ -311,97 +284,4 @@ def test_any_revision_of_a_graph_is_read_back(config: DatabaseConfig) -> None:
 
 def test_postgres_store_is_a_stub() -> None:
     with pytest.raises(BackendNotImplemented, match="graph engine's store"):
-        PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES)).scoped(LOCAL_TENANT)
-
-
-def test_two_tenants_isolate_graphs_revisions_operations_pages_and_receipts(config: DatabaseConfig) -> None:
-    from openengine.persistence import new_tenant, assert_tenant_scoped
-
-    assert assert_tenant_scoped(metadata, "ge") == []
-
-    async def scenario() -> None:
-        handle = PERSISTENCE.open(config)
-        alpha, beta = handle.scoped(new_tenant()), handle.scoped(new_tenant())
-        try:
-            a, b = await asyncio.gather(
-                alpha.apply(_command("shared"), _definition("alpha")),
-                beta.apply(_command("shared", "beta"), _definition("beta")),
-            )
-            assert a != b
-            assert await alpha.apply(_command("shared"), _definition("alpha")) == a
-            assert await beta.apply(_command("shared", "beta"), _definition("beta")) == b
-            for own, other, reply in ((alpha, beta, a), (beta, alpha, b)):
-                assert await other.graph(reply["resource_id"]) is None
-                assert await other.revision(reply["resource_id"], 1) is None
-                assert await other.operation(reply["operation_id"]) is None
-                assert (await own.graph(reply["resource_id"])).name == "triage"
-                assert len(await own.graphs("default", 1)) == 1
-                assert await own.graphs("default", 1, after=("triage", reply["resource_id"])) == []
-                with pytest.raises(CommandIdConflict) as conflict:
-                    await own.apply(_command("shared", "different"), _definition("x"))
-                assert conflict.value.operation_id == reply["operation_id"]
-            rejection = {"status": "rejected", "error": {"message": "alpha only"}}
-            await alpha.reject(_command("rejected"), rejection)
-            accepted = await beta.apply(_command("rejected"), _definition("beta"))
-            assert accepted["status"] == "accepted"
-            assert await alpha.apply(_command("rejected"), _definition("alpha")) == rejection
-        finally:
-            await handle.close()
-
-    asyncio.run(scenario())
-
-
-def test_tenant_migration_refuses_unsafe_downgrade_and_cross_tenant_foreign_keys(config: DatabaseConfig) -> None:
-    from openengine.persistence import new_tenant
-    tenant = new_tenant()
-
-    async def populate() -> str:
-        handle = PERSISTENCE.open(config)
-        try:
-            return (await handle.scoped(tenant).apply(_command("cmd"), _definition("{}")))["resource_id"]
-        finally:
-            await handle.close()
-
-    graph_id = asyncio.run(populate())
-    engine = PERSISTENCE.database(config).migration_engine()
-    with engine.begin() as connection:
-        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
-        with pytest.raises(sa.exc.IntegrityError):
-            connection.execute(sa.text(
-                "INSERT INTO graph_revisions (tenant_id, graph_id, revision, format, source, source_sha256, created_at) "
-                "VALUES (:tenant, :graph, 2, 'resource', '{}', 'sha', '2026-10-27')"
-            ), {"tenant": LOCAL_TENANT.hex, "graph": graph_id})
-    with pytest.raises(RuntimeError, match="non-local tenant rows"):
-        downgrade(PERSISTENCE.migrations, PERSISTENCE.database(config), "d75ffe6cc5ed")
-    assert PERSISTENCE.drift(metadata, config) == []
-
-
-def test_populated_local_tenant_rows_survive_downgrade_and_upgrade(config: DatabaseConfig) -> None:
-    async def populate() -> dict:
-        handle = PERSISTENCE.open(config)
-        try:
-            store = handle.scoped(LOCAL_TENANT)
-            reply = await store.apply(_command("accepted"), _definition("first"))
-            await store.apply(_command("changed"), _definition("second"))
-            await store.reject(_command("rejected"), {"status": "rejected", "error": {"message": "legacy"}})
-            return reply
-        finally:
-            await handle.close()
-
-    reply = asyncio.run(populate())
-    downgrade(PERSISTENCE.migrations, PERSISTENCE.database(config), "d75ffe6cc5ed")
-    PERSISTENCE.upgrade(config)
-    assert PERSISTENCE.drift(metadata, config) == []
-
-    async def replay() -> None:
-        handle = PERSISTENCE.open(config)
-        try:
-            store = handle.scoped(LOCAL_TENANT)
-            assert await store.apply(_command("accepted"), _definition("first")) == reply
-            assert (await store.apply(_command("rejected"), _definition("{}")))["error"]["message"] == "legacy"
-            assert (await store.revision(reply["resource_id"], 1)).source == "first"
-            assert (await store.revision(reply["resource_id"], 2)).source == "second"
-        finally:
-            await handle.close()
-
-    asyncio.run(replay())
+        PERSISTENCE.open(DatabaseConfig(backend=Backend.POSTGRES))

@@ -17,7 +17,7 @@ flowchart LR
     classDef runtime fill:#f1f5f9,stroke:#334155,color:#0f172a
 
     subgraph apps["Apps"]
-        cli["oe CLI: tenant credentials, plain subjects"]
+        cli["oe CLI"]
         supervisor["supervisor (oe up)"]
     end
     subgraph integrations["Integrations"]
@@ -26,7 +26,7 @@ flowchart LR
     end
     class cli,supervisor app
     class github,slack integration
-    nats[("NATS: credential account identity<br/>GE dedicated/shared; VCP dedicated verified Principal")]
+    nats[("NATS server")]
     class nats stream
     subgraph cxn["Connection Bus (cxn)"]
         cxn_control["NATS control<br/><b>oe.v1.cxn.control.connections.</b><br/>apply<br/>{connection_id}.disable<br/>{connection_id}.delete"]

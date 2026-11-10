@@ -118,8 +118,7 @@ $defs:
     title: NamespacedObjectMeta
     description: >-
       Identifies a namespaced resource. `namespace` and `name` each fit in one
-      NATS subject token. A namespace groups resources; it does not by itself
-      isolate tenants.
+      NATS subject token. A namespace groups resources.
     type: object
     required: [name, namespace]
     additionalProperties: false

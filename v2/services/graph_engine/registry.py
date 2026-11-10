@@ -37,7 +37,6 @@ import base64
 import binascii
 import hashlib
 import json
-
 from datetime import UTC, datetime
 from typing import Any
 
@@ -45,7 +44,6 @@ from openengine.contracts.graphs import STAGES
 from openengine.contracts.resources import validate_resource
 from openengine.messaging import Authorizer, ErrorCode, LocalOperator, Request, Route, ServiceError, envelopes
 from openengine.messaging.errors import invalid_argument
-from openengine.persistence import OpenPersistence, parse_tenant
 
 from graph_engine.persistence.store import (
     DEFAULT_PROJECT,
@@ -174,14 +172,9 @@ def _not_found(graph_id: str, message: str) -> ServiceError:
 
 
 class Registry:
-    def __init__(self, store: OpenPersistence[Graphs], authorizer: Authorizer | None = None) -> None:
+    def __init__(self, store: Graphs, authorizer: Authorizer | None = None) -> None:
         self.store = store
         self.authorizer = authorizer or LocalOperator()
-
-    def _store(self, request: Request) -> Graphs:
-        if request.principal is None:
-            raise ServiceError(ErrorCode.PERMISSION_DENIED, "a verified principal is required")
-        return self.store.scoped(parse_tenant(request.principal.tenant_id))
 
     def commands(self) -> dict[str, Route]:
         return {"graphs.apply": Route(self.apply, receipts=True)}
@@ -214,30 +207,30 @@ class Registry:
             envelopes.check(envelopes.COMMAND, body)
             envelopes.check(APPLY, body)
         except ServiceError as error:
-            return await self._reject(request, command, error)
+            return await self._reject(command, error)
         payload, expected_version = body["payload"], body.get("expected_version")
         if "python" in payload:
-            return await self._reject(request, command, ServiceError(
+            return await self._reject(command, ServiceError(
                 ErrorCode.UNSUPPORTED_CAPABILITY, "GE does not load Python graphs yet; apply a Graph resource",
                 details={"capability": "graphs.apply.python"},
             ))
         graph = payload["graph"]
         # The command's schema has checked the Graph's structure; this adds the rules that span its fields.
         if problems := validate_resource(graph, "Graph"):
-            return await self._reject(request, command, invalid_argument(
+            return await self._reject(command, invalid_argument(
                 [(f"payload.graph.{problem.path}", problem.message) for problem in problems]
             ))
         definition = Definition(graph["metadata"]["name"], graph["spec"].get("description"), "resource", canonical(graph))
         if (size := _readable_size(definition)) > MAX_RESULT_BYTES:
-            return await self._reject(request, command, invalid_argument(
+            return await self._reject(command, invalid_argument(
                 [("payload.graph", f"reading it back would take a {size}-byte reply; the most is {MAX_RESULT_BYTES}")]
             ))
         deadline = datetime.fromisoformat(body["deadline_at"]) if "deadline_at" in body else None
         try:
             # A retry of a command accepted in time is replayed by its receipt, not refused for its deadline.
-            return await self._store(request).apply(command, definition, expected_version, deadline)
+            return await self.store.apply(command, definition, expected_version, deadline)
         except DeadlineExceeded as late:
-            return await self._reject(request, command, ServiceError(
+            return await self._reject(command, ServiceError(
                 ErrorCode.DEADLINE_EXCEEDED, str(late),
                 details={"deadline_at": body["deadline_at"], "received_at": _timestamp(late.received)},
             ))
@@ -254,10 +247,10 @@ class Registry:
                     f"graph {definition.name} is at revision {conflict.actual}, not {conflict.expected}",
                     details={"expected_version": conflict.expected, "actual_version": conflict.actual},
                 )
-            return await self._reject(request, command, error)
+            return await self._reject(command, error)
 
-    async def _reject(self, request: Request, command: Command, error: ServiceError) -> dict[str, Any]:
-        return await self._store(request).reject(
+    async def _reject(self, command: Command, error: ServiceError) -> dict[str, Any]:
+        return await self.store.reject(
             command, {"command_id": command.command_id, "status": "rejected", "error": error.to_dict()}
         )
 
@@ -268,7 +261,7 @@ class Registry:
         self.authorizer.authorize_project(request, project)
         after = _after(cursor, project, name_prefix) if (cursor := params.get("cursor")) is not None else None
         # One more than the page shows whether there is a next page.
-        found = await self._store(request).graphs(project, limit + 1, name_prefix, after)
+        found = await self.store.graphs(project, limit + 1, name_prefix, after)
         items: list[dict[str, Any]] = []
         size = 0
         for graph in found[:limit]:
@@ -285,17 +278,17 @@ class Registry:
 
     async def get(self, request: Request) -> dict[str, Any]:
         graph_id, params = request.parameters["graph_id"], request.body["params"]
-        if (graph := await self._store(request).graph(graph_id)) is None:
+        if (graph := await self.store.graph(graph_id)) is None:
             raise _not_found(graph_id, f"no graph {graph_id}")
         self.authorizer.authorize_project(request, graph.project)
         number = params.get("revision", graph.latest_revision)
-        if (revision := await self._store(request).revision(graph_id, number)) is None:
+        if (revision := await self.store.revision(graph_id, number)) is None:
             raise _not_found(graph_id, f"graph {graph.name} has no revision {number}; its latest is {graph.latest_revision}")
         return {"graph": _graph(graph), "revision": _revision(revision, params.get("include_source", True))}
 
     async def operation(self, request: Request) -> dict[str, Any]:
         operation_id = request.parameters["operation_id"]
-        if (operation := await self._store(request).operation(operation_id)) is None:
+        if (operation := await self.store.operation(operation_id)) is None:
             raise ServiceError(
                 ErrorCode.NOT_FOUND, f"no operation {operation_id}",
                 details={"resource_type": "operation", "resource_id": operation_id},

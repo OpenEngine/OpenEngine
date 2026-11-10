@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:virtual-control-plane
 info:
   title: OpenEngine Virtual Control Plane (vcp)
-  version: 1.0.0-draft.4
+  version: 1.0.0-draft.2
   description: |
     The Virtual Control Plane manages workspaces (where agents work), the
     compute runtimes behind them, and the agent sessions and task attempts
@@ -44,45 +44,17 @@ info:
     (`UNAVAILABLE`) are not.
 
     ## Identity
-    A tenant is a NATS account. A request's tenant is the account the
-    caller's authenticated connection belongs to, never a payload field, and the acting
-    identity within it comes from that authenticated connection (or a
-    verified delegation). The tenancy registry maps each account's public
-    key (the shared `account` type) to its `tenant_id`, a UUIDv7.
-    `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
-    (`local_tenant`).
-
-    Account isolation covers subjects, reply inboxes and JetStream. Identical
-    subject or inbox names in different accounts refer to separate traffic.
-    Streams, consumers and stored messages belong to their account. A payload's
-    project, namespace or actor cannot select a tenant or grant access to another
-    account. Tenant-facing subjects remain unchanged.
-    The shared `tenant_id` accepts only a lower-case canonical non-nil UUIDv7;
-    `account` describes a 56-character NATS account public key.
-
-    These are contract requirements. Account provisioning, registry persistence,
-    broker exports/imports, runtime subject rewriting and per-attempt NATS
-    credentials are later work; this document does not establish those boundaries
-    in the current runtime.
+    The acting identity comes from the authenticated NATS connection (or a
+    verified delegation), never from a payload field.
 
     When VCP starts a task attempt it issues a NATS user credential for that
-    attempt inside the tenant's account. Its claims name the workspace and the
-    attempt's `stepAttemptId`. It may publish only to `oe.v1.tools.invoke.>`
-    and a reply inbox prefix unique to the attempt, may subscribe only to that
-    prefix, and expires at the attempt's deadline. The runtime places it in
-    the workspace. VCP revokes it when the attempt ends, at the same point the
-    Graph Engine deletes the attempt's tool grants. The tool service reads the
-    workspace and step attempt from it; see the tool service contract.
-
-    ## Tenant subjects
-    Tenants use the subjects in this document,
-    `oe.v1.vcp.{control|query|events}.…`; none carries a tenant or account
-    token. Before VCP receives a tenant's request, NATS rewrites its subject
-    into the internal form `oe.v1.{account}.vcp.…`, with the caller's account
-    public key as the third token. Only NATS produces that form: the service
-    account exports its subjects with `account_token_position: 3`, and a
-    tenant can import them only with its own key in that position, so a caller
-    cannot forge another tenant's subject.
+    attempt. Its claims name the workspace and the attempt's `stepAttemptId`.
+    It may publish only to `oe.v1.tools.invoke.>` and a reply inbox prefix
+    unique to the attempt, may subscribe only to that prefix, and expires at
+    the attempt's deadline. The runtime places it in the workspace. VCP revokes
+    it when the attempt ends, at the same point the Graph Engine deletes the
+    attempt's tool grants. The tool service reads the workspace and step
+    attempt from it; see the tool service contract.
 
     ## Identities and states
     - `workspace_id` is stable for the workspace's whole life.

@@ -127,8 +127,7 @@ class Steering:
     async def history(self, request):
         session_id, params = request.parameters["session_id"], request.body.get("params", {})
         filters = {"kind": sorted(params.get("kind", [])), "attempt_id": params.get("attempt_id")}
-        scope = {"tenant": request.principal.tenant_id if request.principal else None,
-                 "session_id": session_id, "filters": filters}
+        scope = {"session_id": session_id, "filters": filters}
         after = 0
         if cursor := params.get("cursor"):
             stored = await self.store.read("history_cursors", cursor) if CURSOR.fullmatch(cursor) else None

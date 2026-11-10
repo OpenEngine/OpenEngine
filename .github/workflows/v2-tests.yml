@@ -15,11 +15,11 @@ concurrency:
 
 jobs:
   v2:
-    name: V2 tests (Linux, Python 3.14)
+    name: V2 tests (Linux, Python 3.12)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      UV_PYTHON: "3.14"
+      UV_PYTHON: "3.12"
       UV_MANAGED_PYTHON: "true"
     steps:
       - uses: actions/checkout@v7
@@ -31,14 +31,6 @@ jobs:
         run: uv python install "$UV_PYTHON"
       - name: Lint V2
         run: uvx --from ruff==0.17.4 ruff check v2
-      - uses: actions/setup-node@v7
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: v2/packages/contracts/tooling/package-lock.json
-      - name: Install contracts tooling for Node validator regression tests
-        run: npm ci
-        working-directory: v2/packages/contracts/tooling
       # V2 has its own workspace and test configuration; root pytest omits it.
       - name: Test V2, including real NATS recovery
         run: uv run --project v2 --frozen pytest v2
