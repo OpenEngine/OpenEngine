@@ -79,7 +79,3 @@ its log, NATS's JetStream data, and the services' SQLite databases
 (`databases/`). `OE_DATABASE_BACKEND` switches every service's database; see
 packages/persistence. The jobs, loops, workspaces and connections commands,
 and the rest of the graph commands, arrive with the services behind them.
-
-Public graph commands accept `OE_NATS_CREDENTIALS`, a NATS tenant credentials
-file. Subjects remain plain `oe.v1.ge.…` in both deployment modes; account
-imports perform shared service routing. No payload supplies caller identity.

@@ -7,15 +7,6 @@ again, so a command keeps its `command_id` and `causal_path`, up to
 closed or draining connection means NATS went away; both are reported at once
 as Unavailable, as retrying cannot help.
 
-A client takes the subjects of its callers' contracts, the plain
-`oe.v1.{svc}.…`. Calling on a tenant's behalf, it is given that tenant's
-`Principal` and runs in one of the two tenancy modes `tenancy` describes: in
-dedicated mode it sends to the plain subject, which the tenant's account
-import carries into the service; in shared mode it is inside the service
-account, so it addresses `oe.v1.{account}.{svc}.…` itself with the
-principal's account key. Span names use the template `oe.v1.{account}.…`,
-never the key.
-
 `send` is the envelope-free form for internal protocols with their own
 durable acknowledgements: it publishes caller-supplied bytes to the exact
 subject, unchanged on every attempt, and returns the reply's bytes undecoded.
@@ -39,7 +30,6 @@ from nats.errors import (
 
 from openengine.messaging import envelopes
 from openengine.messaging.errors import ServiceError, Unavailable
-from openengine.messaging.tenancy import Mode, Principal, SharedClientNeedsAccount, shared_subject, subject_template
 from openengine.telemetry import sending
 
 DEFAULT_TIMEOUT_SECONDS = 2.0
@@ -60,24 +50,10 @@ class Requester(Protocol):
 
 
 class Client:
-    def __init__(
-        self, nats: Requester, *, timeout: float = DEFAULT_TIMEOUT_SECONDS, attempts: int = DEFAULT_ATTEMPTS,
-        principal: Principal | None = None, tenancy: Mode = Mode.DEDICATED,
-    ) -> None:
-        if tenancy is Mode.SHARED and (principal is None or principal.account is None):
-            raise SharedClientNeedsAccount
+    def __init__(self, nats: Requester, *, timeout: float = DEFAULT_TIMEOUT_SECONDS, attempts: int = DEFAULT_ATTEMPTS) -> None:
         self._nats = nats
         self.timeout = timeout
         self.attempts = attempts
-        self.principal = principal
-        self.tenancy = tenancy
-
-    def address(self, subject: str) -> tuple[str, str]:
-        """Where a plain `oe.v1.{svc}.…` subject is sent in this mode, and the template naming its span."""
-        if self.tenancy is Mode.SHARED:
-            assert self.principal is not None and self.principal.account is not None
-            return shared_subject(subject, self.principal.account), subject_template(subject)
-        return subject, subject
 
     async def query(self, subject: str, params: dict[str, Any] | None = None, *, request_id: str | None = None) -> dict[str, Any]:
         """The whole query-response; raises ServiceError when its status is `error`."""
@@ -99,22 +75,21 @@ class Client:
     async def send(self, subject: str, data: bytes, *, name: str | None = None) -> bytes:
         """The reply's exact bytes to `data`, sent unchanged to `subject` on each attempt.
 
-        Not readdressed for tenancy. `name` is the span name, for subjects whose tokens are identities.
+        `name` is the span name, for subjects whose tokens are identities.
         """
-        return await self._exchange(subject, subject, name or subject, data)
+        return await self._exchange(subject, data, name=name)
 
     async def _request(self, subject: str, body: bytes) -> dict[str, Any]:
-        destination, name = self.address(subject)
-        reply = envelopes.decode(await self._exchange(subject, destination, name, body))
+        reply = envelopes.decode(await self._exchange(subject, body))
         if not isinstance(reply, dict):
             raise ServiceError("INTERNAL", f"{subject} replied with {type(reply).__name__}, not an object")
         return reply
 
-    async def _exchange(self, subject: str, destination: str, name: str, body: bytes) -> bytes:
+    async def _exchange(self, subject: str, body: bytes, *, name: str | None = None) -> bytes:
         for attempt in range(1, self.attempts + 1):
             try:
-                with sending(destination, name=name) as headers:
-                    message = await self._nats.request(destination, body, timeout=self.timeout, headers=headers)
+                with sending(subject, name=name) as headers:
+                    message = await self._nats.request(subject, body, timeout=self.timeout, headers=headers)
             except NoRespondersError:
                 raise Unavailable(subject, "no responders", no_responders=True) from None
             except (ConnectionClosedError, ConnectionDrainingError, StaleConnectionError) as lost:

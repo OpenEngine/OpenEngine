@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import replace
 
 import pytest
 
 from openengine.messaging import Client, Request, Server, ServiceError, envelopes
-from openengine.messaging.tenancy import Principal
 from openengine.persistence import DatabaseConfig
 
 from virtual_control_plane.application.execution import Execution
@@ -346,7 +344,7 @@ def test_history_mixed_attempts_filters_pages_concurrent_append_and_restart(tmp_
     asyncio.run(scenario())
 
 
-def test_history_cursors_reject_malformed_mismatched_and_foreign_scope(tmp_path):
+def test_history_cursors_reject_malformed_and_mismatched_scope(tmp_path):
     async def scenario():
         flow = await SteeringFlow().start(tmp_path)
         await flow.running()
@@ -357,13 +355,10 @@ def test_history_cursors_reject_malformed_mismatched_and_foreign_scope(tmp_path)
             assert (await flow.history(cursor=value))["error"]["code"] == "INVALID_CURSOR"
         for params in ({"kind": ["steering"]}, {"attempt_id": "attempt_other"}):
             assert (await flow.history(cursor=cursor, **params))["error"]["code"] == "INVALID_CURSOR"
-        request = Request("query", "query", "", envelopes.query({"cursor": cursor}), "", {"session_id": flow.session_id},
-                          Principal("00000000-0000-7000-8000-000000000001"))
-        for changed in (replace(request, parameters={"session_id": "session_other"}),
-                        replace(request, principal=Principal("00000000-0000-7000-8000-000000000002"))):
-            with pytest.raises(ServiceError) as caught:
-                await flow.execution.steering.history(changed)
-            assert caught.value.code == "INVALID_CURSOR"
+        request = Request("query", "query", "", envelopes.query({"cursor": cursor}), "", {"session_id": "session_other"})
+        with pytest.raises(ServiceError) as caught:
+            await flow.execution.steering.history(request)
+        assert caught.value.code == "INVALID_CURSOR"
         await flow.close()
     asyncio.run(scenario())
 

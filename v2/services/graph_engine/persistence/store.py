@@ -104,12 +104,6 @@ class DeadlineExceeded(Exception):
 
 
 class Graphs(Store, Protocol):
-    """A store bound to one verified tenant by OpenPersistence.scoped().
-
-    Every method, including receipt replay and conflict lookup, stays within
-    that tenant. Project authorization remains the caller's responsibility.
-    """
-
     async def apply(
         self, command: Command, definition: Definition, expected_version: int | None = None,
         deadline: datetime | None = None,

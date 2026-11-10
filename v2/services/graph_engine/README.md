@@ -19,19 +19,6 @@ uv run oe graph list --json       # the query-response, with next_cursor
 uv run oe graph get NAME[@REV]    # a revision, the latest by default, and its source
 ```
 
-### Tenant isolation
-GE scopes every store operation to the verified `request.principal.tenant_id`.
-The process owns the open persistence handle and closes it after draining;
-handlers obtain tenant-bound stores from that handle. Project authorization
-still applies within that tenant. Graph IDs, revisions, operations, list pages,
-accepted and rejected receipts, and command-conflict details are tenant-local.
-Two tenants may reuse graph names and command IDs in the same project.
-
-Migration `5cce010cee3d` backfills existing rows to `LOCAL_TENANT` and rebuilds
-primary, unique and foreign keys with `tenant_id` first. Existing revision
-sources and receipt fingerprints/replies are preserved, so local retries replay.
-Downgrade refuses any non-local rows before changing tables. The CLI uses tenant credentials when configured; tenant provisioning remains separate work.
-
 ### Graph registry
 [`registry.py`](registry.py) serves `graphs.apply`. Graphs belong to a
 project: a command or query acts in the `project` it names, or in `default`
@@ -100,7 +87,8 @@ through the messaging package's `Authorizer` port. The default,
 address and rejects it with `PERMISSION_DENIED` otherwise. It reads that
 address from the server's INFO, not from `OE_NATS_URL`: a server bound to
 `0.0.0.0` is reachable from other hosts even when GE dials `127.0.0.1`, so
-GE logs a warning at connect and refuses every request. Remote access requires explicitly configured credentialed authorization (below).
+GE logs a warning at connect and refuses every request. Remote access
+needs a different authorizer, which does not exist yet.
 
 Every project-scoped request also goes through `Authorizer.authorize_project`:
 `graphs.apply` and `graphs.list` with the project they name, and
@@ -108,13 +96,3 @@ Every project-scoped request also goes through `Authorizer.authorize_project`:
 the graph or operation belongs to. A project name is only where to act; it
 grants nothing by itself. `LocalOperator` allows the loopback operator every
 project; an authorizer for verified identities will decide per actor.
-
-### Public deployment configuration
-
-The service selects dedicated or shared public request routing from the trusted
-[deployment settings](../../ARCHITECTURE.md#public-request-tenancy). Local mode
-keeps the loopback-only LocalOperator authorizer; shared mode requires explicit
-credentialed authorization and a configured account-to-tenant mapping. Every
-handler receives the verified `Request.principal`. Future public downstream
-calls should use `Deployment.public_client(connection, request)` to preserve
-that identity. Internal runtime traffic remains a separate protocol.

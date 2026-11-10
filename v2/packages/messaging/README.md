@@ -12,18 +12,11 @@ client = Client(nats_connection, timeout=2.0, attempts=3)
 reply = await client.query("oe.v1.ge.query.graphs.list")
 await client.command("oe.v1.ge.control.graphs.apply", payload, command_id=..., caused_by=parent_path)
 
-# A service: subscribes to oe.v1.{service}.query.> and .control.> in queue group "ge",
-# in dedicated mode as LOCAL_TENANT unless `tenancy` says otherwise.
+# A service: subscribes to oe.v1.{service}.query.> and .control.>.
 server = Server(nats_connection, "ge", nats_url, queries={"graphs.list": Route(handler, schema_reference)})
 await server.start()
 ...
 await server.close()   # drain and close the dedicated connection within a 5-second budget
-
-# The same service in the service account, serving every tenant: oe.v1.*.ge.query.> and .control.>.
-server = Server(nats_connection, "ge", nats_url, queries=..., tenancy=Shared(resolver))
-
-# Calling another service for a tenant, from inside the service account.
-client = Client(nats_connection, principal=request.principal, tenancy=Mode.SHARED)
 ```
 
 | Module | |
@@ -33,36 +26,6 @@ client = Client(nats_connection, principal=request.principal, tenancy=Mode.SHARE
 | `client` | the bounded, retrying requester; `send` for envelope-free internal protocols |
 | `retry` | `Backoff`, per-key capped jittered retry spacing for durable delivery workers |
 | `server` | the subscription adapter, the `Authorizer` port and `LocalOperator` |
-| `tenancy` | `Principal`, the `Dedicated` and `Shared` modes, the `AccountResolver` port and its cache |
-
-### Tenancy
-
-Every handled request carries a verified `Principal` (`tenant_id`, and the
-`account` key where one is known) as `Request.principal`. The server derives
-it from its `tenancy` mode before asking the `Authorizer`, whose
-`authorize(request)` returns the `Principal` to attach:
-
-| Mode | Where the service runs | Subjects | Tenant |
-| -- | -- | -- | -- |
-| `Dedicated(tenant_id)` (default, LOCAL_TENANT) | inside one tenant's account | `oe.v1.{svc}.{query,control}.>` | from configuration |
-| `Shared(resolver)` | the service account | `oe.v1.*.{svc}.{query,control}.>` | the third token, an account key NATS wrote in, resolved through the `AccountResolver` port |
-
-In shared mode the account token is stripped before routing, so route keys and
-`Request.parameters` are the same in both modes. An unknown or malformed
-account is `PERMISSION_DENIED`. `Shared` wraps its resolver in a
-`CachedResolver`, which remembers found tenants and checks every answer
-against `tenant_id`; the nil UUID is refused there and at configuration
-time. `InMemoryAccounts` is a resolver over a fixed mapping; the tenancy
-registry behind the port is a later ticket.
-
-Both modes subscribe in a queue group named after the service, so instances
-share requests instead of each answering every one.
-
-A `Client` given a `Principal` and `tenancy=Mode.SHARED` addresses
-`oe.v1.{account}.{svc}.…` itself; in dedicated mode (the default) it keeps
-the plain subject and the tenant's account import carries it. Span names on
-both sides use the template (`oe.v1.{account}.ge.query.graphs.list`), never
-the key; `messaging.destination.name` keeps the real subject.
 
 A route's key may name subject parameters, such as
 `operations.{operation_id}.get`: the server checks each against
@@ -79,14 +42,13 @@ through `authorize_project(request, project)`, with the project the request
 names or the resource it reached belongs to. A project name in a payload only
 says where to act; it grants nothing by itself, so an authorizer decides from
 the actor's verified identity. `LocalOperator` allows every project to the
-loopback operator and returns the tenant the server derived, LOCAL_TENANT in
-the dedicated mode `oe up` runs.
+loopback operator.
 
 `Client.send(subject, data)` serves internal protocols that keep their own
 envelopes and durable acknowledgements, such as the workspace-runtime
 protocol. It sends the caller's exact bytes to the exact subject, unchanged on
 every attempt, and returns the reply's bytes undecoded: no command ID, causal
-hop or tenancy readdressing is added, and the reply's meaning stays with the
+hop is added, and the reply's meaning stays with the
 caller's protocol. Its bounded attempts do not replace a durable outbox; such
 callers use `attempts=1` and retry stored bytes with `retry.Backoff`.
 
@@ -117,16 +79,3 @@ preempt them. Forced transport abort is covered for TCP, not WebSockets.
 Local-operator mode assumes a trusted managed broker with no remote ingress.
 Its listener check is not publisher identity; authenticated remote callers and
 broker permissions are tracked in #1051.
-
-### Deployment configuration
-
-`deployment.Deployment.from_environment()` validates trusted service settings,
-selects Dedicated or Shared with a cached configured account resolver, and
-provides credential connection options and an explicit authorizer choice. See
-[deployment settings](../../ARCHITECTURE.md#public-request-tenancy). Its
-`public_client(connection, request)` refuses an unverified request and binds
-the outbound client to the same principal and mode. Credentials require the
-installed `nats-py[nkeys]` signing extra. Services bind the credentialed authorizer
-to their connection; each authorization requires broker INFO `auth_required`,
-rechecked after reconnect, so supplying credentials to an open broker grants
-no access. Broker account imports and permissions remain operator configuration.

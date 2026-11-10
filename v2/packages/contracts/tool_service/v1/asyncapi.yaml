@@ -2,7 +2,7 @@ asyncapi: 3.1.0
 id: urn:openengine:v2:tool-service
 info:
   title: OpenEngine Tool Service (tools)
-  version: 1.0.0-draft.5
+  version: 1.0.0-draft.4
   description: |
     The Tool Service keeps the tools agents may call, who may call them, and a
     durable record of every call. This document describes the NATS interface
@@ -56,9 +56,7 @@ info:
     A namespace and a resource name each occupy one subject token:
     lower-case letters, digits and `-`, with no `.` or wildcards, such as
     `oe.v1.tools.invoke.default.github-issue-comment`. A namespace groups
-    resources and lives inside a tenant, so two tenants may each have a
-    `default` namespace. Naming alone does not isolate tenants; the caller's
-    account does (see Identity).
+    resources.
 
     ## Tools
     Each Tool is a capability bound to one Connection, so an agent never
@@ -110,7 +108,7 @@ info:
     its identity or authorization.
 
     A workspace calls with the user credential the Virtual Control Plane
-    issues for one task attempt inside the tenant's account. Its claims name
+    issues for one task attempt. Its claims name
     the workspace and the `stepAttemptId`. It may publish only to
     `oe.v1.tools.invoke.>` and its own reply inbox prefix, which is unique to
     the attempt, and subscribe only to that prefix, so one attempt cannot read
@@ -137,35 +135,8 @@ info:
     through `oe.v1.tools.invocations.get`, which checks the reader may see them.
 
     ## Identity
-    A tenant is a NATS account. A request's tenant is the account the
-    caller's authenticated connection belongs to, never a payload field, and the acting
-    identity within it comes from that authenticated connection (or a
-    verified delegation). The tenancy registry maps each account's public
-    key (the shared `account` type) to its `tenant_id`, a UUIDv7.
-    `oe up` runs a single account, whose tenant is the fixed LOCAL_TENANT
-    (`local_tenant`).
-
-    Account isolation covers subjects, reply inboxes and JetStream. Identical
-    subject or inbox names in different accounts refer to separate traffic.
-    Streams, consumers and stored messages belong to their account. A payload's
-    project, namespace or actor cannot select a tenant or grant access to another
-    account. Tenant-facing subjects remain unchanged.
-    The shared `tenant_id` accepts only a lower-case canonical non-nil UUIDv7;
-    `account` describes a 56-character NATS account public key.
-
-    These are contract requirements. Account provisioning, registry persistence,
-    broker exports/imports and runtime subject rewriting are later work; this
-    document does not establish those boundaries in the current runtime.
-
-    ## Tenant subjects
-    Tenants use the subjects in this document, `oe.v1.tools.…`; none carries a
-    tenant or account token. Before the tool service receives a tenant's
-    request, NATS rewrites its subject into the internal form
-    `oe.v1.{account}.tools.…`, with the caller's account public key as the
-    third token. Only NATS produces that form: the service account exports its
-    subjects with `account_token_position: 3`, and a tenant can import them
-    only with its own key in that position, so a caller cannot forge another
-    tenant's subject.
+    The acting identity comes from the authenticated NATS connection (or a
+    verified delegation), never from a payload field.
   license:
     name: Apache-2.0
 defaultContentType: application/json

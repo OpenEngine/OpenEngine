@@ -8,7 +8,6 @@ import pytest
 from sqlalchemy import inspect, text
 
 from openengine.persistence import (
-    LOCAL_TENANT,
     Backend,
     BackendNotImplemented,
     ConfigError,
@@ -89,7 +88,7 @@ def test_reports_a_service_without_a_store_for_the_backend(tmp_path: Path) -> No
     persistence = ServicePersistence[Jobs]("jobs", tmp_path, {Backend.SQLITE: SqliteJobs})
 
     with pytest.raises(BackendNotImplemented, match="jobs's store"):
-        persistence.open(DatabaseConfig(backend=Backend.POSTGRES))
+        persistence.store(PostgresDatabase("jobs", None))
 
 
 def test_scaffold_keeps_a_service_edited_env(tmp_path: Path) -> None:
@@ -110,7 +109,7 @@ def test_migrates_and_serves_a_service_on_sqlite(tmp_path: Path) -> None:
     persistence.upgrade(config)  # already at head
 
     async def round_trip() -> list[str]:
-        jobs = persistence.open(config).scoped(LOCAL_TENANT)
+        jobs = persistence.open(config)
         try:
             await jobs.add("first")
             await jobs.add("second")

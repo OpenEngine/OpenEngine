@@ -347,7 +347,7 @@ all still-pending steering, including undelivered commands. Late outcomes cannot
 reverse a settled command. Applied and conversation entries share a session-local
 append-only sequence. The history query performs bounded indexed seeks in one
 read snapshot; opaque versioned cursors persist across restart and bind to the
-authenticated tenant, session, normalized kinds and attempt filter. Cursor
+session, normalized kinds and attempt filter. Cursor
 mismatches report only INVALID_CURSOR. Usage and tool-call production are unchanged.
 
 ## Design provenance
