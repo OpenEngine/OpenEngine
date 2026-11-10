@@ -458,3 +458,5 @@ Ports define what capabilities are available.
 Adapters define how those capabilities are implemented.
 
 The same text is already in ARCHITECTURE.md in the working tree. Run git checkout ARCHITECTURE.md if you want that change gone.
+
+See [V2 public request tenancy](v2/ARCHITECTURE.md#public-request-tenancy) for GE, VCP and CLI deployment settings.

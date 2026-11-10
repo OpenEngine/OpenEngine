@@ -37,8 +37,9 @@ return the shared explicit unsupported response.
 workspace and pending operation, generation-one runtime ownership, immutable
 receipt and `workspace.provisioning` event. No provider call runs in that
 transaction. The shared Server authorizes before any business read, receipt
-replay or acceptance. This remains local-operator mode, with no tenant or
-project identity in the VCP contract; owner labels are references, not grants.
+replay or acceptance. The public boundary carries a verified principal in
+either deployment mode; owner labels are references, not grants. VCP storage
+isolation remains separate work.
 
 The receipt-aware handler retains schema/deadline/version/capability rejections
 for well-formed command IDs. Invalid IDs cannot reserve receipts. Receipt
@@ -842,3 +843,14 @@ trusted. No host model credential is involved. Public callers (#1051), tool
 grants (#1075) and host backends (#1054/#1055; the worktree adapter still
 shares one credential file) are separate; #1202/#1204 and host backends must
 qualify their own boundaries.
+
+### Public deployment configuration
+
+The service selects dedicated public request routing from the trusted
+[deployment settings](../../ARCHITECTURE.md#public-request-tenancy). Local mode
+keeps the loopback-only LocalOperator authorizer. Credentialed mode checks the
+connected broker authentication requirement on every authorization. VCP refuses
+shared startup until tenant-scoped storage (#1228) lands. Every
+handler receives the verified `Request.principal`. Future public downstream
+calls should use `Deployment.public_client(connection, request)` to preserve
+that identity. Internal runtime traffic remains a separate protocol.

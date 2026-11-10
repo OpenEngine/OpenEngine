@@ -5,7 +5,7 @@ description = "Request/reply over NATS for OpenEngine V2: contract envelopes, ty
 requires-python = ">=3.11"
 dependencies = [
     "jsonschema>=4.23",
-    "nats-py>=2.16.0",
+    "nats-py[nkeys]>=2.16.0",
     "openengine-telemetry",
     "pyyaml>=6.0",
 ]

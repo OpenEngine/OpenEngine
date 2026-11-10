@@ -60,3 +60,32 @@ Each service owns its database (see [packages/persistence](packages/persistence/
 | Graph Engine (ge) | [latest_ge.svg](docs/schema/latest_ge.svg) |
 | Tool Service (tools) | [latest_tools.svg](docs/schema/latest_tools.svg) |
 | Virtual Control Plane (vcp) | [latest_vcp.svg](docs/schema/latest_vcp.svg) |
+
+## Public request tenancy
+
+GE and VCP load trusted process configuration using `Deployment.from_environment`.
+`OE_TENANCY_MODE=dedicated` uses `OE_TENANT_ID` (default LOCAL_TENANT for
+local authorization). Credentialed dedicated deployments require an explicit
+`OE_TENANT_ID`; they never default to the local tenant.
+`shared` resolves broker-written account tokens using a cached resolver over
+the `OE_ACCOUNT_TENANTS` JSON account-to-tenant mapping. Unknown accounts are
+refused; payload identity grants no access. VCP refuses shared startup until
+tenant-scoped workspace storage (#1228) lands; shared routing is currently
+available to GE only.
+
+Local authorization retains LocalOperator's broker loopback restriction. Shared
+mode requires explicit `OE_AUTHORIZATION=credentialed` and an
+`OE_NATS_CREDENTIALS` file for the service account. Credentialed authorization
+checks the connected broker INFO `auth_required` flag on every authorization,
+including after reconnect, and refuses open brokers. It trusts broker account imports and permissions and allows all projects within
+the verified tenant. Operators must restrict account-scoped subjects to trusted
+services; this is not user-level project RBAC. Dedicated deployments can also
+explicitly select credentialed authorization with tenant credentials.
+
+Handlers receive `Request.principal`. `Deployment.public_client(connection, request)`
+binds outbound public calls to that principal and the same mode. GE has no
+public downstream calls yet; VCP's `oe.internal.v1` runtime transport remains
+separate. VCP storage and event streams are outside this tenancy change.
+The CLI uses `OE_NATS_CREDENTIALS` with unchanged plain subjects. Supervisor-managed
+`oe up` overrides inherited tenancy, authorization and credentials to dedicated
+LOCAL_TENANT on its single-account loopback broker, requiring no operator setup.
