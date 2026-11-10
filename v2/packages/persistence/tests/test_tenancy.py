@@ -244,8 +244,10 @@ def test_a_global_table_must_be_registered_and_every_registration_declared(tmp_p
         global_table("unexplained", sa.MetaData(), sa.Column("id", sa.Integer, primary_key=True), reason=" ")
 
 
-def test_the_registry_starts_empty() -> None:
-    assert assert_tenant_scoped(sa.MetaData(), "cxn", REGISTRY) == []
+def test_the_registry_contains_only_the_ingress_route() -> None:
+    from openengine.persistence.tenancy import registered_global_tables
+
+    assert registered_global_tables("cxn", REGISTRY) == {"connection_routes"}
 
 
 def test_tenant_ids_round_trip_in_canonical_form_on_sqlite_and_refuse_nil() -> None:
@@ -361,9 +363,9 @@ def test_open_offers_no_store_without_a_tenant(tmp_path: Path) -> None:
 def test_lists_every_services_violations(capsys: pytest.CaptureFixture[str]) -> None:
     assert main(["--services", str(SERVICES)]) == 1
     lines = capsys.readouterr().out.splitlines()
-    assert "connection_bus: connections: no tenant_id column" in lines
+    assert all(not line.startswith("connection_bus:") for line in lines)
     assert {line.split(":")[0] for line in lines} == {
-        "connection_bus", "virtual_control_plane",
+        "virtual_control_plane",
     }
 
 
