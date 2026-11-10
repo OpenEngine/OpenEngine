@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import inspect
 from sqlalchemy.exc import OperationalError
 
-from openengine.persistence import LOCAL_TENANT, Backend, BackendNotImplemented, DatabaseConfig
+from openengine.persistence import Backend, BackendNotImplemented, DatabaseConfig, LOCAL_TENANT, TenantDatabase
 
 from virtual_control_plane.application.transactions import CommandIdConflict
 from virtual_control_plane.persistence import PERSISTENCE
@@ -42,7 +42,7 @@ def config(tmp_path: Path) -> DatabaseConfig:
 @pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
 def test_failure_rolls_back_every_record(config: DatabaseConfig, failure: type[BaseException]) -> None:
     async def scenario() -> None:
-        store = DurableStore(PERSISTENCE.database(config))
+        store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         try:
             with pytest.raises(failure):
                 async with store.transaction() as tx:
@@ -64,13 +64,13 @@ def test_failure_rolls_back_every_record(config: DatabaseConfig, failure: type[B
 
 def test_restart_preserves_snapshots_response_and_failed_ownership(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        store = DurableStore(PERSISTENCE.database(config))
+        store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         async with store.transaction() as tx:
             for collection, value in RECORDS.items():
                 await tx.put(collection, "record", value)
             await tx.record_command(SUBJECT, COMMAND, RESPONSE)
         await store.close()
-        reopened = DurableStore(PERSISTENCE.database(config))
+        reopened = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         try:
             async with reopened.transaction() as tx:
                 for collection, value in RECORDS.items():
@@ -99,7 +99,7 @@ def test_restart_preserves_snapshots_response_and_failed_ownership(config: Datab
 @pytest.mark.parametrize("changed", ["subject", "payload", "expected_version", "causal_path"])
 def test_command_identity_conflicts_do_not_overwrite_receipts(config: DatabaseConfig, changed: str) -> None:
     async def scenario() -> None:
-        store = DurableStore(PERSISTENCE.database(config))
+        store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         try:
             async with store.transaction() as tx:
                 await tx.record_command(SUBJECT, COMMAND, RESPONSE)
@@ -128,7 +128,7 @@ def test_command_identity_conflicts_do_not_overwrite_receipts(config: DatabaseCo
 
 def test_rejection_retention_and_json_object_order(config: DatabaseConfig) -> None:
     async def scenario() -> None:
-        store = DurableStore(PERSISTENCE.database(config))
+        store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         retryable = {"command_id": "cmd-1", "status": "rejected",
                      "error": {"code": "UNAVAILABLE", "message": "try later", "retryable": True}}
         permanent = {**retryable, "error": {"code": "VERSION_CONFLICT", "message": "stale", "retryable": False}}
@@ -151,7 +151,7 @@ def test_rejection_retention_and_json_object_order(config: DatabaseConfig) -> No
 @pytest.mark.parametrize("cold_start", range(10))
 def test_concurrent_connections_accept_only_once(config: DatabaseConfig, cold_start: int) -> None:
     async def scenario() -> None:
-        stores = [DurableStore(PERSISTENCE.database(config)) for _ in range(8)]
+        stores = [DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT)) for _ in range(8)]
 
         async def accept(store: DurableStore, index: int) -> dict:
             async with store.transaction() as tx:
@@ -182,7 +182,7 @@ def test_store_does_not_create_tables_at_runtime(tmp_path: Path) -> None:
     database = PERSISTENCE.database(config)
 
     async def scenario() -> None:
-        store = DurableStore(database)
+        store = DurableStore(TenantDatabase(database, LOCAL_TENANT))
         try:
             with pytest.raises(OperationalError, match="no such table"):
                 async with store.transaction() as tx:
@@ -200,7 +200,7 @@ def test_store_does_not_create_tables_at_runtime(tmp_path: Path) -> None:
 
 def test_postgres_is_explicitly_unsupported() -> None:
     with pytest.raises(BackendNotImplemented, match="durable VCP operations"):
-        DurableStore(PERSISTENCE.database(DatabaseConfig(backend=Backend.POSTGRES)))
+        DurableStore(TenantDatabase(PERSISTENCE.database(DatabaseConfig(backend=Backend.POSTGRES)), LOCAL_TENANT))
 
 
 @pytest.mark.parametrize("first_version,retry_version", [(1, 1.0), (1.0, 1)])
@@ -221,11 +221,11 @@ def test_equivalent_numeric_command_identity_survives_restart(
     assert validate_message(contract, "DestroyCommand", retry, subject=subject) == []
 
     async def scenario() -> None:
-        store = DurableStore(PERSISTENCE.database(config))
+        store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         async with store.transaction() as tx:
             await tx.record_command(subject, command, RESPONSE)
         await store.close()
-        reopened = DurableStore(PERSISTENCE.database(config))
+        reopened = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         try:
             async with reopened.transaction() as tx:
                 assert await tx.replay(subject, retry) == RESPONSE
@@ -276,7 +276,7 @@ def test_upgrade_preserves_legacy_rows_without_adopting_them(tmp_path: Path) -> 
 
     async def scenario() -> None:
         prototype = PERSISTENCE.open(config).scoped(LOCAL_TENANT)
-        durable = DurableStore(PERSISTENCE.database(config))
+        durable = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         try:
             for row in rows:
                 assert await prototype.get(row["id"]) == Workspace(**row)
@@ -343,8 +343,8 @@ def test_runtime_delivery_tables_enforce_their_relations(tmp_path: Path) -> None
     PERSISTENCE.upgrade(config)
 
     async def scenario() -> None:
-        store = DurableStore(PERSISTENCE.database(config))
-        async with store.database.connect() as connection:
+        store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
+        async with store.database.transaction() as connection:
             row = (await connection.execute(sa.text("SELECT attempt_id, status FROM runtime_commands"))).one()
         assert tuple(row) == ("attempt_1", "pending")
         for write in (lambda tx: tx.append_runtime_command("rtc_2", "attempt_unknown", "s", b"{}"),

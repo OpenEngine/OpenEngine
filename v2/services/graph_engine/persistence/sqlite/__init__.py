@@ -8,16 +8,14 @@ refuse either anyway.
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from datetime import UTC, datetime
 from typing import Any
-from weakref import WeakKeyDictionary
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from openengine.persistence import Database, DatabaseStore, TenantDatabase
+from openengine.persistence import DatabaseStore, TenantDatabase
 
 from graph_engine.persistence.schema import command_receipts, graph_revisions, graphs, operations
 from graph_engine.persistence.store import (
@@ -33,9 +31,6 @@ from graph_engine.persistence.store import (
 
 APPLY = "graphs.apply"
 
-# Request stores share the writer queue for the lifetime of their open database.
-_WRITE_LOCKS: WeakKeyDictionary[Database, asyncio.Lock] = WeakKeyDictionary()
-
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex}"
@@ -45,15 +40,14 @@ class SqliteGraphs(DatabaseStore):
     def __init__(self, database: TenantDatabase) -> None:
         super().__init__(database)
         self.database = database
-        self._writing = _WRITE_LOCKS.setdefault(database.database, asyncio.Lock())
+        self._writing = database.write_lock
 
     async def apply(
         self, command: Command, definition: Definition, expected_version: int | None = None,
         deadline: datetime | None = None,
     ) -> dict[str, Any]:
-        async with self._writing, self.database.transaction() as transaction:
+        async with self._writing, self.database.transaction(immediate=True) as transaction:
             # Reserve the writer before reading, including across per-request scoped stores.
-            await transaction.exec_driver_sql("BEGIN IMMEDIATE")
             if (receipt := await _receipt(transaction, command)) is not None:
                 return receipt
             now = datetime.now(UTC)
@@ -109,16 +103,15 @@ class SqliteGraphs(DatabaseStore):
         return response
 
     async def reject(self, command: Command, response: dict[str, Any]) -> dict[str, Any]:
-        async with self._writing, self.database.transaction() as transaction:
+        async with self._writing, self.database.transaction(immediate=True) as transaction:
             # Reserve the writer before reading, including across per-request scoped stores.
-            await transaction.exec_driver_sql("BEGIN IMMEDIATE")
             if (receipt := await _receipt(transaction, command)) is not None:
                 return receipt
             await _record(transaction, command, response, datetime.now(UTC))
         return response
 
     async def graph(self, graph_id: str) -> Graph | None:
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             row = (await connection.execute(graphs.select().where(graphs.c.tenant_id == self.database.tenant, graphs.c.graph_id == graph_id))).one_or_none()
         return Graph(**{key: value for key, value in row._mapping.items() if key != "tenant_id"}) if row else None
 
@@ -132,7 +125,7 @@ class SqliteGraphs(DatabaseStore):
         if after is not None:
             name, graph_id = after
             query = query.where(sa.or_(graphs.c.name > name, sa.and_(graphs.c.name == name, graphs.c.graph_id > graph_id)))
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             rows = (await connection.execute(query)).all()
         return [Graph(**{key: value for key, value in row._mapping.items() if key != "tenant_id"}) for row in rows]
 
@@ -141,13 +134,13 @@ class SqliteGraphs(DatabaseStore):
             graph_revisions.c.tenant_id == self.database.tenant,
             graph_revisions.c.graph_id == graph_id, graph_revisions.c.revision == revision
         )
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             row = (await connection.execute(query)).one_or_none()
         return GraphRevision(**{key: value for key, value in row._mapping.items() if key != "tenant_id"}) if row else None
 
     async def operation(self, operation_id: str) -> Operation | None:
         query = operations.select().where(operations.c.tenant_id == self.database.tenant, operations.c.operation_id == operation_id)
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             row = (await connection.execute(query)).one_or_none()
         return Operation(**{key: value for key, value in row._mapping.items() if key != "tenant_id"}) if row else None
 

@@ -299,10 +299,8 @@ class Seen(DatabaseStore):
         seen = []
         async with self.database.transaction() as connection:
             seen.append(connection.info["tenant_id"])
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             seen.append(connection.info["tenant_id"])
-        async with self.database.engine.connect() as connection:
-            seen.append(connection.info.get("tenant_id"))
         return seen
 
 
@@ -319,9 +317,8 @@ def test_scoped_stores_tag_every_transaction_with_their_tenant(tmp_path: Path) -
 
     mine, theirs = asyncio.run(scenario())
 
-    # The pool hands the same connection back without the last scope's tenant.
-    assert mine == [LOCAL_TENANT, LOCAL_TENANT, None]
-    assert theirs == [other, other, None]
+    assert mine == [LOCAL_TENANT, LOCAL_TENANT]
+    assert theirs == [other, other]
 
 
 def test_an_invalidated_connection_keeps_its_original_error(tmp_path: Path) -> None:
@@ -350,7 +347,10 @@ def test_open_offers_no_store_without_a_tenant(tmp_path: Path) -> None:
     assert not hasattr(persistence, "store")
     store = opened.scoped(LOCAL_TENANT)
     assert isinstance(store.database, TenantDatabase)
-    assert isinstance(store.database, Database)
+    assert not isinstance(store.database, Database)
+    assert {name for name in dir(store.database) if not name.startswith("_")} == {
+        "tenant", "backend", "write_lock", "transaction", "close",
+    }
     assert store.database.tenant == LOCAL_TENANT
     assert store.database.backend is Backend.SQLITE
     for tenant in (NIL, str(LOCAL_TENANT), None):

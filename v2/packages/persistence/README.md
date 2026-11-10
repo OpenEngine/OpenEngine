@@ -6,7 +6,8 @@ picks the backend for all of them:
 | -- | -- | -- |
 | `OE_DATABASE_BACKEND` | `sqlite` | `sqlite` or `postgres` |
 | `OE_SQLITE_DIRECTORY` | `$XDG_STATE_HOME/openengine/databases` | one `<service>.sqlite3` per service |
-| `OE_POSTGRES_URL` | | Postgres is a stub: selecting it fails on first use |
+| `OE_POSTGRES_URL` | | Postgres 16+ runtime service URL; never used for migrations |
+| `OE_POSTGRES_MIGRATION_URL` | | owner URL, required only when requesting migration connections |
 
 Each service's data is isolated. On SQLite it gets its own file (`cxn.sqlite3`,
 `ge.sqlite3`, `tools.sqlite3`, `vcp.sqlite3`); on Postgres the services share one database and
@@ -32,8 +33,8 @@ the configured backend's store, typed as its Protocol and bound to that tenant.
 reachable without a tenant. `oe migrate` brings every service's
 database to head through `PERSISTENCE.upgrade()`; a new service joins by adding
 its `PERSISTENCE` to the CLI's `migrations/databases.py`. Stores extend `DatabaseStore` and reach the database through
-`self.database.transaction()` and `self.database.connect()`, which hand out
-async SQLAlchemy connections. Timestamps use `UtcDateTime`, which comes back
+`self.database.transaction()`, which hands out an async SQLAlchemy connection
+after BEGIN and the transaction-start hook. Timestamps use `UtcDateTime`, which comes back
 timezone-aware on every backend.
 
 ### Tenancy
@@ -66,10 +67,52 @@ and deliberately not the nil UUID).
   `str()`; `parse_tenant()` reads it back and refuses anything else.
   `new_tenant()` makes one. `new_id()` makes row IDs for large tables: both are
   UUIDv7, so new rows land at the end of the index.
-- `scoped(tenant)` gives the store a `TenantDatabase`: every connection from its
-  `connect()` and `transaction()` carries the tenant in
-  `connection.info["tenant_id"]`. Stores still filter every query on
-  `tenant_id`.
+- `scoped(tenant)` gives the store a `TenantDatabase`: every transaction carries
+  the validated UUID in `connection.info["tenant_id"]`. Stores still filter every
+  query on `tenant_id`. This is the same path in shared and dedicated deployments.
+  The handle exposes `tenant`, `backend`, `transaction()`, `write_lock` and
+  `close()`; it has no `connect()`, URL, raw database/engine or migration API.
+  Reads also use transactions. `transaction(immediate=True)` reserves SQLite's
+  writer before a read/modify/write operation; `write_lock` shares the in-process
+  writer queue across scopes. The separate workspace-daemon SQLite journal keeps
+  its raw connection and BEGIN IMMEDIATE behavior.
+
+### Postgres connection foundation (#1232 Part 1)
+The shared library supports Postgres 16+, using psycopg 3 for both async runtime
+and synchronous migration connections. URLs use `postgresql://user:password@host/database`
+(or `postgresql+psycopg` / `postgresql+psycopg_async`), with explicit user, host
+and database. Percent-encode password characters. Supported query options are
+`sslmode`, `sslcert`, `sslkey`, `sslrootcert`, `sslcrl`, `connect_timeout`,
+`application_name` and `target_session_attrs`; identity and startup overrides
+are rejected. Configuration errors and config reprs do not include credentials.
+
+Runtime-only processes need no owner URL. `Database.url()` uses only
+`OE_POSTGRES_URL`; `url(asynchronous=False)` and `migration_engine()` require
+`OE_POSTGRES_MIGRATION_URL`. Neither URL falls back to the other. Operators must
+supply distinct, appropriately restricted accounts; the library does not create
+roles. Both engine paths select only the service schema through startup
+`search_path`, without `public` fallback. Schemas must already exist and grant
+USAGE; missing/inaccessible schemas and servers older than 16 are rejected.
+Service names are lower-case identifiers of at most 63 characters, excluding
+`public` and `pg_*`. Runtime code issues no DDL.
+
+`Database.transaction(tenant)` validates the credential-derived UUID, starts the
+transaction, binds `connection.info["tenant_id"]`, then awaits
+`transaction_started(connection, tenant)` before yielding to store SQL. A backend
+may override that async hook to establish transaction-local state. Hooks must
+not commit/rollback or set session-level state. Success commits; all other exits
+roll back or discard the connection. Cleanup removes Python tenant metadata even
+on invalidation and finishes connection cleanup despite repeated cancellation.
+The default hook does nothing: role switching/provisioning (#1233) and RLS (#1234)
+remain separate work.
+
+Live tests use `OE_TEST_POSTGRES_ADMIN_URL` to provision disposable schemas and
+separate owner/runtime logins in a test database; only the fixture bootstraps
+roles. Run `uv run pytest packages/persistence/tests/test_postgres.py -v` from
+`v2/`. CI runs this shared layer against Postgres 16. Actual service migrations,
+owner-run schema initialization and reflection compatibility follow in Part 2;
+service Postgres stores remain stubs until #1235. This does not yet support
+Postgres `oe up`.
 
 ### Changing a service's schema
 Edit `schema.py`, then autogenerate a revision against an empty database and

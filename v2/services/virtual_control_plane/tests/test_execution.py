@@ -10,7 +10,7 @@ import sqlalchemy as sa
 from openengine.contracts.runtime import validate_message
 from openengine.messaging import Request, ServiceError, envelopes
 from openengine.messaging.errors import invalid_argument
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import DatabaseConfig, LOCAL_TENANT, TenantDatabase
 
 from virtual_control_plane.application.execution import Execution, InvalidTransition
 from virtual_control_plane.application.lifecycle import Lifecycle, SCHEMAS
@@ -45,7 +45,7 @@ def query(**params):
 async def setup(tmp_path):
     config = DatabaseConfig(sqlite_directory=tmp_path / "db")
     PERSISTENCE.upgrade(config)
-    store = DurableStore(PERSISTENCE.database(config))
+    store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
     root = tmp_path / "root"
     root.mkdir()
     (root / "AGENTS.md").write_text("Test instructions")
@@ -61,7 +61,7 @@ async def setup(tmp_path):
 
 
 async def commands(store):
-    async with store.database.connect() as connection:
+    async with store.database.transaction() as connection:
         return list((await connection.execute(sa.select(runtime_commands))).mappings())
 
 
@@ -99,7 +99,7 @@ def test_duplicates_conflicts_restart_and_queries(tmp_path):
             await service.execute(changed)
         assert caught.value.code == "COMMAND_ID_CONFLICT"
         await store.close()
-        store = DurableStore(PERSISTENCE.database(config))
+        store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         service = Execution(Lifecycle(store, {}), enabled=False)
         expired = deepcopy(original)
         expired.body["deadline_at"] = "2000-01-01T00:00:00Z"

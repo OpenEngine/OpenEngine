@@ -12,6 +12,7 @@ import signal
 import subprocess
 from contextlib import asynccontextmanager
 
+from openengine.persistence import LOCAL_TENANT, TenantDatabase
 from openengine.contracts.runtime import validate_wire_message
 from openengine.messaging import Client, LocalOperator, Server, ServiceError, Unavailable, envelopes, listen_address
 
@@ -330,7 +331,7 @@ async def settled_daemon(flow, attempt_id, state):
 
 class Vcp:
     def __init__(self, connection, config):
-        self.store = DurableStore(PERSISTENCE.database(config))
+        self.store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         lifecycle = Lifecycle(self.store, {})
         self.execution = Execution(lifecycle, HostContext(), enabled=True)
         self.server = Server(connection, "vcp", listen_address(connection),

@@ -12,7 +12,7 @@ from openengine.persistence import (
     Backend,
     BackendNotImplemented,
     ConfigError,
-    Database,
+    TenantDatabase,
     DatabaseConfig,
     ServicePersistence,
     open_database,
@@ -35,7 +35,7 @@ class Jobs(Protocol):
 
 
 class SqliteJobs:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: TenantDatabase) -> None:
         self.database = database
 
     async def add(self, name: str) -> None:
@@ -43,7 +43,7 @@ class SqliteJobs:
             await connection.execute(text("INSERT INTO jobs (name) VALUES (:name)"), {"name": name})
 
     async def names(self) -> list[str]:
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             return list((await connection.execute(text("SELECT name FROM jobs ORDER BY id"))).scalars())
 
 
@@ -67,7 +67,7 @@ def test_defaults_to_sqlite_under_the_state_directory(monkeypatch: pytest.Monkey
 
 
 def test_one_variable_switches_every_service_to_postgres() -> None:
-    config = DatabaseConfig.from_environment({"OE_DATABASE_BACKEND": "Postgres", "OE_POSTGRES_URL": "postgresql://db/oe"})
+    config = DatabaseConfig.from_environment({"OE_DATABASE_BACKEND": "Postgres", "OE_POSTGRES_URL": "postgresql://runtime@db/oe"})
 
     assert isinstance(open_database("cxn", config), PostgresDatabase)
     assert isinstance(open_database("cxn", DatabaseConfig(sqlite_directory=Path("/x"))), SqliteDatabase)
@@ -78,10 +78,10 @@ def test_refuses_an_unknown_backend() -> None:
         DatabaseConfig.from_environment({"OE_DATABASE_BACKEND": "mysql"})
 
 
-def test_postgres_is_a_stub_that_fails_on_use() -> None:
+def test_postgres_requires_runtime_credentials_on_use() -> None:
     database = open_database("cxn", DatabaseConfig(backend=Backend.POSTGRES))
 
-    with pytest.raises(BackendNotImplemented, match="postgres backend does not implement connections"):
+    with pytest.raises(ConfigError, match="OE_POSTGRES_URL is required"):
         database.engine
 
 
@@ -167,3 +167,56 @@ def test_cold_connection_waits_for_journal_mode_lock_without_blocking_the_loop(t
         asyncio.run(scenario())
     finally:
         blocker.close()
+
+
+@pytest.mark.parametrize("value", ["not-a-url", "sqlite:///db", "postgresql://db/oe", "postgresql://u@db",
+                                   "postgresql://u@db:bad/oe", "postgresql://u@db/oe?user=owner",
+                                   "postgresql://u@db/oe?options=-csearch_path=public"])
+def test_postgres_configuration_rejects_invalid_urls_without_exposing_secrets(value):
+    for variable in ("OE_POSTGRES_URL", "OE_POSTGRES_MIGRATION_URL"):
+        with pytest.raises(ConfigError) as error:
+            DatabaseConfig.from_environment({variable: value})
+        assert variable in str(error.value)
+        assert value not in str(error.value)
+
+
+def test_postgres_urls_never_fall_back_between_runtime_and_owner():
+    environment = {
+        "OE_DATABASE_BACKEND": "postgres",
+        "OE_POSTGRES_URL": "postgresql://runtime:p%40ss@db/oe?sslmode=require",
+        "OE_POSTGRES_MIGRATION_URL": "postgresql://owner:secret@db/oe",
+    }
+    config = DatabaseConfig.from_environment(environment)
+    database = open_database("cxn", config)
+    runtime, owner = database.url(), database.url(asynchronous=False)
+    assert (runtime.drivername, runtime.username, runtime.password) == ("postgresql+psycopg_async", "runtime", "p@ss")
+    assert (owner.drivername, owner.username) == ("postgresql+psycopg", "owner")
+    assert runtime.query["sslmode"] == "require"
+    assert runtime.query["options"] == owner.query["options"] == '-csearch_path="cxn"'
+    assert "secret" not in repr(config) and "p%40ss" not in repr(config)
+    for missing, asynchronous in (("OE_POSTGRES_URL", True), ("OE_POSTGRES_MIGRATION_URL", False)):
+        partial = DatabaseConfig.from_environment({key: value for key, value in environment.items() if key != missing})
+        with pytest.raises(ConfigError, match=missing):
+            open_database("cxn", partial).url(asynchronous=asynchronous)
+
+
+@pytest.mark.parametrize("service", ["public", "pg_catalog", "cxn,public", 'cxn"; SELECT 1', "a" * 64])
+def test_postgres_schema_names_are_validated(service):
+    with pytest.raises(ConfigError, match="schema"):
+        open_database(service, DatabaseConfig(backend=Backend.POSTGRES))
+
+
+def test_postgres_refuses_versions_before_16(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from sqlalchemy import event
+
+    listeners = []
+    monkeypatch.setattr(event, "listens_for", lambda engine, name: listeners.append)
+    database = PostgresDatabase("cxn", "postgresql://runtime@db/oe")
+    database.configure(MagicMock())
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value.fetchone.return_value = (150099, "cxn")
+    with pytest.raises(ConfigError, match="16 or newer"):
+        listeners[0](connection, None)
+    connection.rollback.assert_called_once()

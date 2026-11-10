@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from openengine.persistence import Backend, BackendNotImplemented, Database
+from openengine.persistence import Backend, BackendNotImplemented, TenantDatabase
 
 
 class PostgresGraphs:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: TenantDatabase) -> None:
         raise BackendNotImplemented(Backend.POSTGRES, "the graph engine's store")

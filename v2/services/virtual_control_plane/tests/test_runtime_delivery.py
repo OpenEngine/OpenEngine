@@ -20,7 +20,7 @@ import sqlalchemy as sa
 
 from openengine.contracts.runtime import validate_wire_message
 from openengine.messaging import Client, LocalOperator, Server, ServiceError, Unavailable, envelopes, listen_address
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import DatabaseConfig, LOCAL_TENANT, TenantDatabase
 
 from virtual_control_plane.application import runtime_delivery
 from virtual_control_plane.application.execution import Execution
@@ -69,7 +69,7 @@ def payload(mode="new", session_id=None, **settings):
 async def vcp_store(tmp_path, locator):
     config = DatabaseConfig(sqlite_directory=tmp_path / "vcp")
     PERSISTENCE.upgrade(config)
-    store = DurableStore(PERSISTENCE.database(config))
+    store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
     async with store.transaction() as tx:
         await tx.put("workspaces", WORKSPACE, {"specification": {"apiVersion": "openengine.cc/v1alpha1"}, "snapshot": {
             "workspace_id": WORKSPACE, "state": "ready", "version": 2, "active_attempt_ids": [],
@@ -86,7 +86,7 @@ def workspace_root(tmp_path, name="root"):
 
 
 async def commands(store):
-    async with store.database.connect() as connection:
+    async with store.database.transaction() as connection:
         return list((await connection.execute(sa.select(runtime_commands))).mappings())
 
 
@@ -484,7 +484,7 @@ class Daemon:
 
 class Vcp:
     def __init__(self, connection, config, authorizer=None):
-        self.store = DurableStore(PERSISTENCE.database(config))
+        self.store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         self.execution = Execution(Lifecycle(self.store, {}), HostContext(), enabled=True)
         self.server = Server(connection, "vcp", listen_address(connection), commands=self.execution.commands(),
                              queries=self.execution.queries(), authorizer=authorizer or LocalOperator())

@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from openengine.persistence import Backend, BackendNotImplemented, Database
+from openengine.persistence import Backend, BackendNotImplemented, TenantDatabase
 
 from virtual_control_plane.application.transactions import (
     Collection, CommandIdConflict, Document, InvalidEvent, PendingEvent, RuntimeCommand,
@@ -212,26 +212,19 @@ class Transaction:
 
 
 class DurableStore:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: TenantDatabase) -> None:
         if database.backend != Backend.SQLITE:
             raise BackendNotImplemented(database.backend, "durable VCP operations")
         self.database = database
 
     @asynccontextmanager
     async def transaction(self) -> AsyncIterator[Transaction]:
-        async with self.database.connect() as connection:
-            try:
-                # Acquire the writer reservation *before* reading a receipt. A
-                # deferred transaction could race between lookup and insertion.
-                await connection.exec_driver_sql("BEGIN IMMEDIATE")
-                yield Transaction(connection)
-                await connection.commit()
-            except BaseException:
-                await connection.rollback()
-                raise
+        # Reserve the SQLite writer before reading a receipt.
+        async with self.database.transaction(immediate=True) as connection:
+            yield Transaction(connection)
 
     async def read(self, collection: Collection, key: str) -> Document | None:
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             return await Transaction(connection).get(collection, key)
 
     async def workspace_page(self, filters: Document, after: list[str] | None, limit: int) -> list[Document]:
@@ -256,7 +249,7 @@ class DurableStore:
         if "state" in filters:
             query = query.bindparams(sa.bindparam("states", expanding=True))
         query = query.columns(body=sa.JSON)
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             return [row["snapshot"] for row in (await connection.execute(query, values)).scalars()]
 
     async def session_page(self, filters: Document, after: list[str] | None, limit: int) -> list[Document]:
@@ -267,7 +260,7 @@ class DurableStore:
             values.update(created=after[0], key=after[1])
         # Bound each indexed state seek before merging, avoiding a full sort.
         pages = []
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             for state in filters.get("state") or [None]:
                 where = conditions + (["json_extract(body, '$.snapshot.state') = :state"] if state else [])
                 query = sa.text("SELECT body FROM sessions WHERE " + " AND ".join(where) +
@@ -279,8 +272,7 @@ class DurableStore:
     async def history_page(self, session_id: str, filters: Document, after: int, limit: int) -> list[Document]:
         # Seek and bound each kind independently, then merge at most 4 bounded pages.
         pages = []
-        async with self.database.connect() as connection:
-            await connection.exec_driver_sql("BEGIN")  # one snapshot across all kind seeks
+        async with self.database.transaction() as connection:
             for kind in filters.get("kind") or [None]:
                 query = sa.select(session_history.c.entry).where(
                     session_history.c.session_id == session_id, session_history.c.sequence > after)
@@ -298,7 +290,7 @@ class DurableStore:
         if excluded := list(exclude):
             query = query.where(table.c.command_id.not_in(excluded))
         query = query.order_by(sa.literal_column("rowid")).limit(limit)
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             return [RuntimeCommand(**row) for row in (await connection.execute(query)).mappings()]
 
     async def pending_events(self, limit: int, exclude: Iterable[str] = ()) -> list[PendingEvent]:
@@ -311,16 +303,15 @@ class DurableStore:
                 .where(outbox.c.published_at.is_(None))
                 .order_by(outbox.c.sequence).limit(limit)
             )
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             return [PendingEvent(**row) for row in (await connection.execute(query)).mappings()]
 
     async def mark_published(self, sequence: int) -> None:
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             await connection.execute(
                 outbox.update().where(outbox.c.sequence == sequence, outbox.c.published_at.is_(None))
                 .values(published_at=datetime.now(UTC))
             )
-            await connection.commit()
 
     async def close(self) -> None:
         await self.database.close()

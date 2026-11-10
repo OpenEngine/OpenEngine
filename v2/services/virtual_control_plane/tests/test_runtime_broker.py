@@ -29,7 +29,7 @@ import nats
 import pytest
 import sqlalchemy as sa
 from nats.aio.client import Client as NATS
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import DatabaseConfig, LOCAL_TENANT, TenantDatabase
 from virtual_control_plane.persistence import PERSISTENCE
 from virtual_control_plane.persistence.credentials import CredentialRows
 from virtual_control_plane.provisioning import broker as broker_module
@@ -65,7 +65,7 @@ def free_port() -> int:
 
 def make(tmp_path: Path, binary: Path, database: DatabaseConfig, port: int, **options) -> RuntimeBroker:
     endpoint = BrokerEndpoint("127.0.0.1", port, f"nats://127.0.0.1:{port}")
-    return RuntimeBroker(tmp_path / "runtime-broker", binary, endpoint, CredentialRows(PERSISTENCE.database(database)), **options)
+    return RuntimeBroker(tmp_path / "runtime-broker", binary, endpoint, CredentialRows(TenantDatabase(PERSISTENCE.database(database), LOCAL_TENANT)), **options)
 
 
 @asynccontextmanager
@@ -226,7 +226,7 @@ def test_credentials_are_private_and_stable_across_broker_restart(binary, tmp_pa
         assert stat.S_IMODE(os.stat(directory / "credentials").st_mode) == 0o700
         assert stat.S_IMODE(os.stat(issued.path).st_mode) == 0o600
         assert stat.S_IMODE(os.stat(first.config).st_mode) == 0o600
-        row = await CredentialRows(PERSISTENCE.database(database)).get(A)
+        row = await CredentialRows(TenantDatabase(PERSISTENCE.database(database), LOCAL_TENANT)).get(A)
         assert row.status == "active" and row.secret_digest == broker_module.digest(secret) and secret not in str(row)
 
         second = make(tmp_path, binary, database, port)
@@ -242,7 +242,7 @@ def test_credentials_are_private_and_stable_across_broker_restart(binary, tmp_pa
 def test_revocation_refuses_new_and_closes_existing_connections_and_survives_restart(binary, tmp_path, database) -> None:
     async def scenario() -> None:
         port = free_port()
-        rows = CredentialRows(PERSISTENCE.database(database))
+        rows = CredentialRows(TenantDatabase(PERSISTENCE.database(database), LOCAL_TENANT))
         runtime_broker = make(tmp_path, binary, database, port)
         async with running(runtime_broker):
             credential = await runtime_broker.issue(A, 1)
@@ -275,7 +275,7 @@ def test_revocation_refuses_new_and_closes_existing_connections_and_survives_res
 def test_an_interrupted_revocation_is_never_restored_and_finishes_on_restart(binary, tmp_path, database) -> None:
     async def scenario() -> None:
         port = free_port()
-        rows = CredentialRows(PERSISTENCE.database(database))
+        rows = CredentialRows(TenantDatabase(PERSISTENCE.database(database), LOCAL_TENANT))
         runtime_broker = make(tmp_path, binary, database, port)
         async with running(runtime_broker):
             await runtime_broker.issue(A, 1)
@@ -336,7 +336,7 @@ def test_vcp_sigkill_leaves_no_broker_port_or_lock_and_restart_reuses_the_endpoi
     async def scenario() -> None:
         # Issued while VCP is down: the next launch's configuration grants it.
         offline = RuntimeBroker(directory, binary, BrokerEndpoint("127.0.0.1", port, f"nats://127.0.0.1:{port}"),
-                                CredentialRows(PERSISTENCE.database(database)))
+                                CredentialRows(TenantDatabase(PERSISTENCE.database(database), LOCAL_TENANT)))
         secret = (await offline.issue(A, 1)).path.read_text()
         async with public_broker(binary) as connection:
             vcp = Vcp(tmp_path, connection.connected_url.geturl(), binary, port)

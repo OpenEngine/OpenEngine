@@ -44,7 +44,7 @@ class SqliteWorkspaces(DatabaseStore):
 
     async def get(self, id: str) -> Workspace | None:
         table = documents["workspaces"]
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             body = (await connection.execute(sa.select(table.c.body).where(table.c.key == id))).scalar_one_or_none()
         return _workspace(body)
 
@@ -69,7 +69,7 @@ class SqliteWorkspaces(DatabaseStore):
         query = sa.select(table.c.body).where(sa.text("json_type(body, '$.legacy') = 'object'"))
         if status is not None:
             query = query.where(sa.literal_column("json_extract(body, '$.legacy.status')") == status.value)
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             rows = (await connection.execute(query)).scalars()
         workspaces = [workspace for body in rows if (workspace := _workspace(body)) is not None]
         return sorted(
