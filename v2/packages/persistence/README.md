@@ -85,6 +85,7 @@ and database. Percent-encode password characters. Supported query options are
 `sslmode`, `sslcert`, `sslkey`, `sslrootcert`, `sslcrl`, `connect_timeout`,
 `application_name` and `target_session_attrs`; identity and startup overrides
 are rejected. Configuration errors and config reprs do not include credentials.
+SQLite ignores both Postgres URL settings, including invalid or unsupported URLs.
 
 Runtime-only processes need no owner URL. `Database.url()` uses only
 `OE_POSTGRES_URL`; `url(asynchronous=False)` and `migration_engine()` require

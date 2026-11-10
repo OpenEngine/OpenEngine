@@ -86,6 +86,8 @@ class DatabaseConfig:
     postgres_migration_url: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
+        if self.backend != Backend.POSTGRES:
+            return
         for value, variable in ((self.postgres_url, POSTGRES_URL_VARIABLE),
                                 (self.postgres_migration_url, POSTGRES_MIGRATION_URL_VARIABLE)):
             if value is not None:

@@ -73,6 +73,26 @@ def test_one_variable_switches_every_service_to_postgres() -> None:
     assert isinstance(open_database("cxn", DatabaseConfig(sqlite_directory=Path("/x"))), SqliteDatabase)
 
 
+@pytest.mark.parametrize("backend", [None, "sqlite"])
+@pytest.mark.parametrize("variable", ["OE_POSTGRES_URL", "OE_POSTGRES_MIGRATION_URL"])
+@pytest.mark.parametrize("value", ["not-a-url", "postgresql://u@db/oe?channel_binding=require"])
+def test_sqlite_ignores_unused_postgres_urls(tmp_path, backend, variable, value):
+    environment = {"OE_SQLITE_DIRECTORY": str(tmp_path), variable: value}
+    if backend is not None:
+        environment["OE_DATABASE_BACKEND"] = backend
+    database = open_database("cxn", DatabaseConfig.from_environment(environment))
+    assert isinstance(database, SqliteDatabase)
+
+    async def query():
+        try:
+            async with database.transaction(LOCAL_TENANT) as connection:
+                assert (await connection.execute(text("SELECT 1"))).scalar_one() == 1
+        finally:
+            await database.close()
+
+    asyncio.run(query())
+
+
 def test_refuses_an_unknown_backend() -> None:
     with pytest.raises(ConfigError, match="'mysql' is not one of sqlite, postgres"):
         DatabaseConfig.from_environment({"OE_DATABASE_BACKEND": "mysql"})
@@ -171,11 +191,12 @@ def test_cold_connection_waits_for_journal_mode_lock_without_blocking_the_loop(t
 
 @pytest.mark.parametrize("value", ["not-a-url", "sqlite:///db", "postgresql://db/oe", "postgresql://u@db",
                                    "postgresql://u@db:bad/oe", "postgresql://u@db/oe?user=owner",
-                                   "postgresql://u@db/oe?options=-csearch_path=public"])
+                                   "postgresql://u@db/oe?options=-csearch_path=public",
+                                   "postgresql://u@db/oe?channel_binding=require"])
 def test_postgres_configuration_rejects_invalid_urls_without_exposing_secrets(value):
     for variable in ("OE_POSTGRES_URL", "OE_POSTGRES_MIGRATION_URL"):
         with pytest.raises(ConfigError) as error:
-            DatabaseConfig.from_environment({variable: value})
+            DatabaseConfig.from_environment({"OE_DATABASE_BACKEND": "postgres", variable: value})
         assert variable in str(error.value)
         assert value not in str(error.value)
 
