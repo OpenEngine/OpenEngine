@@ -12,7 +12,7 @@ import nats
 import pytest
 from nats.errors import TimeoutError as NatsTimeoutError
 from openengine.messaging import Client, LocalOperator, Server, ServiceError, envelopes, listen_address
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import DatabaseConfig, LOCAL_TENANT, TenantDatabase
 
 from virtual_control_plane.application.lifecycle import Lifecycle, SCHEMAS
 from virtual_control_plane.persistence import PERSISTENCE
@@ -51,7 +51,7 @@ async def broker(binary, host="127.0.0.1"):
 def storage(tmp_path):
     config = DatabaseConfig(sqlite_directory=tmp_path)
     PERSISTENCE.upgrade(config)
-    return DurableStore(PERSISTENCE.database(config))
+    return DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
 
 
 @asynccontextmanager

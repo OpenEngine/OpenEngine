@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import inspect
 
-from openengine.persistence import LOCAL_TENANT, Backend, BackendNotImplemented, DatabaseConfig
+from openengine.persistence import Backend, BackendNotImplemented, DatabaseConfig, LOCAL_TENANT, TenantDatabase
 from openengine.persistence.migrations import downgrade
 
 from virtual_control_plane.persistence import PERSISTENCE
@@ -107,7 +107,7 @@ def test_list_filters_in_sql_using_legacy_status_index(config: DatabaseConfig, m
                 if statement.startswith("SELECT workspaces.body"):
                     plans.append(connection.exec_driver_sql("EXPLAIN QUERY PLAN " + statement, parameters).all())
 
-            async with workspaces.database.connect() as connection:
+            async with workspaces.database.transaction() as connection:
                 sa.event.listen(connection.sync_connection.engine, "before_cursor_execute", explain)
             try:
                 assert await workspaces.list(WorkspaceStatus.READY) == [ready]
@@ -131,7 +131,7 @@ def test_downgrade_keeps_issued_runtime_credentials(config: DatabaseConfig) -> N
     from virtual_control_plane.persistence.credentials import CredentialRows
 
     database = PERSISTENCE.database(config)
-    asyncio.run(CredentialRows(database).claim("rt_1", 1, "rt_1"))
+    asyncio.run(CredentialRows(TenantDatabase(database, LOCAL_TENANT)).claim("rt_1", 1, "rt_1"))
 
     with pytest.raises(RuntimeError, match="runtime broker credentials"):
         downgrade(PERSISTENCE.migrations, database, "1b2226fa7c9a")

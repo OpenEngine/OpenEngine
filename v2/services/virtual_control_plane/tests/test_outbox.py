@@ -27,7 +27,7 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
 from openengine.cli.migrations.streams import load_stream_configs, migrate_streams
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import DatabaseConfig, LOCAL_TENANT, TenantDatabase
 from openengine.persistence.migrations import downgrade
 from openengine.supervisor.processes.nats import install_nats_server
 
@@ -75,7 +75,7 @@ async def accept(store: DurableStore, command: dict[str, Any], event_id: str) ->
 
 
 async def _rows(store: DurableStore) -> list[dict[str, Any]]:
-    async with store.database.connect() as connection:
+    async with store.database.transaction() as connection:
         return [dict(row) for row in (await connection.execute(sa.select(outbox).order_by(outbox.c.sequence))).mappings()]
 
 
@@ -88,7 +88,7 @@ def config(tmp_path: Path) -> DatabaseConfig:
 
 @asynccontextmanager
 async def _store(config: DatabaseConfig) -> AsyncIterator[DurableStore]:
-    store = DurableStore(PERSISTENCE.database(config))
+    store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
     try:
         yield store
     finally:
@@ -253,7 +253,8 @@ def test_pending_query_seeks_past_blocked_backlogs(config: DatabaseConfig, backl
                     lambda driver: driver.set_progress_handler(progress, 100)
                 )
 
-            engine = store.database.engine.sync_engine
+            async with store.database.transaction() as connection:
+                engine = connection.sync_connection.engine
             sa.event.listen(engine, "before_cursor_execute", instrument)
             try:
                 pending = await store.pending_events(3, exclude=["ws_m", "ws_missing"])
@@ -261,7 +262,7 @@ def test_pending_query_seeks_past_blocked_backlogs(config: DatabaseConfig, backl
                 assert steps < 10_000
             finally:
                 sa.event.remove(engine, "before_cursor_execute", instrument)
-                async with store.database.connect() as connection:
+                async with store.database.transaction() as connection:
                     raw = await connection.get_raw_connection()
                     await raw.driver_connection.set_progress_handler(None, 0)
             await store.mark_published(pending[0].sequence)

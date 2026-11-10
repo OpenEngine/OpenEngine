@@ -6,8 +6,11 @@ alone decides where their data lives.
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from abc import ABC, abstractmethod
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import ClassVar
 
 from sqlalchemy import Engine, create_engine
@@ -32,6 +35,7 @@ class Database(ABC):
     def __init__(self, service: str) -> None:
         self.service = service
         self._engine: AsyncEngine | None = None
+        self.write_lock = asyncio.Lock()
 
     @abstractmethod
     def url(self, *, asynchronous: bool = True) -> URL:
@@ -59,9 +63,39 @@ class Database(ABC):
     def connect(self) -> AbstractAsyncContextManager[AsyncConnection]:
         return self.engine.connect()
 
-    def transaction(self) -> AbstractAsyncContextManager[AsyncConnection]:
-        """A connection that commits when the block exits cleanly and rolls back otherwise."""
-        return self.engine.begin()
+    async def transaction_started(self, connection: AsyncConnection, tenant: uuid.UUID) -> None:
+        """Hook after BEGIN, before store SQL. Use transaction-local state only; never end the transaction."""
+
+    @asynccontextmanager
+    async def transaction(self, tenant: uuid.UUID, *, immediate: bool = False) -> AsyncIterator[AsyncConnection]:
+        """Bind a credential-derived tenant, commit on success and roll back on every other exit.
+
+        `immediate` reserves SQLite's writer before a read/modify/write operation.
+        """
+        from openengine.persistence.tenancy import tenant as validate_tenant
+
+        tenant = validate_tenant(tenant)
+        if immediate and self.backend != Backend.SQLITE:
+            raise BackendNotImplemented(self.backend, "immediate transactions")
+        connection = await self.engine.connect()
+        # Keep the original dictionary: accessing connection.info after invalidation
+        # can reconnect or mask the original error. Clear it even when discarded.
+        info = connection.info
+        try:
+            await connection.begin()
+            if self.backend == Backend.SQLITE:
+                await connection.exec_driver_sql("BEGIN IMMEDIATE" if immediate else "BEGIN")
+            else:
+                # Psycopg sends BEGIN before its first statement. An explicit
+                # BEGIN here would start it twice; the hook must see INTRANS.
+                await connection.exec_driver_sql("SELECT 1")
+            info["tenant_id"] = tenant
+            await self.transaction_started(connection, tenant)
+            yield connection
+            await connection.commit()
+        finally:
+            info.pop("tenant_id", None)
+            await _close_connection(connection)
 
     async def close(self) -> None:
         if self._engine is not None:
@@ -78,4 +112,26 @@ def open_database(service: str, config: DatabaseConfig | None = None) -> Databas
         case Backend.SQLITE:
             return SqliteDatabase(service, config.sqlite_directory)
         case Backend.POSTGRES:
-            return PostgresDatabase(service, config.postgres_url)
+            return PostgresDatabase(service, config.postgres_url, config.postgres_migration_url)
+
+
+async def _close_connection(connection: AsyncConnection) -> None:
+    """Finish rollback/checkin before returning, even if cancellation repeats during cleanup."""
+    async def close() -> None:
+        try:
+            await connection.close()
+        except BaseException:
+            await connection.invalidate()
+            await connection.close()
+            raise
+
+    task = asyncio.create_task(close())
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    task.result()
+    if cancelled:
+        raise asyncio.CancelledError
