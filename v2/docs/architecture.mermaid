@@ -100,24 +100,34 @@ flowchart LR
             class vcp_t_attempts table
             vcp_t_command_receipts[("command_receipts<br/>Immutable command identity and original response for idempotent replay.")]
             class vcp_t_command_receipts table
+            vcp_t_history_cursors[("history_cursors<br/>Durable opaque history cursors bound to tenant, session and normalized filters.")]
+            class vcp_t_history_cursors table
             vcp_t_operations[("operations<br/>Accepted commands' progress and terminal state.")]
             class vcp_t_operations table
             vcp_t_outbox[("outbox<br/>Immutable public event envelopes awaiting or recording JetStream publication.")]
             class vcp_t_outbox table
             vcp_t_runtime_commands[("runtime_commands<br/>Immutable internal commands accepted atomically with attempts, and their delivery outcome.")]
             class vcp_t_runtime_commands table
+            vcp_t_runtime_credentials[("runtime_credentials<br/>Internal broker credential ownership and revocation state per runtime; never the secret.")]
+            class vcp_t_runtime_credentials table
             vcp_t_runtime_status[("runtime_status<br/>Execution readiness, capabilities, journal identity and update high-water mark of an owned runtime.")]
             class vcp_t_runtime_status table
             vcp_t_runtime_updates[("runtime_updates<br/>Committed internal runtime updates, for duplicate and conflict detection.")]
             class vcp_t_runtime_updates table
+            vcp_t_session_history[("session_history<br/>Ordered conversation and steering outcomes in one session-local sequence.")]
+            class vcp_t_session_history table
             vcp_t_sessions[("sessions<br/>Agent conversation snapshots, separate from workspace lifecycle.")]
             class vcp_t_sessions table
+            vcp_t_steering_commands[("steering_commands<br/>Immutable steering bindings and their terminal projection status.")]
+            class vcp_t_steering_commands table
             vcp_t_workspace_runtimes[("workspace_runtimes<br/>Provider ownership, opaque locator, runtime identity and generation.")]
             class vcp_t_workspace_runtimes table
             vcp_t_workspaces[("workspaces<br/>Workspace lifecycle projections, or preserved legacy prototype records.")]
             class vcp_t_workspaces table
             vcp_t_attempts --- vcp_t_runtime_commands
             vcp_t_runtime_status --- vcp_t_runtime_updates
+            vcp_t_sessions --- vcp_t_session_history
+            vcp_t_attempts --- vcp_t_session_history
         end
     end
 

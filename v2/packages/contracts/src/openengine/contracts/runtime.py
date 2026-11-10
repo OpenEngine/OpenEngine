@@ -23,7 +23,8 @@ _BRACKET = re.compile(r"[\[\]{}]")
 DEFINITIONS = {
     "execute": ("runtime", ("execute",)),
     "cancel": ("runtime", ("cancel",)),
-    "command_ack": ("runtime", ("execute", "cancel")),
+    "steer": ("runtime", ("steer",)),
+    "command_ack": ("runtime", ("execute", "cancel", "steer")),
     "inspect": ("runtime", ("inspect",)),
     "inspect_response": ("runtime", ("inspect",)),
     **{
@@ -36,6 +37,8 @@ DEFINITIONS = {
             "completed",
             "failed",
             "cancelled",
+            "steering_applied",
+            "steering_failed",
             "update_ack",
         )
     },
@@ -88,7 +91,7 @@ def _too_deep(text):
     return False
 
 
-def _timestamp_key(value):
+def timestamp_key(value):
     """Order schema-validated UTC timestamps without losing nanoseconds."""
     seconds, _, fraction = value.removesuffix("Z").partition(".")
     return seconds, fraction.ljust(9, "0")
@@ -142,7 +145,7 @@ def validate_message(definition, payload, subject):
     ):
         errors.append("Execute identity must equal its command ID")
     if (
-        definition == "cancel"
+        definition in ("cancel", "steer")
         and payload["execution"]["command_id"] == payload["command_id"]
     ):
         errors.append("Control command needs a distinct command ID")
@@ -152,9 +155,9 @@ def validate_message(definition, payload, subject):
             for key in ("workspace_id", "attempt_id"):
                 if progress["artifact"].get(key) != payload["target"][key]:
                     errors.append(f"Artifact {key} differs from attempt binding")
-        if progress["kind"] == "usage" and _timestamp_key(
+        if progress["kind"] == "usage" and timestamp_key(
             progress["period_start"]
-        ) > _timestamp_key(progress["period_end"]):
+        ) > timestamp_key(progress["period_end"]):
             errors.append("Usage period ends before it starts")
     if (
         definition == "update_ack"
@@ -223,6 +226,7 @@ def validate_exchange(request_definition, request, reply, subject):
     reply_definition = {
         "execute": "command_ack",
         "cancel": "command_ack",
+        "steer": "command_ack",
         "inspect": "inspect_response",
         "update": "update_ack",
     }.get(request_definition)

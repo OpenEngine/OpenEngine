@@ -315,8 +315,8 @@ locator is opaque JSON.
 checks run before acceptance. Ready, failed and suspended workspaces can be
 destroyed; active attempts are rejected with `INVALID_STATE` by an application
 rule. Execution admission must maintain `active_attempt_ids` and refuse new
-attempts once state is `destroying`; execution and cancellation remain future
-work. A concurrent lifecycle operation returns retryable `UNAVAILABLE`.
+attempts once state is `destroying`; a cancelled attempt stays active until
+its termination is confirmed (see "Cancellation"). A concurrent lifecycle operation returns retryable `UNAVAILABLE`.
 
 Acceptance commits the immutable receipt, retention choices, pending operation
 and `destroying` state/version before any deletion. `AllocationProvider.destroy`
@@ -624,14 +624,27 @@ the whole update back and sends no reply, so the daemon retries it. A
 while the owned workspace is still provisioning. Admission already requires
 committed readiness for the current generation.
 
-| Update | Projection (through `Execution.transition`) |
+| Update | Projection (through `Execution.transition` or `Execution.progress`) |
 | -- | -- |
 | `attempt.started` | attempt running; execute succeeds; `task.started` |
+| `attempt.progress` `conversation` | next session history sequence (kept beside the session snapshot); `conversation.message` |
+| `attempt.progress` `usage` | delta added once to the attempt's `usage`; `usage.reported` with its period |
 | `attempt.completed` | attempt completed, session idle, attempt released; `task.completed` |
 | `attempt.failed` | attempt failed, session idle, attempt released; `task.failed`; execute fails only if never started |
+| `attempt.cancelled` | attempt cancelled, session idle, attempt released; `task.cancelled`; execute fails `INVALID_STATE` only if never started |
 
-Progress, cancellation and steering updates are rejected as `EVENT_CONFLICT`:
-the fake daemon advertises no progress kinds and sends none. `inspect` asks the
+Every terminal projection also settles each pending `workspaces.cancel`
+operation of the attempt with its `final_state`.
+
+Progress applies only to a started (running or cancelling) attempt and only for kinds the runtime
+registered in `runtime.ready` (the codex executor registers `conversation` and
+`usage`; `fake` none). A usage period that ends before it starts or overlaps
+the attempt's previous one, an unregistered kind (including `artifact`),
+progress after a terminal record, a cancelled update that does not name the
+winning cancel's internal command and cause, and steering are
+`EVENT_CONFLICT` and quarantine the runtime. Deduplication on the update's
+event ID means redelivered progress never repeats history or usage. There is no
+session-history query yet: the public events are the history. `inspect` asks the
 daemon for read-only snapshots and its journal high-water mark.
 
 Delivery, journal identity, sequencing and projection never read a locator,
@@ -653,3 +666,179 @@ during execution, VCP restart before delivery and during execution, daemon
 SIGKILL mid-task, execute replay, a denied public request and forged internal
 messages). Delivery is at least once; there is no exactly-once transport. An
 interrupted launch is never rerun.
+
+## Cancellation (#1120)
+
+`workspaces.{workspace_id}.cancel` is registered beside execute (the same
+opt-in `Execution(enabled=True)`; production startup registers neither yet).
+After the shared Server authorizes it, one transaction writes the receipt, a
+pending `workspaces.cancel` operation, the attempt's `cancelling` state (in the
+attempt and its session snapshot) and one immutable internal cancel command
+(`runtime_commands`, its own subject), validated before the first write. The
+command carries the attempt binding, the original execute identity and the
+cancel's public cause. No schema change is needed: the winning cancel's
+internal command ID, cause and coalesced operation IDs live in the attempt
+document.
+
+| Cancel of | Result |
+| -- | -- |
+| an unknown attempt, or one of another workspace | `NOT_FOUND` |
+| a starting/running attempt whose runtime binding is no longer owned | `INVALID_STATE` |
+| a starting or running attempt | pending operation, attempt `cancelling`, one internal cancel |
+| a cancelling attempt | another pending operation, coalesced onto the winning cancel; no new internal command |
+| a completed, failed or cancelled attempt | operation succeeds at once with that `final_state` |
+
+The attempt stays in `active_attempt_ids` while cancelling, so its session,
+the runtime's capacity and destroy's `INVALID_STATE` guard hold until the
+daemon's terminal update confirms termination: cancel acceptance alone never
+permits destroy. `attempt.started` for a cancelling attempt succeeds execute
+and publishes `task.started` but keeps it cancelling. `attempt.cancelled`
+publishes one `task.cancelled` whose `operation` is the execute and whose
+`cancelled_by`, causal path and reason are the winning cancel's; a
+`completed`/`failed` update that won the race keeps that outcome. Either way
+every pending cancel operation succeeds with the attempt's `final_state` in
+the same transaction. Cancel delivery uses the same dispatcher, retries and
+reply checks as execute; a cancel rejection is never read as evidence that
+nothing launched. Destroy-as-cancel, suspend/checkpoint cancellation, workflow
+or GE job cancellation and approvals are out of scope.
+
+`tests/test_cancellation.py` covers, in process, cancel before delivery
+(tombstone), while recorded, launching and running, duplicate and replayed
+cancels, lost cancel and update acknowledgements, completion winning the race,
+unconfirmed termination keeping destroy refused, and rejections; and over real
+NATS with the daemon subprocess, a daemon SIGKILL while cancelling and a
+cancel accepted before delivery across VCP and daemon restarts, each ending in
+exactly one `task.cancelled`, no surviving daemon child processes, and destroy
+accepted only afterwards. The daemon there runs the in-process fake executor.
+
+
+## Active fake steering and session history (#1121)
+
+The same opt-in `Execution(enabled=True)` registers `workspaces.{workspace_id}.steer`.
+It requires the session's single running attempt in the owned runtime generation
+and an advertised fake steering capability. Codex, idle/starting/cancelling/closed
+sessions and restore-dependent requests reject before acceptance. Receipt, operation
+and immutable runtime command commit together. Retries keep the original binding.
+
+Daemon steering outcomes project one operation, public event and history entry.
+Terminal task projection fails all unapplied pending steering in that transaction,
+including undelivered commands; it retires their delivery with `settled` without
+inventing a daemon acknowledgement. Task outcomes keep their original result.
+Late updates cannot reverse steering outcomes or append another history entry.
+
+`sessions.{session_id}.events.list` pages conversation and steering entries in
+ascending session sequence, with kind and attempt filters. Opaque versioned cursors
+persist in the service database, bound to the authenticated tenant, session and
+normalized filters. Cursors remain valid for at least 24 hours. Expired records are reclaimed
+when issuing cursors; legacy cursors without expiration remain valid.
+Pages use a 900 KiB encoded-entry budget. A single transport-sized entry above
+that budget is returned alone so pagination can advance past it. Entries exceeding
+1 MiB minus 4 KiB of envelope headroom return a small `INVALID_STATE` error
+(`history_entry_too_large`); entries are never silently skipped or truncated.
+Each page uses bounded index seeks in one database snapshot.
+The service-owned migration backfills conversation entries from retained outbox
+envelopes, including already published messages. Usage/tool-call production is unchanged.
+
+`tests/test_steering.py` covers receipt replay/conflict, rejection, rollback,
+completion/cancel races, undelivered settlement, late/duplicate updates, database
+reopen at acceptance/application/projection, no retargeting on continuation,
+mixed history/filter pagination and cursor isolation. Its NATS test uses the
+fake daemon subprocess and reuses history cursors after VCP restart. None of this
+establishes authenticated model execution; real steering and restoration remain
+outside this slice. Production startup keeps the existing execution opt-in boundary.
+
+## Internal runtime broker (#1122, part 1)
+
+`provisioning/broker.py` gives VCP its own nats-server for the internal
+workspace-runtime protocol, separate from the public `OE_NATS_URL` broker. It
+is opt-in: `OE_VCP_RUNTIME_BROKER_LISTEN=host:port` starts it from
+`OE_VCP_RUNTIME_BROKER_BINARY` (an operator path, or `nats-server` on `PATH`;
+the supervisor's pinned 2.15.1 build works), and guests dial
+`OE_VCP_RUNTIME_BROKER_GUEST_URL` (default `nats://{listen}`). VCP connects
+as `vcp`, registers the runtime update listener on that connection, and fails
+startup if the broker cannot start within 10 seconds. Runtime credentials
+are not yet issued by any provider: the smolvm guest bootstrap that issues
+them on `provision`/`ensure` and retires them after confirmed destruction is
+the second part of #1122.
+
+**Users and permissions.** `vcp` may publish `oe.internal.v1.runtime.runtimes.>`
+and subscribe to `oe.internal.v1.vcp.runtimes.*.updates` and its own
+`_INBOX.oe.vcp.{instance}.>`; its password is regenerated for every broker launch.
+Because `vcp` may publish to every runtime's subjects, it answers an update
+only when the reply subject is under the sender's own
+`_INBOX.oe.runtime.{runtime_id}.`; any other reply is dropped. Each runtime is
+a user named `runtime-{runtime_id}` (so none can be `vcp`) with exactly the contract's
+permission block (`packages/contracts/internal/workspace_runtime/v1/README.md`
+§Authentication): its own command subjects and `_INBOX.oe.runtime.{runtime_id}.>`,
+publish to its own updates subject, and one response within 10 seconds to
+each request it receives. No runtime has `_INBOX.>`, the VCP inbox, another
+runtime's subjects or any `oe.v1.*` subject. Runtime IDs must be a single
+subject token (`[A-Za-z0-9_-]{1,64}`).
+
+**Custody.** A runtime's password is 32 random bytes. The `runtime_credentials`
+row (runtime, generation, user, `active|revoking|retired`, issue and revocation
+times, a SHA-256 digest -- never the secret) is written before the secret,
+which lives only in `runtime-broker/credentials/{runtime_id}` (0600, in a 0700
+directory, written atomically and fsynced). The 0600 broker configuration holds
+only bcrypt hashes of it and of `vcp`'s password. Neither appears in argv, logs, runtime
+command wires, outbox events or locators. Credentials are stable across VCP
+and broker restarts; a missing or tampered secret is never granted.
+
+**Revocation.** `revoke` marks the row `revoking`, regenerates the
+configuration from `active` rows only, reloads the broker through its control
+pipe, then confirms that `/varz` `config_load_time` advanced, that no
+connection of the user remains after a 5-second cutoff (nats-server 2.15.1
+closes them on reload) and that a probe with the revoked secret is refused.
+Only then is the row `retired` and the secret deleted. Any failure leaves it
+`revoking` and raises a retryable error; a restart finishes it, and since no
+configuration ever includes a non-`active` row, a restart can never restore
+retired authority. Revocation proves only that the broker refuses the
+credential, never that compute stopped: callers must confirm termination
+before treating a runtime as replaceable.
+
+**Process ownership.** `python -I provisioning/broker_process.py` owns the
+server. It inherits the `broker.lock` flock and holds it until it has reaped
+the server; VCP holds the only write end of its stdin. EOF -- including after
+VCP is SIGKILLed -- terminates the server (SIGKILL after 3 seconds) and frees
+the port and lock; the next VCP waits for the lock and reuses the persisted
+endpoint (`endpoint.json`), refusing a changed one as endpoint drift. Each
+launch uses a random `server_name`; VCP accepts the broker only when its
+loopback monitor and the client port's INFO both report it, so a foreign
+listener is never adopted or signalled, and no PID is ever read from disk.
+That INFO is sent to any client, so it proves identity only because the
+broker listens on one specific address that no other process can also bind;
+the host must be an IP literal, and an unspecified address in any spelling
+(`0.0.0.0`, `::`, `::0`, `0:0:0:0:0:0:0:0`, `::ffff:0.0.0.0`) is refused, since
+BSD would let a more specific bind under it relay the INFO and collect
+credentials. IPv6 hosts are normalized and written `[::1]:port`. The check
+guards every connection, not only the first: nats-py gets VCP's password only
+while the endpoint is verified, any disconnect clears that until the live
+server (or its relaunch) is identified again, and a reconnect meanwhile is
+refused before CONNECT. A relaunch also rotates the password, so one captured
+from a dead launch is never accepted. INFO is public, so a listener could replay
+the exact advertised `server_name` and `server_id`; what proves the server
+before any secret is sent is TLS. VCP's connection, every reconnect, every
+runtime credential probe (issuance and revocation checks) and the identity
+check itself open TLS first (`tls_handshake_first`) and verify a self-signed
+P-256 certificate pinned to a key that only `runtime-broker/tls/` (0600,
+generated once for the endpoint) holds, before INFO and before CONNECT. A
+listener without that key cannot finish the handshake and receives no
+password. Verification failures of any kind are retried until the endpoint is
+identified again, and a database error during a relaunch is retried with the
+same backoff. Startup (lock, spawn, identity, authenticated
+connect) is bounded; a server that exits or cannot bind fails promptly. After
+startup, a broker that exits is relaunched on the same endpoint with backoff
+(0.1 to 5 seconds), pending revocations are then finished, and connections
+reconnect indefinitely; `/healthz` is 503 while VCP is disconnected from it. If the broker child itself is SIGKILLed, its server
+is orphaned until killed by the operator; the next start then fails on the
+occupied port rather than adopting it.
+
+**Trust limits.** VCP's own connections are pinned TLS, but guests still
+connect in plaintext (`allow_non_tls`; the server sends them INFO after a
+100 ms TLS grace), so `host` must be a trusted local transport for guests
+until TLS-first verification for runtimes (#1221/#1222) lands behind
+`BrokerEndpoint`. The host account running VCP can read every secret and is
+trusted. No host model credential is involved. Public callers (#1051), tool
+grants (#1075) and host backends (#1054/#1055; the worktree adapter still
+shares one credential file) are separate; #1202/#1204 and host backends must
+qualify their own boundaries.

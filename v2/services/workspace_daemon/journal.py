@@ -5,12 +5,22 @@ process and checked before any receipt lookup: a wrong runtime is
 `IDENTITY_MISMATCH`, a wrong generation `STALE_RUNTIME`, and neither touches
 the journal. Accepting execute journals its receipt and a `recorded` attempt
 in one transaction before replying; the reply means durable ownership, not
-that work started. Every update is encoded, validated and journaled with its
-sequence before it is sent. Inspect reads without reserving the writer.
+that work started. Accepting cancel journals its receipt and the attempt's
+cancel intent together: a `recorded` attempt (or, before execute arrived, a
+tombstone for its exact binding) is cancelled `never_started` at once, and a
+launching or running one becomes `cancelling`, keeping its session and
+capacity until the worker confirms termination. A matching execute arriving
+after a tombstone is acknowledged and never launched. The first cancel wins:
+every later terminal record of that attempt is `attempt.cancelled` with its
+cause, and an attempt that already ended keeps its outcome. Every update is encoded, validated and journaled with its
+sequence before it is sent. Progress waits while the unacknowledged outbox is
+full, so a fast producer is slowed rather than dropped; terminal updates never
+wait. Inspect reads without reserving the writer.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Mapping
@@ -21,13 +31,14 @@ from uuid import uuid4
 
 from openengine.contracts.runtime import digest, error, validate_wire_message
 
+from workspace_daemon import context as task_context
 from workspace_daemon.executor import ExecutorPort
 from workspace_daemon.initialization import RecoveryRefused, Refusal
 from workspace_daemon.store import TERMINAL, JournalStore
 
 log = logging.getLogger(__name__)
 
-INTERRUPTED = ("launching", "running")
+INTERRUPTED = ("launching", "running", "cancelling")
 
 
 def identity(prefix: str) -> str:
@@ -61,9 +72,10 @@ class UnsendableUpdate(ValueError):
 class Journal:
     def __init__(self, store: JournalStore, binding: dict[str, Any], root: Path,
                  executors: Mapping[str, ExecutorPort], *, max_concurrent_attempts: int = 1,
-                 established: bool = False) -> None:
+                 established: bool = False, max_pending_updates: int = 1000) -> None:
         self.store, self.binding, self.root = store, dict(binding), root
         self.executors, self.max_concurrent_attempts = executors, max_concurrent_attempts
+        self.max_pending_updates, self.backpressure_seconds = max_pending_updates, 0.05
         self.established = established
         self.boot_id = identity("boot_")
         self.updates = f"oe.internal.v1.vcp.runtimes.{binding['runtime_id']}.updates"
@@ -97,7 +109,7 @@ class Journal:
                     await self.finish(tx, await tx.attempt(item["attempt_id"]), "failed", {"error": {
                         "code": "PROVIDER_ERROR", "message": "Interrupted executor was fenced after daemon restart",
                         "retryable": False}, "reason": "executor_lost"}, "killed")
-                item["decision"] = "fenced_failed"
+                item["decision"] = "fenced_cancelled" if attempt["cancel"] else "fenced_failed"
             elif attempt["state"] == "recorded":
                 item["decision"] = "launch_once"
             else:
@@ -108,7 +120,9 @@ class Journal:
             if meta["blocked"]:
                 evidence.append({"journal_id": meta["journal_id"], "decision": "blocked", **meta["blocked"]})
             sequence = await self.append(tx, "runtime.ready", {
-                "executors": sorted(self.executors), "max_concurrent_attempts": self.max_concurrent_attempts,
+                "executors": sorted(self.executors),
+                "steering_executors": [name for name, executor in sorted(self.executors.items())
+                                       if name == "fake" and getattr(executor, "steering", False)], "max_concurrent_attempts": self.max_concurrent_attempts,
                 "progress_kinds": sorted({kind for e in self.executors.values() for kind in e.progress_kinds}),
                 "journal_id": meta["journal_id"]})
             meta = await tx.runtime()
@@ -119,7 +133,7 @@ class Journal:
         return evidence
 
     async def append(self, tx, kind: str, payload: dict[str, Any], attempt: dict[str, Any] | None = None,
-                     termination: str | None = None) -> int:
+                     termination: str | None = None, cancel: dict[str, Any] | None = None) -> int:
         meta = await tx.runtime()
         meta["sequence"] += 1
         message = {"event_id": identity("rte_"), "kind": kind, "target": attempt["command"]["target"] if attempt else self.binding,
@@ -130,6 +144,8 @@ class Journal:
             message.update(execution=attempt["command"]["execution"], attempt_sequence=attempt["attempt_sequence"])
         if termination is not None:
             message["termination"] = termination
+        if cancel is not None:
+            message.update(cancel_command_id=cancel["command_id"], cause=cancel["cause"])
         wire = encode(message)
         if errors := validate_wire_message("update", wire, self.updates):
             raise UnsendableUpdate(errors)
@@ -141,9 +157,36 @@ class Journal:
     async def finish(self, tx, attempt: dict[str, Any], state: str, payload: dict[str, Any], termination: str) -> None:
         if attempt["state"] in TERMINAL:
             return
+        if cancel := attempt["cancel"]:
+            # Cancellation was journaled first, so it decides the outcome.
+            state, payload = "cancelled", cancel["payload"]
+        if state == "completed" and attempt["command"]["payload"]["agent"]["runner"] == "fake":
+            messages = (attempt.get("executor_handle") or {}).get("steering", [])
+            if messages:
+                payload = {**payload, "result": {**payload["result"], "summary": payload["result"]["summary"]
+                           + "\n" + "\n".join(item["message"] for item in messages)}}
+                summary = payload["result"]["summary"]
+                if len(summary) > 65536:
+                    suffix = "\n[steering sha256:" + digest(messages) + "]"
+                    payload["result"]["summary"] = summary[:65536 - len(suffix)] + suffix
         attempt["state"] = state
-        await self.append(tx, "attempt." + state, payload, attempt, termination)
+        await self.append(tx, "attempt." + state, payload, attempt, termination, cancel)
         await tx.save_attempt(attempt)  # leaving the active states frees its session and capacity
+
+    async def progress(self, attempt_id: str, payload: dict[str, Any]) -> None:
+        """Journal one progress record for a running attempt, waiting while the outbox is full."""
+        while True:
+            async with self.store.read() as tx:
+                if await tx.pending_updates() < self.max_pending_updates:
+                    break
+            await asyncio.sleep(self.backpressure_seconds)
+        async with self.store.transaction() as tx:
+            attempt = await tx.attempt(attempt_id)
+            executor = self.executors[attempt["command"]["payload"]["agent"]["runner"]]
+            if attempt["state"] not in ("running", "cancelling") or payload["kind"] not in executor.progress_kinds:
+                raise ValueError(payload["kind"])  # only for a running attempt, of an advertised kind
+            await self.append(tx, "attempt.progress", payload, attempt)
+            await tx.save_attempt(attempt)
 
     async def execute(self, subject: str, command: dict[str, Any]) -> dict[str, Any]:
         response = {"command_id": command["command_id"], "target": command["target"], "status": "accepted"}
@@ -155,6 +198,12 @@ class Journal:
                 if previous["digest"] == fingerprint:
                     return previous["response"]
                 return {**response, "status": "rejected", "error": error("COMMAND_ID_CONFLICT", "command identity changed")}
+            tombstone = await tx.attempt(command["target"]["attempt_id"])
+            if (tombstone and tombstone["command"]["kind"] == "cancel" and tombstone["command"]["target"] == command["target"]
+                    and tombstone["command"]["execution"] == command["execution"]):
+                # Cancelled before it arrived: acknowledged, but never launched or opened.
+                await tx.remember(command, fingerprint, response)
+                return response
             meta = await tx.runtime()
             if not meta["ready"] or meta["blocked"]:
                 return {**response, "status": "rejected", "error": error("UNAVAILABLE", "runtime readiness is not committed")}
@@ -170,9 +219,13 @@ class Journal:
                 detail = error("SESSION_BUSY", "session has an active attempt")
             elif (payload["session_mode"] == "continue") != (session is not None) or (session and session["agent"] != payload["agent"]):
                 detail = error("INVALID_ARGUMENT", "session mapping does not match this execution")
+            elif session and executor.conversational and not (
+                    session["executor_session_id"] and session["executor_resumable"]):
+                # Never replace a conversation that cannot be loaded with a new one.
+                detail = error("INVALID_ARGUMENT", "the session's executor conversation cannot be resumed")
             else:
                 try:
-                    self._context(payload["context"])
+                    task_context.resolve(self.root, payload["context"])
                     executor.validate(payload)
                 except (OSError, ValueError, RuntimeError):
                     detail = error("INVALID_ARGUMENT", "invalid or unavailable executor context")
@@ -187,16 +240,83 @@ class Journal:
                 if session is None:
                     await tx.open_session(target["session_id"], command["command_id"])
                 await tx.save_attempt({"command": command, "state": "recorded", "launch_count": 0,
-                                       "attempt_sequence": 0, "last_event_sequence": 0})
+                                       "attempt_sequence": 0, "last_event_sequence": 0, "cancel": None})
         return response
 
-    def _context(self, context: dict[str, Any]) -> None:
-        if context["references"]:
-            raise ValueError()  # artifact references need an authorized artifact port
-        for value, directory in [(context["working_directory"], True), *((v, False) for v in context["instruction_files"])]:
-            path = (self.root / value).resolve(strict=True)
-            if not path.is_relative_to(self.root) or (not path.is_dir() if directory else not path.is_file()):
-                raise ValueError()  # outside the root, or the wrong type
+    async def cancel(self, subject: str, command: dict[str, Any]) -> dict[str, Any]:
+        """Journal one cancel intent; never waits for the executor, and never refused for readiness."""
+        response = {"command_id": command["command_id"], "target": command["target"], "status": "accepted"}
+        if detail := mismatch(self.binding, subject, command, "cancel"):
+            return {**response, "status": "rejected", "error": detail}
+        fingerprint = digest([subject, command])
+        target = command["target"]
+        async with self.store.transaction() as tx:
+            if previous := await tx.receipt(command["command_id"]):
+                if previous["digest"] == fingerprint:
+                    return previous["response"]
+                return {**response, "status": "rejected", "error": error("COMMAND_ID_CONFLICT", "command identity changed")}
+            execute = await tx.receipt(command["execution"]["command_id"])
+            attempt = await tx.attempt(target["attempt_id"])
+            if ((execute and execute["response"]["target"] != target) or (attempt and (
+                    attempt["command"]["target"] != target or attempt["command"]["execution"] != command["execution"]))):
+                response.update(status="rejected", error=error("ATTEMPT_CONFLICT", "cancel names another execution"))
+            await tx.remember(command, fingerprint, response)
+            if response["status"] == "rejected" or (execute and execute["response"]["status"] == "rejected"):
+                # A rejected execute launched nothing; VCP already settles it from that rejection.
+                return response
+            if attempt is None:
+                # Cancel before execute: a tombstone for this exact binding, cancelled at once.
+                attempt = {"command": command, "state": "recorded", "launch_count": 0, "attempt_sequence": 0,
+                           "last_event_sequence": 0, "cancel": None}
+            if attempt["state"] in TERMINAL or attempt["cancel"]:
+                return response  # it keeps its outcome, or the first cancel already decides it
+            attempt["cancel"] = command
+            await tx.save_attempt(attempt)  # its updates reference the attempt row
+            if attempt["state"] == "recorded":
+                await self.finish(tx, attempt, "cancelled", command["payload"], "never_started")
+            else:
+                attempt["state"] = "cancelling"  # ownership is kept until the worker confirms termination
+                await tx.save_attempt(attempt)
+        return response
+
+    async def steer(self, subject: str, command: dict[str, Any]) -> dict[str, Any]:
+        """Apply only to the exact running fake attempt, in the receipt/update transaction."""
+        response = {"command_id": command["command_id"], "target": command["target"], "status": "accepted"}
+        if detail := mismatch(self.binding, subject, command, "steer"):
+            return {**response, "status": "rejected", "error": detail}
+        fingerprint = digest([subject, command])
+        async with self.store.transaction() as tx:
+            if previous := await tx.receipt(command["command_id"]):
+                if previous["digest"] == fingerprint:
+                    return previous["response"]
+                return {**response, "status": "rejected", "error": error("COMMAND_ID_CONFLICT", "command identity changed")}
+            attempt = await tx.attempt(command["target"]["attempt_id"])
+            detail = None
+            if (not attempt or attempt["command"]["target"] != command["target"]
+                    or attempt["command"]["execution"] != command["execution"]):
+                detail = error("ATTEMPT_CONFLICT", "steering names another execution")
+            else:
+                runner = attempt["command"]["payload"]["agent"]["runner"]
+                executor = self.executors.get(runner)
+                if runner != "fake" or not getattr(executor, "steering", False):
+                    detail = error("UNSUPPORTED_CAPABILITY", "executor does not support steering")
+            if detail:
+                response.update(status="rejected", error=detail)
+            await tx.remember(command, fingerprint, response)
+            if detail:
+                return response
+            payload = {"command_id": command["command_id"], "cause": command["cause"]}
+            if attempt["state"] != "running":
+                payload["error"] = {"code": "INVALID_STATE", "message": "attempt is no longer running", "retryable": False,
+                                    "details": {"resource_type": "attempt", "resource_id": command["target"]["attempt_id"],
+                                                "current_state": attempt["state"], "allowed_states": ["running"]}}
+                outcome = "failed"
+            else:
+                executor.apply_steering(attempt["executor_handle"], command)
+                outcome = "applied"
+            await self.append(tx, "steering." + outcome, payload, attempt)
+            await tx.save_attempt(attempt)
+        return response
 
     async def inspect(self, subject: str, request: dict[str, Any]) -> dict[str, Any]:
         response = {"request_id": request["request_id"], "target": request["target"], "status": "ok"}

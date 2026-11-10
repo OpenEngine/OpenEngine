@@ -15,6 +15,8 @@ DOCUMENT_COMMENTS = {
     "sessions": "Agent conversation snapshots, separate from workspace lifecycle.",
     "attempts": "Task attempts and their execute operation identity.",
     "attempt_bindings": "Immutable accepted execution identity and generation binding.",
+    "history_cursors": "Durable opaque history cursors bound to tenant, session and normalized filters.",
+    "steering_commands": "Immutable steering bindings and their terminal projection status.",
     "runtime_status": "Execution readiness, capabilities, journal identity and update high-water mark of an owned runtime.",
     "command_receipts": "Immutable command identity and original response for idempotent replay.",
 }
@@ -77,7 +79,7 @@ runtime_commands = sa.Table(
     sa.Column("wire", sa.LargeBinary(), nullable=False),
     sa.Column("status", sa.String(16), nullable=False, server_default="pending"),
     sa.Column("acknowledgement", sa.LargeBinary(), nullable=True),
-    sa.CheckConstraint("status IN ('pending', 'acknowledged', 'rejected', 'blocked')", name="ck_runtime_commands_status"),
+    sa.CheckConstraint("status IN ('pending', 'acknowledged', 'rejected', 'blocked', 'settled')", name="ck_runtime_commands_status"),
     sa.ForeignKeyConstraint(["attempt_id"], ["attempts.key"], name="fk_runtime_commands_attempt_id_attempts"),
     # Entries are (status, rowid): pending commands are read oldest first without a sort.
     sa.Index("ix_runtime_commands_pending", "status", sqlite_where=sa.text("status = 'pending'")),
@@ -100,3 +102,39 @@ for name, fields in (("ix_sessions_workspace_page", ["workspace_id", "created_at
                      ("ix_sessions_workspace_state_page", ["workspace_id", "state", "created_at"])):
     sa.Index(name, *[sa.literal_column(f"json_extract(body, '$.snapshot.{field}')") for field in fields],
              sa.literal_column("key"), _table=documents["sessions"])
+
+# History is append-only and paged by indexed session-local sequence. Each filter
+# combination has its own ordered index, so sparse filters never scan a session.
+session_history = sa.Table(
+    "session_history", metadata,
+    sa.Column("session_id", sa.String(128), sa.ForeignKey("sessions.key"), primary_key=True),
+    sa.Column("sequence", sa.Integer(), primary_key=True),
+    sa.Column("kind", sa.String(16), nullable=False),
+    sa.Column("attempt_id", sa.String(128), sa.ForeignKey("attempts.key"), nullable=False),
+    sa.Column("entry", sa.JSON(), nullable=False),
+    sa.Index("ix_session_history_kind", "session_id", "kind", "sequence"),
+    sa.Index("ix_session_history_attempt", "session_id", "attempt_id", "sequence"),
+    sa.Index("ix_session_history_attempt_kind", "session_id", "attempt_id", "kind", "sequence"),
+    comment="Ordered conversation and steering outcomes in one session-local sequence.",
+)
+sa.Index("ix_steering_commands_pending",
+         sa.literal_column("json_extract(body, '$.target.attempt_id')"), sa.literal_column("key"),
+         sqlite_where=sa.text("json_extract(body, '$.status') = 'pending'"), _table=documents["steering_commands"])
+
+# Ownership of each runtime's internal broker credential. The row is written
+# before its secret exists and outlives it: the broker configuration is
+# generated from `active` rows only, so a `retired` runtime is never granted
+# again. Only a digest of the secret is stored here.
+runtime_credentials = sa.Table(
+    "runtime_credentials", metadata,
+    sa.Column("runtime_id", sa.String(128), primary_key=True),
+    sa.Column("generation", sa.Integer(), nullable=False),
+    sa.Column("username", sa.String(128), nullable=False),
+    sa.Column("status", sa.String(16), nullable=False),
+    sa.Column("issued_at", sa.DateTime(timezone=True), nullable=False),
+    sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+    sa.Column("secret_digest", sa.String(64), nullable=True),
+    sa.CheckConstraint("status IN ('active', 'revoking', 'retired')", name="ck_runtime_credentials_status"),
+    sa.UniqueConstraint("username", name="uq_runtime_credentials_username"),
+    comment="Internal broker credential ownership and revocation state per runtime; never the secret.",
+)

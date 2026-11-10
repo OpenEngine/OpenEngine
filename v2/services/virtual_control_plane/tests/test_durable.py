@@ -269,7 +269,7 @@ def test_upgrade_preserves_legacy_rows_without_adopting_them(tmp_path: Path) -> 
     try:
         assert set(inspect(engine).get_table_names()) == {
             "alembic_version", "workspaces", "workspace_runtimes", "operations", "command_receipts", "outbox",
-            "sessions", "attempts", "attempt_bindings", "runtime_status", "runtime_commands", "runtime_updates",
+            "sessions", "attempts", "attempt_bindings", "runtime_status", "runtime_commands", "runtime_updates", "steering_commands", "history_cursors", "session_history", "runtime_credentials",
         }
     finally:
         engine.dispose()

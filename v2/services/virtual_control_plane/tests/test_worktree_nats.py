@@ -15,14 +15,12 @@ import os
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 from pathlib import Path
 
 import pytest
 from openengine.messaging import Client
 from openengine.persistence import DatabaseConfig
-from openengine.supervisor.processes.nats import install_nats_server
 
 from virtual_control_plane.persistence import PERSISTENCE
 from virtual_control_plane.persistence.durable import DurableStore
@@ -34,11 +32,6 @@ pytestmark = [pytest.mark.integration,
 
 CONTROL = "oe.v1.vcp.control.workspaces"
 DEADLINE_SECONDS = 60.0
-
-
-@pytest.fixture(scope="module")
-def binary():
-    return install_nats_server(Path(tempfile.gettempdir()) / "oe-test-nats")
 
 
 def git(path: Path, *arguments: str) -> str:

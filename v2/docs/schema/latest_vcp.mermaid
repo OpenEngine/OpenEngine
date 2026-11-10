@@ -1,5 +1,5 @@
 ---
-title: vcp at cfed9cf520fd (green added, red removed, amber changed)
+title: vcp at 9d5590f3f1a5 (green added, red removed, amber changed)
 config:
   theme: neutral
 ---
@@ -23,6 +23,10 @@ erDiagram
         VARCHAR(128) key PK "not null"
         JSON body "not null"
     }
+    history_cursors["history_cursors<br/>Durable opaque history cursors bound to tenant, session and normalized filters."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
     operations["operations<br/>Accepted commands' progress and terminal state. (CHANGED)"] {
         VARCHAR(128) key PK "not null"
         JSON body "not null"
@@ -41,25 +45,47 @@ erDiagram
         VARCHAR(128) command_id PK "not null"
         TEXT subject "not null"
         BLOB wire "not null"
-        VARCHAR(128) attempt_id FK "ADDED; not null"
-        VARCHAR(16) status "ADDED; not null; default: 'pending'"
-        BLOB acknowledgement "ADDED; nullable"
+        VARCHAR(128) attempt_id FK "not null"
+        VARCHAR(16) status "not null; default: 'pending'"
+        BLOB acknowledgement "nullable"
     }
     class runtime_commands changed
     attempts ||--o{ runtime_commands : "attempt_id"
+    runtime_credentials["runtime_credentials<br/>Internal broker credential ownership and revocation state per runtime; never the secret. (ADDED)"] {
+        VARCHAR(128) runtime_id PK "ADDED; not null"
+        INTEGER generation "ADDED; not null"
+        VARCHAR(128) username UK "ADDED; not null"
+        VARCHAR(16) status "ADDED; not null"
+        DATETIME issued_at "ADDED; not null"
+        DATETIME revoked_at "ADDED; nullable"
+        VARCHAR(64) secret_digest "ADDED; nullable"
+    }
+    class runtime_credentials added
     runtime_status["runtime_status<br/>Execution readiness, capabilities, journal identity and update high-water mark of an owned runtime."] {
         VARCHAR(128) key PK "not null"
         JSON body "not null"
     }
-    runtime_updates["runtime_updates<br/>Committed internal runtime updates, for duplicate and conflict detection. (ADDED)"] {
-        VARCHAR(128) runtime_id PK,FK,UK "ADDED; not null"
-        VARCHAR(128) event_id PK "ADDED; not null"
-        INTEGER sequence UK "ADDED; not null"
-        VARCHAR(64) digest "ADDED; not null"
+    runtime_updates["runtime_updates<br/>Committed internal runtime updates, for duplicate and conflict detection."] {
+        VARCHAR(128) runtime_id PK,FK,UK "not null"
+        VARCHAR(128) event_id PK "not null"
+        INTEGER sequence UK "not null"
+        VARCHAR(64) digest "not null"
     }
-    class runtime_updates added
     runtime_status ||--o{ runtime_updates : "runtime_id"
+    session_history["session_history<br/>Ordered conversation and steering outcomes in one session-local sequence."] {
+        VARCHAR(128) session_id PK,FK "not null"
+        INTEGER sequence PK "not null"
+        VARCHAR(16) kind "not null"
+        VARCHAR(128) attempt_id FK "not null"
+        JSON entry "not null"
+    }
+    sessions ||--o{ session_history : "session_id"
+    attempts ||--o{ session_history : "attempt_id"
     sessions["sessions<br/>Agent conversation snapshots, separate from workspace lifecycle."] {
+        VARCHAR(128) key PK "not null"
+        JSON body "not null"
+    }
+    steering_commands["steering_commands<br/>Immutable steering bindings and their terminal projection status."] {
         VARCHAR(128) key PK "not null"
         JSON body "not null"
     }

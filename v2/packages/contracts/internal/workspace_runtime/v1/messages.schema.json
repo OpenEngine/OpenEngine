@@ -110,7 +110,9 @@
             "UNSUPPORTED_EXECUTOR",
             "UNAVAILABLE",
             "EVENT_GAP",
-            "EVENT_CONFLICT"
+            "EVENT_CONFLICT",
+            "UNSUPPORTED_CAPABILITY",
+            "INVALID_STATE"
           ]
         },
         "message": {
@@ -586,6 +588,14 @@
         },
         "journal_id": {
           "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "steering_executors": {
+          "type": "array",
+          "items": {
+            "$ref": "../../../common/v1/types.schema.json#/$defs/slug"
+          },
+          "maxItems": 100,
+          "uniqueItems": true
         }
       }
     },
@@ -1031,6 +1041,12 @@
         },
         {
           "$ref": "#/$defs/cancelled"
+        },
+        {
+          "$ref": "#/$defs/steering_applied"
+        },
+        {
+          "$ref": "#/$defs/steering_failed"
         }
       ]
     },
@@ -1129,6 +1145,173 @@
           }
         }
       ]
+    },
+    "steer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "command_id",
+        "kind",
+        "target",
+        "execution",
+        "cause",
+        "payload"
+      ],
+      "properties": {
+        "command_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "kind": {
+          "const": "steer"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "cause": {
+          "$ref": "#/$defs/cause"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "message"
+          ],
+          "properties": {
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536
+            }
+          }
+        }
+      }
+    },
+    "steering_applied": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "kind",
+        "target",
+        "boot_id",
+        "sequence",
+        "occurred_at",
+        "execution",
+        "payload",
+        "attempt_sequence"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "kind": {
+          "const": "steering.applied"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "boot_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occurred_at": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command_id",
+            "cause"
+          ],
+          "properties": {
+            "command_id": {
+              "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+            },
+            "cause": {
+              "$ref": "#/$defs/cause"
+            }
+          }
+        },
+        "attempt_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Contiguous sequence within this attempt; starts at 1 and survives restart."
+        }
+      }
+    },
+    "steering_failed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "kind",
+        "target",
+        "boot_id",
+        "sequence",
+        "occurred_at",
+        "execution",
+        "payload",
+        "attempt_sequence"
+      ],
+      "properties": {
+        "event_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "kind": {
+          "const": "steering.failed"
+        },
+        "target": {
+          "$ref": "#/$defs/attempt_binding"
+        },
+        "boot_id": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "occurred_at": {
+          "$ref": "../../../common/v1/types.schema.json#/$defs/utc_timestamp"
+        },
+        "execution": {
+          "$ref": "#/$defs/execution"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "command_id",
+            "cause",
+            "error"
+          ],
+          "properties": {
+            "command_id": {
+              "$ref": "../../../common/v1/types.schema.json#/$defs/token"
+            },
+            "cause": {
+              "$ref": "#/$defs/cause"
+            },
+            "error": {
+              "$ref": "../../../common/v1/error.schema.json"
+            }
+          }
+        },
+        "attempt_sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Contiguous sequence within this attempt; starts at 1 and survives restart."
+        }
+      }
     }
   }
 }

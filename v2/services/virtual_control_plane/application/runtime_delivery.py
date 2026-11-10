@@ -34,7 +34,8 @@ log = logging.getLogger(__name__)
 BINDING = ("workspace_id", "runtime_id", "runtime_generation")
 # Durable execute rejections establishing that the daemon recorded and launched nothing.
 NOT_LAUNCHED = frozenset({"INVALID_ARGUMENT", "UNSUPPORTED_EXECUTOR", "SESSION_BUSY"})
-STATES = {"attempt.started": "running", "attempt.completed": "completed", "attempt.failed": "failed"}
+STATES = {"attempt.started": "running", "attempt.completed": "completed", "attempt.failed": "failed",
+          "attempt.cancelled": "cancelled"}
 
 
 class Rejected(Exception):
@@ -113,17 +114,18 @@ class RuntimeUpdates:
             payload = message["payload"]
             if status.get("journal_id") not in (None, payload["journal_id"]):
                 raise Rejected("IDENTITY_MISMATCH", "runtime journal was replaced", quarantine=True)
+            status["steering_executors"] = payload.get("steering_executors", [])
             status.update(workspace_id=target["workspace_id"], generation=target["runtime_generation"], ready=True,
                           **{key: payload[key] for key in ("executors", "max_concurrent_attempts", "progress_kinds", "journal_id")})
         elif not status.get("journal_id"):
             raise Rejected("IDENTITY_MISMATCH", "runtime has not registered its journal")
         else:
-            await self._project(tx, message)
+            await self._project(tx, message, status.get("progress_kinds", []))
         status.update(sequence=message["sequence"], boot_id=message["boot_id"])
         await tx.put("runtime_status", target["runtime_id"], status)
         await tx.record_runtime_update(target["runtime_id"], message["event_id"], message["sequence"], digest(message))
 
-    async def _project(self, tx, message: dict[str, Any]) -> None:
+    async def _project(self, tx, message: dict[str, Any], progress_kinds: list[str]) -> None:
         target = message["target"]
         attempt_id = target["attempt_id"]
         binding = await tx.get("attempt_bindings", attempt_id)
@@ -134,12 +136,25 @@ class RuntimeUpdates:
         sequence = record.get("attempt_sequence", 0) + 1
         if message["attempt_sequence"] != sequence:
             raise Rejected("EVENT_CONFLICT", "attempt sequence is not contiguous", quarantine=True)
-        state = STATES.get(message["kind"])
-        if state is None:
-            raise Rejected("EVENT_CONFLICT", "update kind is not supported by this runtime milestone", quarantine=True)
-        payload = message["payload"]
+        state, payload = STATES.get(message["kind"]), message["payload"]
+        progress = message["kind"] == "attempt.progress" and payload["kind"] in progress_kinds
+        steering = message["kind"] in ("steering.applied", "steering.failed")
+        if state is None and not progress and not steering:
+            raise Rejected("EVENT_CONFLICT", "update kind was not registered by this runtime", quarantine=True)
         try:
-            await self.execution.transition(tx, attempt_id, state, error=payload.get("error"), result=payload.get("result"))
+            if steering:
+                if not await self.execution.steering.project(
+                        tx, payload["command_id"], message["kind"].split(".")[1], payload.get("error"),
+                        target=target, cause=payload["cause"]):
+                    raise Rejected("IDENTITY_MISMATCH", "unknown steering command or cause")
+            elif progress:
+                await self.execution.progress(tx, attempt_id, payload)
+            else:
+                # A cancelled update must name the winning cancel VCP accepted; transition checks it.
+                cancel = message.get("cancel_command_id") and {
+                    "command_id": message["cancel_command_id"], "cause": message["cause"], **payload}
+                await self.execution.transition(tx, attempt_id, state, error=payload.get("error"),
+                                                result=payload.get("result"), cancel=cancel)
         except InvalidTransition:
             raise Rejected("EVENT_CONFLICT", "invalid attempt transition", quarantine=True) from None
         record = await tx.get("attempts", attempt_id)
@@ -210,13 +225,16 @@ class RuntimeCommands:
             return False
         status = "acknowledged" if ack["status"] == "accepted" else "blocked"
         async with self.store.transaction() as tx:
-            if status == "blocked" and ack["error"]["code"] in NOT_LAUNCHED:
+            if status == "blocked" and request["kind"] == "execute" and ack["error"]["code"] in NOT_LAUNCHED:
                 try:
                     await self.execution.transition(tx, request["target"]["attempt_id"], "failed", error={
                         "code": "PROVIDER_ERROR", "message": ack["error"]["message"], "retryable": False})
                     status = "rejected"
                 except InvalidTransition:
                     pass
+            if status == "blocked" and request["kind"] == "steer":
+                await self.execution.steering.project(tx, command.command_id, "failed")
+                status = "rejected"
             await tx.settle_runtime_command(command.command_id, status, reply)
         # Identity, generation and conflict rejections are not evidence that no
         # executor exists: the attempt stays active until reconciled.

@@ -7,14 +7,17 @@ The same process serves a daemon beside a Git worktree or inside a VM: it
 needs a workspace root, a separate private journal directory, its immutable
 binding and a broker. Start-up takes the journal's exclusive lock, checks or
 records the binding, migrates and recovers the journal, seals the binding and
-only then subscribes to `oe.internal.v1.runtime.runtimes.{runtime_id}.execute`
-and `.inspect`. Command reception, inspect, the executor worker and the update
+only then subscribes to `oe.internal.v1.runtime.runtimes.{runtime_id}.execute`,
+`.cancel`, `.steer` and `.inspect`. Command reception, inspect, the executor worker and the update
 outbox run independently. A refused recovery exits 2 with its evidence logged.
 
 Broker credentials are provisioned out of band (`--credentials`). Without
 them `--local-test-account` must be explicit: a shared unrestricted account is
-a test fixture, never production authentication. Only the fake executor is
-available; it runs no agent or model.
+a test fixture, never production authentication. The fake executor runs no
+agent or model. The real `codex` executor is opt-in (`--codex-acp`) and needs
+Linux cgroup-v2 supervision as root with an unprivileged agent account; if that
+cannot be established the daemon exits 1 before recovery, never falling back to
+unsupervised execution.
 """
 
 from __future__ import annotations
@@ -38,10 +41,12 @@ from openengine.messaging import Client
 from openengine.persistence.migrations import current_revision
 
 from workspace_daemon import store as journal_store
-from workspace_daemon.executor import ExecutionWorker, FakeExecutor
+from workspace_daemon.codex import CodexExecutor
+from workspace_daemon.executor import ExecutionWorker, ExecutorPort, FakeExecutor
 from workspace_daemon.initialization import LOCK_FILE, Initialization, RecoveryRefused, Refusal, locations
 from workspace_daemon.journal import Journal, encode
 from workspace_daemon.outbox import UpdateOutbox
+from workspace_daemon.supervision import CgroupSupervisor, SupervisionUnavailable, Unsupervised
 
 EXIT_OK, EXIT_FAILED, EXIT_REFUSED = 0, 1, 2
 REQUEST_TIMEOUT_SECONDS = 5.0
@@ -75,10 +80,36 @@ def parser() -> argparse.ArgumentParser:
     parser.add_argument("--credentials", type=Path, help="provisioned runtime-scoped NATS credentials")
     parser.add_argument("--local-test-account", action="store_true")
     parser.add_argument("--fake-effects", type=Path, help="record each fake launch here (test evidence)")
+    codex = parser.add_argument_group("codex executor (opt-in; Linux, root, cgroup v2)")
+    codex.add_argument("--codex-acp", type=Path, help="absolute path of the provisioned Codex ACP adapter")
+    codex.add_argument("--cgroup-root", type=Path, help="root-owned delegated cgroup-v2 directory for launches")
+    codex.add_argument("--agent-uid", type=int, help="unprivileged account the agent runs as")
+    codex.add_argument("--agent-gid", type=int)
+    codex.add_argument("--agent-home", type=Path, help="the agent account's HOME, holding its provisioned authentication")
+    codex.add_argument("--prompt-timeout-seconds", type=float, default=3600.0)
     return parser
 
 
-async def serve(args, journal_directory: Path, root: Path, initialization: Initialization) -> int:
+def executors(args, journal_directory: Path, root: Path) -> dict[str, ExecutorPort]:
+    """Configured executors; raises SupervisionUnavailable rather than run a real agent unconfined."""
+    configured: dict[str, ExecutorPort] = {"fake": FakeExecutor(args.fake_effects)}
+    if args.codex_acp is not None:
+        if (None in (args.cgroup_root, args.agent_uid, args.agent_gid, args.agent_home)
+                or not args.codex_acp.is_absolute() or args.prompt_timeout_seconds <= 0):
+            raise SupervisionUnavailable(Unsupervised.CONFIGURATION)
+        try:
+            adapter = args.codex_acp.resolve(strict=True)
+        except OSError as error:
+            raise SupervisionUnavailable(Unsupervised.CONFIGURATION, str(args.codex_acp)) from error
+        # A workload able to replace the adapter, or a directory above it, would run in every later task.
+        supervisor = CgroupSupervisor(args.cgroup_root, uid=args.agent_uid, gid=args.agent_gid, home=args.agent_home,
+                                      protected=(journal_directory, root, adapter, *adapter.parents))
+        configured["codex"] = CodexExecutor(args.codex_acp, supervisor, prompt_timeout=args.prompt_timeout_seconds)
+    return configured
+
+
+async def serve(args, journal_directory: Path, root: Path, initialization: Initialization,
+                configured: dict[str, ExecutorPort]) -> int:
     binding = {"workspace_id": args.workspace_id, "runtime_id": args.runtime_id, "runtime_generation": args.generation}
     stopping = asyncio.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
@@ -87,7 +118,7 @@ async def serve(args, journal_directory: Path, root: Path, initialization: Initi
     connection = worker = outbox = None
     subscriptions = []
     try:
-        journal = Journal(store, binding, root, {"fake": FakeExecutor(args.fake_effects)},
+        journal = Journal(store, binding, root, configured,
                           max_concurrent_attempts=args.max_concurrent_attempts, established=initialization.established)
         await journal.recover()
         initialization.finish()
@@ -105,15 +136,16 @@ async def serve(args, journal_directory: Path, root: Path, initialization: Initi
                 log.warning("discarded invalid runtime %s", action, extra={"daemon.errors": errors[:3]})
                 return
             body = json.loads(message.data)
+            handler = {"execute": journal.execute, "cancel": journal.cancel, "steer": journal.steer, "inspect": journal.inspect}[action]
             try:
-                response = await (journal.execute if action == "execute" else journal.inspect)(message.subject, body)
+                response = await handler(message.subject, body)
             except Exception:
                 log.exception("runtime %s not acknowledged; the sender retries", action)
                 return
             await message.respond(encode(response))
 
-        # Separate subscriptions: inspect never queues behind command handling.
-        for action in ("execute", "inspect"):
+        # Separate subscriptions: inspect and cancel never queue behind execute handling.
+        for action in ("execute", "cancel", "steer", "inspect"):
             subject = f"oe.internal.v1.runtime.runtimes.{args.runtime_id}.{action}"
             subscriptions.append(await connection.subscribe(subject, cb=receive))
         await connection.flush()
@@ -155,6 +187,11 @@ def _migrate(initialization: Initialization, database) -> None:
     journal_store.upgrade(database)
 
 
+def _unsupervised(unavailable: SupervisionUnavailable) -> int:
+    log.error("executor configuration refused: %s", unavailable)
+    return EXIT_FAILED
+
+
 def _refused(refused: RecoveryRefused) -> int:
     log.error("recovery refused: %s %s", refused.reason, json.dumps(refused.evidence, sort_keys=True))
     return EXIT_REFUSED
@@ -173,12 +210,15 @@ def main(argv: list[str] | None = None) -> int:
     lock = None
     try:
         journal_directory, root = locations(args.journal_directory, args.workspace_root)
+        configured = executors(args, journal_directory, root)
         lock = _own(journal_directory)
         binding = {"workspace_id": args.workspace_id, "runtime_id": args.runtime_id, "runtime_generation": args.generation}
         database = journal_store.database(journal_directory)
         initialization = Initialization(journal_directory, binding, database.path, initialize=args.initialize)
         _migrate(initialization, database)
-        return asyncio.run(serve(args, journal_directory, root, initialization))
+        return asyncio.run(serve(args, journal_directory, root, initialization, configured))
+    except SupervisionUnavailable as unavailable:
+        return _unsupervised(unavailable)
     except RecoveryRefused as refused:
         return _refused(refused)
     except SQLAlchemyError:

@@ -1289,8 +1289,8 @@ class ACPNode:
     def kind_of(self, request: ACPPermissionRequest) -> ApprovalKind:
         # ACP's activity kind is often just "other" for these tools; inspect
         # the tool's name/title before falling back to the node's fixed kind.
-        for field in ("name", "toolName", "title", "kind"):
-            value = request.tool_call.get(field)
+        for name in ("name", "toolName", "title", "kind"):
+            value = request.tool_call.get(name)
             if value == "AskUserQuestion":
                 return ApprovalKind.USER_INPUT
             if value in ("ExitPlanMode", "switch_mode"):

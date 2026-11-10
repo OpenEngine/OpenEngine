@@ -5,17 +5,14 @@ import asyncio
 import json
 import socket
 import subprocess
-import tempfile
 from contextlib import asynccontextmanager
 from copy import deepcopy
-from pathlib import Path
 
 import nats
 import pytest
 from nats.errors import TimeoutError as NatsTimeoutError
 from openengine.messaging import Client, LocalOperator, Server, ServiceError, envelopes, listen_address
 from openengine.persistence import DatabaseConfig
-from openengine.supervisor.processes.nats import install_nats_server
 
 from virtual_control_plane.application.lifecycle import Lifecycle, SCHEMAS
 from virtual_control_plane.persistence import PERSISTENCE
@@ -26,11 +23,6 @@ APPLY = "oe.v1.vcp.control.workspaces.apply"
 QUERY = "oe.v1.vcp.query."
 DOCUMENT = {"apiVersion": "openengine.cc/v1alpha1", "kind": "Workspace", "metadata": {"name": "example"},
             "spec": {"provider": "process"}}
-
-
-@pytest.fixture(scope="module")
-def binary():
-    return install_nats_server(Path(tempfile.gettempdir()) / "oe-test-nats")
 
 
 @asynccontextmanager

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -17,7 +18,7 @@ from virtual_control_plane.application.transactions import (
     Collection, CommandIdConflict, Document, InvalidEvent, PendingEvent, RuntimeCommand,
 )
 from virtual_control_plane.jetstream import event_errors
-from virtual_control_plane.persistence.schema import documents, outbox, runtime_commands, runtime_updates
+from virtual_control_plane.persistence.schema import documents, outbox, runtime_commands, runtime_updates, session_history
 
 
 # Enumerate workspace IDs by index seeks, rather than DISTINCT/GROUP BY scans.
@@ -78,7 +79,8 @@ def _identity(subject: str, command: Document) -> str:
 
 
 # Accepted bindings are written once.
-IMMUTABLE = ("attempt_bindings",)
+IMMUTABLE = ("attempt_bindings", "history_cursors")
+HISTORY_CURSOR_LIFETIME = 24 * 60 * 60
 
 
 def _collection(collection: Collection) -> sa.Table:
@@ -103,6 +105,13 @@ class Transaction:
             return
         statement = insert(table).values(key=key, body=value)
         await self._connection.execute(statement.on_conflict_do_update(index_elements=["key"], set_={"body": value}))
+
+    async def save_history_cursor(self, key: str, value: Document) -> None:
+        timestamp = time.time()
+        await self.put("history_cursors", key, {**value, "expires_at": timestamp + HISTORY_CURSOR_LIFETIME})
+        await self._connection.execute(sa.text(
+            "DELETE FROM history_cursors WHERE json_extract(body, '$.expires_at') < :timestamp"
+        ), {"timestamp": timestamp})
 
     async def delete(self, collection: Collection, key: str) -> None:
         if collection in IMMUTABLE:
@@ -170,6 +179,27 @@ class Transaction:
             .where(runtime_commands.c.command_id == command_id, runtime_commands.c.status == "pending")
             .values(status=status, acknowledgement=acknowledgement))
         return result.rowcount == 1
+
+    async def retire_runtime_command(self, command_id: str) -> None:
+        # A terminal projection is proof the command needs no further delivery,
+        # even when no command acknowledgement was received. Never fabricate one.
+        await self._connection.execute(runtime_commands.update().where(
+            runtime_commands.c.command_id == command_id, runtime_commands.c.status == "pending").values(status="settled"))
+
+    async def pending_steering(self, attempt_id: str) -> list[Document]:
+        query = sa.text("SELECT body FROM steering_commands WHERE json_extract(body, '$.target.attempt_id') = :attempt_id "
+                        "AND json_extract(body, '$.status') = 'pending' ORDER BY key").columns(body=sa.JSON)
+        return list((await self._connection.execute(query, {"attempt_id": attempt_id})).scalars())
+
+    async def append_history(self, session_id: str, entry: Document) -> int:
+        stored = await self.get("sessions", session_id)
+        sequence = stored.get("history_sequence", 0) + 1
+        stored["history_sequence"] = sequence
+        await self.put("sessions", session_id, stored)
+        await self._connection.execute(session_history.insert().values(
+            session_id=session_id, sequence=sequence, kind=entry["kind"], attempt_id=entry["attempt_id"],
+            entry={**entry, "sequence": sequence}))
+        return sequence
 
     async def append_event(self, envelope: Document) -> None:
         # Reject what could never be published before it can hold back its workspace.
@@ -245,6 +275,22 @@ class DurableStore:
                 rows = await connection.execute(query.columns(body=sa.JSON), {**values, "state": state})
                 pages.extend(row["snapshot"] for row in rows.scalars())
         return sorted(pages, key=lambda s: (s["created_at"], s["session_id"]), reverse=True)[:limit]
+
+    async def history_page(self, session_id: str, filters: Document, after: int, limit: int) -> list[Document]:
+        # Seek and bound each kind independently, then merge at most 4 bounded pages.
+        pages = []
+        async with self.database.connect() as connection:
+            await connection.exec_driver_sql("BEGIN")  # one snapshot across all kind seeks
+            for kind in filters.get("kind") or [None]:
+                query = sa.select(session_history.c.entry).where(
+                    session_history.c.session_id == session_id, session_history.c.sequence > after)
+                if kind:
+                    query = query.where(session_history.c.kind == kind)
+                if filters.get("attempt_id"):
+                    query = query.where(session_history.c.attempt_id == filters["attempt_id"])
+                rows = await connection.execute(query.order_by(session_history.c.sequence).limit(limit))
+                pages.extend(rows.scalars())
+        return sorted(pages, key=lambda item: item["sequence"])[:limit]
 
     async def pending_runtime_commands(self, limit: int, exclude: Iterable[str] = ()) -> list[RuntimeCommand]:
         table = runtime_commands

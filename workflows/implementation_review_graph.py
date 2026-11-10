@@ -4,7 +4,7 @@
 
 The review stage fans out to five parallel reviewers, each examining the
 change from a single angle (security, bugs & task adherence, performance,
-conciseness, DRYness & code duplication). Their findings are collected by a
+conciseness, DRYness & semantic reuse). Their findings are collected by a
 *reranker* that somewhat aggressively squashes noise and posts the survivors
 as PR comments with lineage.
 Surviving findings go back to implementation for one automatic fix-and-review

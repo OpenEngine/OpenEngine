@@ -26,7 +26,7 @@ MIGRATIONS = Path(__file__).parent / "migrations"
 NAME = "workspace-daemon"
 
 TERMINAL = ("completed", "failed", "cancelled")
-STATES = ("recorded", "launching", "running", *TERMINAL)
+STATES = ("recorded", "launching", "running", "cancelling", *TERMINAL)
 _ACTIVE = "state NOT IN ('completed', 'failed', 'cancelled')"
 
 
@@ -65,19 +65,27 @@ commands = sa.Table(
     sa.Column("error_code", sa.String(64), nullable=True),
     sa.Column("error_message", sa.Text(), nullable=True),
     sa.CheckConstraint("(status = 'accepted') = (error_code IS NULL)", name="ck_journal_commands_error"),
-    comment="Remembered execute commands as received and their final reply.",
+    comment="Remembered execute and cancel commands as received and their final reply.",
 )
 sessions = sa.Table(
     "journal_sessions", metadata,
     sa.Column("session_id", sa.String(128), primary_key=True),
     sa.Column("command_id", sa.String(128), sa.ForeignKey("journal_commands.command_id"), nullable=False),
+    # The executor's own conversation (an ACP session ID) and whether it can be loaded again.
+    sa.Column("executor_session_id", sa.String(1024), nullable=True),
+    sa.Column("executor_resumable", sa.Boolean(), nullable=False, server_default=sa.false()),
     comment="Sessions owned by this runtime; the opening command carries their agent.",
 )
 attempts = sa.Table(
     "journal_attempts", metadata,
     sa.Column("attempt_id", sa.String(128), primary_key=True),
-    sa.Column("session_id", sa.String(128), sa.ForeignKey("journal_sessions.session_id"), nullable=False),
+    # NULL only for a cancel-before-execute tombstone, which never opens its session.
+    sa.Column("session_id", sa.String(128), sa.ForeignKey("journal_sessions.session_id"), nullable=True),
+    # The execute command, or for a tombstone the cancel command that created it.
     sa.Column("command_id", sa.String(128), sa.ForeignKey("journal_commands.command_id"), nullable=False, unique=True),
+    # The first (winning) cancel journaled for the attempt; it decides a later terminal record.
+    sa.Column("cancel_command_id", sa.String(128), sa.ForeignKey(
+        "journal_commands.command_id", name="fk_journal_attempts_cancel_command_id_journal_commands"), nullable=True),
     sa.Column("state", sa.String(16), nullable=False),
     _choices("journal_attempts", "state", STATES),
     sa.Column("launch_count", sa.Integer(), nullable=False),
@@ -119,13 +127,16 @@ def _encode(value: dict[str, Any]) -> bytes:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()
 
 
-_ATTEMPT = sa.select(attempts, commands.c.command).join(commands, attempts.c.command_id == commands.c.command_id)
+_CANCEL = commands.alias("cancel_commands")
+_ATTEMPT = (sa.select(attempts, commands.c.command, _CANCEL.c.command.label("cancel"))
+            .join(commands, attempts.c.command_id == commands.c.command_id)
+            .outerjoin(_CANCEL, attempts.c.cancel_command_id == _CANCEL.c.command_id))
 
 
 def _attempt(row: Any) -> dict[str, Any]:
     return {"command": _decode(row.command), "state": row.state, "launch_count": row.launch_count,
             "attempt_sequence": row.attempt_sequence, "last_event_sequence": row.last_event_sequence,
-            "executor_handle": row.executor_handle}
+            "executor_handle": row.executor_handle, "cancel": row.cancel and _decode(row.cancel)}
 
 
 class Transaction:
@@ -176,18 +187,24 @@ class Transaction:
             error_code=detail.get("code"), error_message=detail.get("message")))
 
     async def session(self, session_id: str) -> dict[str, Any] | None:
-        """The session's agent, from its opening command, and its unfinished attempt."""
-        query = (sa.select(commands.c.command).join(sessions, sessions.c.command_id == commands.c.command_id)
+        """The session's agent, from its opening command, its executor conversation and its unfinished attempt."""
+        query = (sa.select(commands.c.command, sessions.c.executor_session_id, sessions.c.executor_resumable)
+                 .join(sessions, sessions.c.command_id == commands.c.command_id)
                  .where(sessions.c.session_id == session_id))
         row = await self._first(query)
         if row is None:
             return None
         active = await self._first(sa.select(attempts.c.attempt_id)
                                    .where(attempts.c.session_id == session_id, sa.text(_ACTIVE)))
-        return {"agent": _decode(row.command)["payload"]["agent"], "active_attempt": active and active.attempt_id}
+        return {"agent": _decode(row.command)["payload"]["agent"], "active_attempt": active and active.attempt_id,
+                "executor_session_id": row.executor_session_id, "executor_resumable": row.executor_resumable}
 
     async def open_session(self, session_id: str, command_id: str) -> None:
         await self._connection.execute(sessions.insert().values(session_id=session_id, command_id=command_id))
+
+    async def save_executor_session(self, session_id: str, executor_session_id: str, resumable: bool) -> None:
+        await self._connection.execute(sessions.update().where(sessions.c.session_id == session_id).values(
+            executor_session_id=executor_session_id, executor_resumable=resumable))
 
     async def attempt(self, attempt_id: str) -> dict[str, Any] | None:
         row = await self._first(_ATTEMPT.where(attempts.c.attempt_id == attempt_id))
@@ -197,12 +214,18 @@ class Transaction:
         query = _ATTEMPT if state is None else _ATTEMPT.where(attempts.c.state == state)
         return [_attempt(row) for row in await self._connection.execute(query.order_by(attempts.c.attempt_id))]
 
+    async def attempt_ids(self, *states: str) -> list[str]:
+        query = sa.select(attempts.c.attempt_id).where(attempts.c.state.in_(states)).order_by(attempts.c.attempt_id)
+        return list((await self._connection.execute(query)).scalars())
+
     async def save_attempt(self, attempt: dict[str, Any]) -> None:
-        command = attempt["command"]
+        command, cancel = attempt["command"], attempt.get("cancel")
         values = {key: attempt.get(key) for key in (
             "state", "launch_count", "attempt_sequence", "last_event_sequence", "executor_handle")}
+        values["cancel_command_id"] = cancel and cancel["command_id"]
+        session_id = None if command["kind"] == "cancel" else command["target"]["session_id"]
         statement = insert(attempts).values(attempt_id=command["target"]["attempt_id"], command_id=command["command_id"],
-                                            session_id=command["target"]["session_id"], **values)
+                                            session_id=session_id, **values)
         await self._connection.execute(statement.on_conflict_do_update(index_elements=["attempt_id"], set_=values))
 
     async def append_update(self, sequence: int, event_id: str, wire: bytes, attempt_id: str | None = None) -> None:
@@ -214,6 +237,11 @@ class Transaction:
                  .order_by(updates.c.sequence).limit(1))
         row = (await self._connection.execute(query)).first()
         return None if row is None else (row.sequence, row.wire)
+
+    async def pending_updates(self) -> int:
+        """Unacknowledged updates, counted through the pending partial index."""
+        query = sa.select(sa.func.count()).select_from(updates).where(updates.c.acknowledged.is_(False))
+        return (await self._connection.execute(query)).scalar_one()
 
     async def has_update(self, sequence: int) -> bool:
         query = sa.select(updates.c.sequence).where(updates.c.sequence == sequence)

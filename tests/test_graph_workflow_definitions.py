@@ -201,7 +201,7 @@ def test_the_graph_names_the_workorder_then_runs_the_step_version_s_stages(
         "Review (Bugs & task adherence)",
         "Review (Performance)",
         "Review (Conciseness)",
-        "Review (DRYness & code duplication)",
+        "Review (DRYness & semantic reuse)",
         "Refute findings",
         "Reranker",
         "Impact analysis",

@@ -1,0 +1,377 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Code Graph</title>
+<!-- Template for scripts/code_graph.py report; the script substitutes the data below. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --surface: #fcfcfb; --raised: #ffffff; --border: #e4e3df; --grid: #eeede9;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --accent: #2a78d6; --critical: #d03b3b; --edge: #b9b8b2;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+  --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --q1: #cde2fb; --q2: #86b6ef; --q3: #3987e5; --q4: #1c5cab; --q5: #0d366b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface: #1a1a19; --raised: #222221; --border: #3a3a37; --grid: #2c2c2a;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8e8d86;
+    --accent: #3987e5; --critical: #e66767; --edge: #55554f;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+    --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --q1: #184f95; --q2: #256abf; --q3: #3987e5; --q4: #86b6ef; --q5: #cde2fb;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --surface: #1a1a19; --raised: #222221; --border: #3a3a37; --grid: #2c2c2a;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8e8d86;
+  --accent: #3987e5; --critical: #e66767; --edge: #55554f;
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500;
+  --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --q1: #184f95; --q2: #256abf; --q3: #3987e5; --q4: #86b6ef; --q5: #cde2fb;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--surface); color: var(--text-primary);
+       font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { padding: 20px 24px 0; }
+h1 { font-size: 20px; margin: 0 0 4px; }
+.sub { color: var(--text-secondary); margin: 0 0 16px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.tile { background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+.tile b { display: block; font-size: 22px; font-variant-numeric: tabular-nums; }
+.tile span { color: var(--text-secondary); font-size: 12px; }
+nav { display: flex; gap: 4px; border-bottom: 1px solid var(--border); padding: 0 24px; overflow-x: auto; }
+nav button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--text-secondary);
+             font: inherit; padding: 8px 12px; cursor: pointer; white-space: nowrap; }
+nav button[aria-selected="true"] { color: var(--text-primary); border-color: var(--accent); }
+main { padding: 16px 24px 32px; }
+section[hidden] { display: none; }
+.controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-bottom: 12px; color: var(--text-secondary); }
+select, input[type=search] { font: inherit; color: var(--text-primary); background: var(--raised);
+  border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--text-secondary); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+.chart { background: var(--raised); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; position: relative; }
+.chart svg { display: block; width: 100%; }
+.note { color: var(--text-muted); font-size: 12px; margin: 8px 0 0; }
+.tip { position: fixed; pointer-events: none; background: var(--raised); color: var(--text-primary);
+       border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px;
+       box-shadow: 0 2px 8px rgb(0 0 0 / .15); max-width: 360px; opacity: 0; z-index: 10; }
+.tip b { display: block; }
+.tip span { color: var(--text-secondary); }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 16px; }
+h2 { font-size: 15px; margin: 0 0 8px; }
+.card { background: var(--raised); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 12px; }
+th { text-align: left; color: var(--text-secondary); font-weight: 500; border-bottom: 1px solid var(--border); padding: 4px 6px; }
+td { padding: 4px 6px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+td code { font-size: 11px; word-break: break-all; }
+.bar { display: inline-block; height: 8px; border-radius: 0 4px 4px 0; background: var(--accent); vertical-align: middle; margin-right: 6px; }
+pre { background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 10px; overflow-x: auto; font-size: 12px; margin: 0 0 4px; }
+.warn { color: var(--critical); }
+text.label { fill: var(--text-primary); font-size: 10px; paint-order: stroke; stroke: var(--raised); stroke-width: 3px; pointer-events: none; }
+@media (max-width: 600px) { header, main { padding-left: 16px; padding-right: 16px; } nav { padding: 0 16px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Code graph</h1>
+  <p class="sub">Python source loaded into LadybugDB and read back with Cypher. Rebuild with
+    <code>uv run scripts/code_graph.py build &amp;&amp; uv run scripts/code_graph.py report</code>.</p>
+  <div class="tiles" id="tiles"></div>
+</header>
+<nav role="tablist" id="tabs"></nav>
+<main>
+  <section id="packages">
+    <div class="controls"><div class="legend" id="legend-packages"></div></div>
+    <div class="chart"><svg id="package-graph" height="640"></svg></div>
+    <p class="note">Nodes are distributions sized by lines of code; arrows point from importer to imported, thicker for more import sites.
+      <span class="warn">Red</span> edges are two-package cycles. Drag nodes to rearrange; hover for detail.</p>
+  </section>
+  <section id="modules" hidden>
+    <div class="controls">
+      <label>Package <select id="module-filter"></select></label>
+      <label><input type="checkbox" id="module-neighbors" checked> include direct neighbours</label>
+      <label><input type="checkbox" id="module-types"> include type-only imports</label>
+      <input type="search" id="module-search" placeholder="Highlight module…">
+    </div>
+    <div class="legend" id="legend-modules" style="margin-bottom:8px"></div>
+    <div class="chart"><svg id="module-graph" height="680"></svg></div>
+    <p class="note">Module import graph. Nodes are sized by lines of code and coloured by area; scroll to zoom, drag to pan.</p>
+  </section>
+  <section id="treemap" hidden>
+    <div class="controls">
+      <span>Area = lines of code · Colour = most complex function in the module</span>
+      <div class="legend" id="legend-treemap"></div>
+    </div>
+    <div class="chart"><svg id="treemap-svg" height="680"></svg></div>
+  </section>
+  <section id="hotspots" hidden>
+    <div class="grid2" id="hotspot-cards"></div>
+  </section>
+  <section id="queries" hidden>
+    <p class="sub">Every view above comes from one of these queries. Try your own with
+      <code>uv run scripts/code_graph.py query "&lt;cypher&gt;"</code>.</p>
+    <div id="query-list"></div>
+  </section>
+</main>
+<div class="tip" id="tip"></div>
+<script>
+const DATA = /*__DATA__*/null;
+const AREAS = ['packages', 'adapters', 'apps', 'cli', 'v2', 'langgraph-acp', 'migrations', 'tooling'];
+const areaColor = a => `var(--s${AREAS.indexOf(a) + 1 || 8})`;
+const fmt = d3.format(',');
+const tip = document.getElementById('tip');
+function showTip(event, html) {
+  tip.innerHTML = html; tip.style.opacity = 1;
+  const x = Math.min(event.clientX + 14, innerWidth - tip.offsetWidth - 8);
+  const y = Math.min(event.clientY + 14, innerHeight - tip.offsetHeight - 8);
+  tip.style.left = x + 'px'; tip.style.top = y + 'px';
+}
+const hideTip = () => { tip.style.opacity = 0; };
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
+
+// ---- header
+const T = DATA.totals;
+document.getElementById('tiles').innerHTML = [
+  ['packages', 'distributions'], ['modules', 'modules'], ['loc', 'lines of code'],
+  ['classes', 'classes'], ['functions', 'functions'], ['imports', 'import edges'],
+].map(([k, label]) => `<div class="tile"><b>${fmt(T[k])}</b><span>${label}</span></div>`).join('');
+
+function legend(id, areas) {
+  document.getElementById(id).innerHTML = areas.map(a => `<span><i style="background:${areaColor(a)}"></i>${a}</span>`).join('');
+}
+
+// ---- tabs
+const views = {packages: 'Packages', modules: 'Modules', treemap: 'Treemap', hotspots: 'Hotspots', queries: 'Cypher'};
+const drawn = {};
+const draw = {packages: drawPackages, modules: drawModules, treemap: drawTreemap, hotspots: drawHotspots, queries: drawQueries};
+const tabs = document.getElementById('tabs');
+let saved = 'packages';
+try { saved = localStorage.getItem('code-graph-tab') || saved; } catch (e) {}
+if (!views[saved]) saved = 'packages';
+for (const [id, label] of Object.entries(views)) {
+  const b = document.createElement('button');
+  b.textContent = label; b.role = 'tab'; b.dataset.view = id;
+  b.onclick = () => select(id);
+  tabs.append(b);
+}
+function select(id) {
+  for (const b of tabs.children) b.setAttribute('aria-selected', b.dataset.view === id);
+  for (const s of document.querySelectorAll('main > section')) s.hidden = s.id !== id;
+  try { localStorage.setItem('code-graph-tab', id); } catch (e) {}
+  if (!drawn[id]) { drawn[id] = true; draw[id](); }
+}
+
+// ---- force graph shared by the package and module views
+function forceGraph(svgEl, nodes, links, opts) {
+  const svg = d3.select(svgEl); svg.selectAll('*').remove();
+  const width = svgEl.clientWidth || 960, height = +svgEl.getAttribute('height');
+  svg.attr('viewBox', [0, 0, width, height]);
+  const marker = opts.markerId;
+  svg.append('defs').selectAll('marker').data(['edge', 'cycle']).join('marker')
+    .attr('id', d => `${marker}-${d}`).attr('viewBox', '0 -4 8 8').attr('refX', 8).attr('refY', 0)
+    .attr('markerWidth', 6).attr('markerHeight', 6).attr('orient', 'auto')
+    .append('path').attr('d', 'M0,-4L8,0L0,4').attr('fill', d => d === 'cycle' ? 'var(--critical)' : 'var(--edge)');
+  const root = svg.append('g');
+  if (opts.zoom) svg.call(d3.zoom().scaleExtent([0.2, 6]).on('zoom', e => root.attr('transform', e.transform)));
+  const r = d3.scaleSqrt().domain([0, d3.max(nodes, d => d.loc) || 1]).range(opts.radius);
+  nodes.forEach(n => n.r = Math.max(opts.radius[0], r(n.loc)));
+  const sim = d3.forceSimulation(nodes)
+    .force('link', d3.forceLink(links).id(d => d.id).distance(opts.distance).strength(opts.strength))
+    .force('charge', d3.forceManyBody().strength(opts.charge))
+    .force('collide', d3.forceCollide(d => d.r + 3))
+    .force('x', d3.forceX(width / 2).strength(0.05)).force('y', d3.forceY(height / 2).strength(0.07));
+  const link = root.append('g').attr('fill', 'none').selectAll('path').data(links).join('path')
+    .attr('stroke', d => d.cycle ? 'var(--critical)' : 'var(--edge)')
+    .attr('stroke-width', d => d.width || 1).attr('stroke-opacity', d => d.cycle ? 0.9 : 0.6)
+    .attr('stroke-dasharray', d => d.dashed ? '3 3' : null)
+    .attr('marker-end', d => `url(#${marker}-${d.cycle ? 'cycle' : 'edge'})`);
+  const node = root.append('g').selectAll('circle').data(nodes).join('circle')
+    .attr('r', d => d.r).attr('fill', d => areaColor(d.area))
+    .attr('stroke', 'var(--raised)').attr('stroke-width', 2).style('cursor', 'grab')
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) sim.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end', (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }));
+  const label = root.append('g').selectAll('text').data(nodes.filter(opts.labelled)).join('text')
+    .attr('class', 'label').attr('text-anchor', 'middle').text(opts.label);
+  const neighbours = new Map(nodes.map(n => [n.id, new Set([n.id])]));
+  links.forEach(l => { neighbours.get(l.source.id ?? l.source)?.add(l.target.id ?? l.target);
+                       neighbours.get(l.target.id ?? l.target)?.add(l.source.id ?? l.source); });
+  function focus(id) {
+    const near = id && neighbours.get(id);
+    node.attr('opacity', d => !near || near.has(d.id) ? 1 : 0.15);
+    label.attr('opacity', d => !near || near.has(d.id) ? 1 : 0.15);
+    link.attr('stroke-opacity', d => !near ? (d.cycle ? 0.9 : 0.6) : (d.source.id === id || d.target.id === id ? 0.95 : 0.05))
+        .attr('stroke', d => d.cycle ? 'var(--critical)' : near && (d.source.id === id) ? 'var(--accent)' : 'var(--edge)');
+  }
+  node.on('mousemove', (e, d) => { focus(d.id); showTip(e, opts.tip(d)); })
+      .on('mouseleave', () => { focus(null); hideTip(); });
+  sim.on('tick', () => {
+    link.attr('d', d => {
+      const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y, len = Math.hypot(dx, dy) || 1;
+      const sx = d.source.x + dx / len * d.source.r, sy = d.source.y + dy / len * d.source.r;
+      const tx = d.target.x - dx / len * (d.target.r + 2), ty = d.target.y - dy / len * (d.target.r + 2);
+      return `M${sx},${sy}L${tx},${ty}`;
+    });
+    nodes.forEach(d => { d.x = Math.max(d.r + 2, Math.min(width - d.r - 2, d.x));
+                         d.y = Math.max(d.r + 16, Math.min(height - d.r - 2, d.y)); });
+    node.attr('cx', d => d.x).attr('cy', d => d.y);
+    label.attr('x', d => d.x).attr('y', d => d.y - d.r - 4);
+  });
+  return {focus, nodes};
+}
+
+function drawPackages() {
+  const pkgs = DATA.packages.filter(p => p.modules > 0);
+  const ids = new Set(pkgs.map(p => p.name));
+  const cycles = new Set(DATA.package_cycles.flatMap(c => [`${c.a}|${c.b}`, `${c.b}|${c.a}`]));
+  const out = d3.rollup(DATA.package_edges, v => v.length, d => d.source);
+  const inn = d3.rollup(DATA.package_edges, v => v.length, d => d.target);
+  const nodes = pkgs.map(p => ({id: p.name, ...p}));
+  const w = d3.scaleSqrt().domain([1, d3.max(DATA.package_edges, d => d.weight) || 1]).range([1, 5]);
+  const links = DATA.package_edges.filter(e => ids.has(e.source) && ids.has(e.target))
+    .map(e => ({source: e.source, target: e.target, weight: e.weight, width: w(e.weight), cycle: cycles.has(`${e.source}|${e.target}`)}));
+  legend('legend-packages', AREAS.filter(a => pkgs.some(p => p.area === a)));
+  forceGraph(document.getElementById('package-graph'), nodes, links, {
+    markerId: 'pk', radius: [5, 30], distance: 100, strength: 0.25, charge: -360, zoom: true,
+    labelled: () => true, label: d => d.name.replace(/^(engine|openengine)-(adapter-)?/, ''),
+    tip: d => `<b>${esc(d.name)}</b><span>${esc(d.path)}</span><br>${fmt(d.loc)} lines · ${d.modules} modules<br>
+               depends on ${out.get(d.id) || 0} · used by ${inn.get(d.id) || 0} packages`,
+  });
+}
+
+function drawModules() {
+  const select = document.getElementById('module-filter');
+  const packages = [...new Set(DATA.modules.map(m => m.package))].sort();
+  const counts = d3.rollup(DATA.modules, v => v.length, d => d.package);
+  const busiest = packages.reduce((a, b) => (counts.get(b) > counts.get(a) ? b : a), packages[0]);
+  select.innerHTML = `<option value="*">All packages (${DATA.modules.length} modules)</option>` +
+    packages.map(p => `<option value="${esc(p)}"${p === 'engine-graph-runtime-langgraph' ? ' selected' : ''}>${esc(p)} (${counts.get(p)})</option>`).join('');
+  if (!packages.includes('engine-graph-runtime-langgraph')) select.value = busiest;
+  const byName = new Map(DATA.modules.map(m => [m.name, m]));
+  const fanIn = d3.rollup(DATA.module_edges, v => v.length, d => d.target);
+  const fanOut = d3.rollup(DATA.module_edges, v => v.length, d => d.source);
+  let graph;
+  function render() {
+    const pkg = select.value, withTypes = document.getElementById('module-types').checked;
+    const edges = DATA.module_edges.filter(e => withTypes || !e.type_only);
+    let keep;
+    if (pkg === '*') keep = new Set(DATA.modules.map(m => m.name));
+    else {
+      keep = new Set(DATA.modules.filter(m => m.package === pkg).map(m => m.name));
+      if (document.getElementById('module-neighbors').checked) {
+        const core = new Set(keep);
+        edges.forEach(e => { if (core.has(e.source)) keep.add(e.target); if (core.has(e.target)) keep.add(e.source); });
+      }
+    }
+    const nodes = [...keep].map(n => ({id: n, ...byName.get(n), home: pkg === '*' || byName.get(n).package === pkg}));
+    const links = edges.filter(e => keep.has(e.source) && keep.has(e.target))
+      .map(e => ({source: e.source, target: e.target, dashed: e.type_only}));
+    legend('legend-modules', AREAS.filter(a => nodes.some(n => n.area === a)));
+    const all = pkg === '*';
+    graph = forceGraph(document.getElementById('module-graph'), nodes, links, {
+      markerId: 'md', radius: all ? [2, 14] : [4, 20], distance: all ? 30 : 80, strength: all ? 0.1 : 0.2,
+      charge: all ? -30 : -380, zoom: true,
+      labelled: d => !all && d.home, label: d => d.name.split('.').slice(-1)[0],
+      tip: d => `<b>${esc(d.name)}</b><span>${esc(d.package)}</span><br>${fmt(d.loc)} lines · ${d.classes} classes · ${d.functions} functions<br>
+                 imports ${fanOut.get(d.id) || 0} · imported by ${fanIn.get(d.id) || 0} · peak complexity ${d.peak}`,
+    });
+    search();
+  }
+  function search() {
+    const q = document.getElementById('module-search').value.trim().toLowerCase();
+    const hit = q && graph.nodes.find(n => n.id.toLowerCase().includes(q));
+    graph.focus(hit ? hit.id : null);
+  }
+  select.onchange = render;
+  document.getElementById('module-neighbors').onchange = render;
+  document.getElementById('module-types').onchange = render;
+  document.getElementById('module-search').oninput = search;
+  render();
+}
+
+function drawTreemap() {
+  const svgEl = document.getElementById('treemap-svg');
+  const width = svgEl.clientWidth || 960, height = +svgEl.getAttribute('height');
+  const svg = d3.select(svgEl).attr('viewBox', [0, 0, width, height]);
+  const areas = d3.group(DATA.modules, d => d.area, d => d.package);
+  const tree = {name: 'repo', children: [...areas].map(([area, pkgs]) => ({
+    name: area, children: [...pkgs].map(([pkg, mods]) => ({name: pkg, children: mods.map(m => ({...m, value: m.loc}))})),
+  }))};
+  const root = d3.treemap().size([width, height]).paddingOuter(3).paddingTop(d => d.depth === 1 ? 18 : d.depth === 2 ? 14 : 0)
+    .paddingInner(1).round(true)(d3.hierarchy(tree).sum(d => d.value || 0).sort((a, b) => b.value - a.value));
+  const bins = [5, 10, 20, 40];
+  const shade = c => `var(--q${d3.bisectRight(bins, c) + 1})`;
+  document.getElementById('legend-treemap').innerHTML = ['≤5', '6–10', '11–20', '21–40', '>40']
+    .map((l, i) => `<span><i style="border-radius:2px;background:var(--q${i + 1})"></i>${l}</span>`).join('');
+  svg.append('g').selectAll('rect').data(root.descendants().filter(d => d.depth > 0 && d.depth < 3)).join('rect')
+    .attr('x', d => d.x0).attr('y', d => d.y0).attr('width', d => d.x1 - d.x0).attr('height', d => d.y1 - d.y0)
+    .attr('fill', 'none').attr('stroke', d => d.depth === 1 ? areaColor(d.data.name) : 'var(--border)').attr('stroke-width', d => d.depth === 1 ? 2 : 1);
+  svg.append('g').selectAll('text').data(root.descendants().filter(d => d.depth > 0 && d.depth < 3 && d.x1 - d.x0 > 50)).join('text')
+    .attr('x', d => d.x0 + 4).attr('y', d => d.y0 + (d.depth === 1 ? 13 : 11))
+    .attr('fill', d => d.depth === 1 ? 'var(--text-primary)' : 'var(--text-secondary)')
+    .attr('font-size', d => d.depth === 1 ? 12 : 10).attr('font-weight', d => d.depth === 1 ? 600 : 400)
+    .text(d => { const n = d.depth === 2 ? d.data.name.replace(/^(engine|openengine)-(adapter-)?/, '') : d.data.name;
+                 const max = Math.floor((d.x1 - d.x0 - 8) / 6); return n.length > max ? n.slice(0, max - 1) + '…' : n; });
+  svg.append('g').selectAll('rect').data(root.leaves()).join('rect')
+    .attr('x', d => d.x0).attr('y', d => d.y0).attr('width', d => Math.max(0, d.x1 - d.x0)).attr('height', d => Math.max(0, d.y1 - d.y0))
+    .attr('rx', 2).attr('fill', d => shade(d.data.peak))
+    .on('mousemove', (e, d) => showTip(e, `<b>${esc(d.data.name)}</b><span>${esc(d.data.path)}</span><br>
+        ${fmt(d.data.loc)} lines · ${d.data.functions} functions · peak complexity ${d.data.peak}`))
+    .on('mouseleave', hideTip);
+}
+
+function table(title, rows, columns, note) {
+  const max = {};
+  columns.filter(c => c.bar).forEach(c => max[c.key] = d3.max(rows, r => r[c.key]) || 1);
+  const head = columns.map(c => `<th class="${c.num ? 'n' : ''}">${c.label}</th>`).join('');
+  const body = rows.map(r => '<tr>' + columns.map(c => {
+    const v = c.render ? c.render(r) : esc(r[c.key]);
+    if (c.bar) return `<td class="n" style="white-space:nowrap"><span class="bar" style="width:${Math.max(2, 60 * r[c.key] / max[c.key])}px"></span>${fmt(r[c.key])}</td>`;
+    return `<td class="${c.num ? 'n' : ''}">${c.num ? fmt(r[c.key]) : v}</td>`;
+  }).join('') + '</tr>').join('');
+  return `<div class="card"><h2>${title}</h2>${note ? `<p class="note" style="margin:0 0 8px">${note}</p>` : ''}<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+function drawHotspots() {
+  const where = r => `<code>${esc(r.path)}:${r.line}</code>`;
+  const cycles = DATA.package_cycles.length
+    ? table('Package dependency cycles', DATA.package_cycles, [{key: 'a', label: 'Package'}, {key: 'b', label: '⇄ package'}],
+            'Pairs of distributions that import each other.')
+    : '<div class="card"><h2>Package dependency cycles</h2><p class="note">None found.</p></div>';
+  document.getElementById('hotspot-cards').innerHTML = [
+    table('Most complex functions', DATA.complex_functions, [
+      {key: 'function', label: 'Function', render: r => `<code>${esc(r.function)}</code><br>${where(r)}`},
+      {key: 'complexity', label: 'Complexity', bar: true}, {key: 'loc', label: 'Lines', num: true}]),
+    table('Largest classes', DATA.large_classes, [
+      {key: 'class', label: 'Class', render: r => `<code>${esc(r.class)}</code><br>${where(r)}`},
+      {key: 'methods', label: 'Methods', bar: true}, {key: 'loc', label: 'Lines', num: true}]),
+    table('Most shared modules', DATA.fan_in, [
+      {key: 'module', label: 'Module', render: r => `<code>${esc(r.module)}</code>`},
+      {key: 'packages', label: 'Importing packages', bar: true}, {key: 'importers', label: 'Importing modules', num: true}],
+      'Imported from the most other distributions: the code a change ripples out from.'),
+    table('Deepest class hierarchies', DATA.hierarchies, [
+      {key: 'base', label: 'Base class', render: r => `<code>${esc(r.base)}</code>`},
+      {key: 'descendants', label: 'Descendants', bar: true}]),
+    cycles,
+  ].join('');
+}
+
+function drawQueries() {
+  document.getElementById('query-list').innerHTML = Object.entries(DATA.queries)
+    .map(([k, q]) => `<h2>${esc(k)}</h2><pre>${esc(q)}</pre>`).join('');
+}
+
+select(saved);
+</script>
+</body>
+</html>

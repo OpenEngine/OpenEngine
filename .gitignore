@@ -30,3 +30,6 @@ playwright-report/
 .env.*
 /engine.local.toml
 .engine/
+
+# Local code graph database and report (scripts/code_graph.py).
+/.code-graph/

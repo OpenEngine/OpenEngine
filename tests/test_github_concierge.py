@@ -13,16 +13,18 @@ from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
-from engine.domain import RunId, RunOrigin, RunState, TaskId, WorkflowId
+from engine.domain import RunId, RunOrigin
 from engine.github_concierge import NOT_FORWARDED, UNDELIVERED, Continuation, Delivery
 from engine.graph_runtime import NodeId, RunSnapshot, RunStatus
 from engine.runtime import WorkOrdersConfig
 
-#: Stands in for anything the host holds and the public must not be told.
-LEAKED = "ghp_000000000000000000000000000000000000"
 from test_slack_work_orders import SIGNING_SECRET, _workflow_catalog
 from provider_fakes import FakeACPProvider
 from web_fakes import RecordingCommunications
+
+
+#: Stands in for anything the host holds and the public must not be told.
+LEAKED = "ghp_000000000000000000000000000000000000"
 
 
 def _graph_runtime(
@@ -1696,8 +1698,7 @@ def test_a_mention_starts_the_workflow_or_registered_graph_named_for_work_orders
 
 def _review_catalog():
     """A catalog whose workflow can start in review, as the shipped one can."""
-    from engine.domain import WorkState
-    from engine.graph_runtime.inputs import WorkflowInput, mode_input, state_input
+    from engine.graph_runtime.inputs import WorkflowInput, mode_input
     from engine.graph_runtime_langgraph import State, graph_workflow
     from engine.runtime import WorkflowCatalog
     from langgraph.graph import END, START, StateGraph

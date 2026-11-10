@@ -20,7 +20,10 @@
       "progress_kinds": [
         "conversation"
       ],
-      "journal_id": "journal_1"
+      "journal_id": "journal_1",
+      "steering_executors": [
+        "fake"
+      ]
     }
   }
 }
