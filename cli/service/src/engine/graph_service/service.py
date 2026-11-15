@@ -71,6 +71,7 @@ from engine.graph_service.session import (
     session_workflow,
 )
 from engine.graph_service.language import (
+    NAMING_NODE,
     STAGE_GROUPS,
     STAGES,
     GraphError,
@@ -177,6 +178,28 @@ class Loaded:
         if self.spec is None:
             return {}
         return {key: node.id for node in self.spec.nodes if node.parallel for key in node.keys}
+
+    def input_runners(self, values: Mapping[str, Any]) -> dict[str, str]:
+        """LangGraph node key -> the runner the run's inputs choose for it.
+
+        Only for nodes whose agent is `${inputs.<name>}`. Empty when the input
+        does not name a runner yet, so a node that has not started is shown as
+        unresolved rather than as the graph's default.
+        """
+        if self.spec is None:
+            return {}
+        inputs = values.get("inputs")
+        inputs = inputs if isinstance(inputs, Mapping) else {}
+        rules = [(node.keys, node.runner) for node in self.spec.nodes]
+        if self.spec.naming:
+            rules.append(((NAMING_NODE,), self.spec.naming.runner))
+        chosen: dict[str, str] = {}
+        for keys, rule in rules:
+            if rule is not None and rule.kind == "input":
+                value = inputs.get(rule.value)
+                runner = value if isinstance(value, str) and value not in RUNNER_POLICIES else ""
+                chosen.update(dict.fromkeys(keys, runner))
+        return chosen
 
 
 @dataclass(frozen=True)
@@ -692,8 +715,11 @@ class GraphService:
         topology = self.runtime.topology(snapshot.graph_id)
         executions = self.store.executions(run_id)
         record = await self.runtime.store.run(RunId(run_id))
-        overrides = record.runner_overrides if record else {}
         values = snapshot.values or {}
+        overrides = {
+            **(loaded.input_runners(values) if loaded else {}),
+            **(record.runner_overrides if record else {}),
+        }
         results = _results(topology, values)
         run_inputs = values.get("inputs")
         run_inputs = run_inputs if isinstance(run_inputs, Mapping) else {}
@@ -1450,10 +1476,15 @@ class GraphService:
         if snapshot is None:
             raise NotFound(f"no run {run_id}")
         record = await self.runtime.store.run(RunId(run_id))
+        values = snapshot.values or {}
+        loaded = self._loaded.get(str(snapshot.graph_id))
         return (
             self.runtime.topology(snapshot.graph_id),
-            snapshot.values or {},
-            record.runner_overrides if record else {},
+            values,
+            {
+                **(loaded.input_runners(values) if loaded else {}),
+                **(record.runner_overrides if record else {}),
+            },
             _selected_runners(self.runtime.store.events_since(RunId(run_id), kind=EventKind.RUNNER_SELECTED))
             if include_selected else {},
         )
