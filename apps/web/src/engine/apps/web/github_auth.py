@@ -27,7 +27,7 @@ from engine.apps.web.oauth_credentials import (
     OAuthCredentialError,
     OAuthCredentialStore,
     StoredCredentials,
-    _optional_string,
+    _nonempty_or_none,
     expiry_at,
     optional_int,
 )
@@ -222,7 +222,7 @@ async def poll_device_flow(
         raise GitHubAuthError("GitHub returned no access_token")
     return DeviceFlowComplete(
         access_token=token,
-        refresh_token=_optional_string(body.get("refresh_token")),
+        refresh_token=_nonempty_or_none(body.get("refresh_token")),
         expires_in=optional_int(body.get("expires_in")),
         refresh_token_expires_in=optional_int(body.get("refresh_token_expires_in")),
     )
@@ -267,7 +267,7 @@ async def refresh_access_token(client_id: str, refresh_token: str) -> StoredCred
         access_token=token,
         # OAuth providers are allowed to retain a refresh token. Preserve the
         # working token when a successful response does not rotate it.
-        refresh_token=_optional_string(body.get("refresh_token")) or refresh_token,
+        refresh_token=_nonempty_or_none(body.get("refresh_token")) or refresh_token,
         expires_at=expiry_at(now, body.get("expires_in")),
         refresh_token_expires_at=expiry_at(now, body.get("refresh_token_expires_in")),
     )

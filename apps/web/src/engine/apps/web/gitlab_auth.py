@@ -19,7 +19,7 @@ from engine.apps.web.oauth_credentials import (
     OAuthCredentialError,
     OAuthCredentialStore,
     StoredCredentials,
-    _optional_string,
+    _nonempty_or_none,
     expiry_at,
     optional_int,
 )
@@ -139,9 +139,9 @@ async def start_device_flow(origin: str, client_id: str) -> DeviceFlowState:
         raise GitLabAuthError(f"could not start GitLab device flow: {error}") from error
     body = _response_body(response, "device authorization")
     return DeviceFlowState(
-        device_code=_required_string(body, "device_code"),
-        user_code=_required_string(body, "user_code"),
-        verification_uri=_required_string(body, "verification_uri"),
+        device_code=_response_string(body, "device_code"),
+        user_code=_response_string(body, "user_code"),
+        verification_uri=_response_string(body, "verification_uri"),
         expires_in=_positive_int(body.get("expires_in"), 300),
         interval=_positive_int(body.get("interval"), 5),
     )
@@ -192,7 +192,7 @@ def _response_body(response: httpx.Response, action: str, *, allow_oauth_error: 
     return body
 
 
-def _required_string(body: dict, name: str) -> str:
+def _response_string(body: dict, name: str) -> str:
     value = body.get(name)
     if not isinstance(value, str) or not value:
         raise GitLabAuthError(f"GitLab returned no {name}")
@@ -205,7 +205,7 @@ def _positive_int(value: object, default: int) -> int:
 
 
 def _complete(body: dict) -> DeviceFlowComplete:
-    return DeviceFlowComplete(_required_string(body, "access_token"), _optional_string(body.get("refresh_token")), optional_int(body.get("expires_in")), optional_int(body.get("refresh_token_expires_in")))
+    return DeviceFlowComplete(_response_string(body, "access_token"), _nonempty_or_none(body.get("refresh_token")), optional_int(body.get("expires_in")), optional_int(body.get("refresh_token_expires_in")))
 
 
 def credentials_from_device_flow(result: DeviceFlowComplete) -> StoredCredentials:

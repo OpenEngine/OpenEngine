@@ -147,6 +147,12 @@ from engine.graph_runtime import (
     UnknownGraphError,
 )
 from engine.graph_runtime import create_app as create_graph_app
+from engine.graph_runtime.http import (
+    error as _error,
+    json_body as _json_body,
+    optional_string as _optional_string,
+    required_string as _required_string,
+)
 from engine.cli import starters
 from engine.graph_service import GraphService, NotFound, StartRequest, StartRun
 from engine.graph_service.service import DEFAULT_PROJECT, ServiceError
@@ -4721,30 +4727,6 @@ def _clean_title(value: str) -> str:
     return first_line.strip(" \t\"'`).:;!?")[:80]
 
 
-async def _json_body(request: Request) -> dict[str, object]:
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return {}
-    return body if isinstance(body, dict) else {}
-
-
-def _required_string(body: dict[str, object], name: str) -> str:
-    value = body.get(name)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{name} must be a non-empty string")
-    return value.strip()
-
-
-def _optional_string(body: dict[str, object], name: str) -> str | None:
-    value = body.get(name)
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{name} must be a non-empty string")
-    return value.strip()
-
-
 def _thread_id(request: Request) -> AgentInstanceId:
     return AgentInstanceId(request.path_params["thread_id"])
 
@@ -4759,10 +4741,6 @@ def _json_line(value: dict[str, object]) -> bytes:
 
 def _server_event(value: dict[str, object]) -> bytes:
     return f"data:{json.dumps(value, separators=(',', ':'))}\n\n".encode()
-
-
-def _error(message: str, status_code: int) -> JSONResponse:
-    return JSONResponse({"error": message}, status_code=status_code)
 
 
 async def _missing_frontend(_request: Request) -> Response:
