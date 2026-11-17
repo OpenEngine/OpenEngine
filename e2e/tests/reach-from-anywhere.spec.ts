@@ -27,17 +27,18 @@ function step(text: string, body: () => Promise<void> = async () => {}) {
 }
 
 /**
- * Screenshot the screen down to its last row in use, with `highlight` labelled. Nothing that
+ * Screenshot the screen down to its last row in use, with `highlight` labelled, as `filename` so
+ * a re-run within the doc screenshot threshold keeps the committed file. Nothing that
  * changes from run to run may show: not the port the OS picked for this computer's daemon, not a
  * real tunnel's address (the page draws the guide's in its place), and never the Mac mini's token.
  */
-async function show(terminal: Terminal, testInfo: TestInfo, engine: Engine, macMiniComputer: TunnelledComputer, highlight: Locator, label: string) {
+async function show(filename: string, terminal: Terminal, testInfo: TestInfo, engine: Engine, macMiniComputer: TunnelledComputer, highlight: Locator, label: string) {
   const screen = terminal.screen()
   await expect(screen).not.toContainText(`:${new URL(engine.url).port}`)
   await expect(screen).not.toContainText(macMiniComputer.token)
   if (macMiniComputer.real) await expect(screen).not.toContainText(macMiniComputer.host)
   await screenshot(testInfo, highlight, {
-    annotation: { text: label },
+    annotation: { filename, text: label },
     clip: await terminal.usedArea({ labelBelow: true }),
   })
 }
@@ -127,7 +128,7 @@ A **backend** is a computer where OpenEngine's background program is running, su
     async () => {
       await terminal.run(`oe backend add mac-mini ${typed} --token-env MAC_MINI_TOKEN`)
       expect(macMini(engine)).toMatchObject({ url: typed, token_env: "MAC_MINI_TOKEN" })
-      await show(terminal, testInfo, engine, computer, await terminal.row(/^mac-mini\s+https:/), "The Mac mini is saved, with where to find its token")
+      await show(`reach-from-anywhere__terminal--${kind}-backend-added.png`, terminal, testInfo, engine, computer, await terminal.row(/^mac-mini\s+https:/), "The Mac mini is saved, with where to find its token")
     },
   )
 
@@ -140,7 +141,7 @@ Beside the Mac mini you'll see *down*, and that it *requires a token*: the Mac m
     async () => {
       const { output } = await terminal.run("oe backends list --check")
       expect(output).toMatch(/^\s+mac-mini\s.*\bdown\b/m)
-      await show(terminal, testInfo, engine, computer, await terminal.row(/^\s+mac-mini\s.*\bdown\b/), "Without the token, the Mac mini turns you away")
+      await show(`reach-from-anywhere__terminal--${kind}-backend-down.png`, terminal, testInfo, engine, computer, await terminal.row(/^\s+mac-mini\s.*\bdown\b/), "Without the token, the Mac mini turns you away")
     },
   )
 
@@ -156,7 +157,7 @@ Nothing shows while you paste, so the token never appears on your screen. The te
       await terminal.type(computer.token)
       await terminal.press("Enter")
       await terminal.waitForPrompt()
-      await show(terminal, testInfo, engine, computer, await terminal.row(/read -rs MAC_MINI_TOKEN/), "The token is set, and never shown")
+      await show(`reach-from-anywhere__terminal--${kind}-token-set.png`, terminal, testInfo, engine, computer, await terminal.row(/read -rs MAC_MINI_TOKEN/), "The token is set, and never shown")
     },
   )
 
@@ -171,7 +172,7 @@ If you still see *requires a token*, the token you pasted isn't the Mac mini's: 
     async () => {
       const { output } = await terminal.run("oe backends list --check")
       expect(output).toMatch(/^\s+mac-mini\s.*\bup\b/m)
-      await show(terminal, testInfo, engine, computer, await terminal.row(/^\s+mac-mini\s.*\bup\b/), "The Mac mini is up, from wherever you are")
+      await show(`reach-from-anywhere__terminal--${kind}-backend-up.png`, terminal, testInfo, engine, computer, await terminal.row(/^\s+mac-mini\s.*\bup\b/), "The Mac mini is up, from wherever you are")
     },
   )
 

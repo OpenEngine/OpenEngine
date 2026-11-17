@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs"
 import { defineConfig } from "@playwright/test"
-import { projects, expectConfig, sharedUse, webServerConfig } from "./playwright.config.ts"
+import { projects, expectConfig, sharedUse, webServerConfig, docScreenshotMaxDiffPixelRatio } from "./playwright.config.ts"
 import "@test2doc/playwright/types"
 
 // The benchmark guide has its own directory, beside the site's other docs, so a noisy
@@ -34,7 +34,7 @@ export default defineConfig({
     ["list"],
     ["./support/summaryReporter.ts"],
     ["json", { outputFile: "benchmark-results/results.json" }],
-    ["@test2doc/playwright", { outputDir }],
+    ["@test2doc/playwright", { outputDir, maxDiffPixelRatio: docScreenshotMaxDiffPixelRatio }],
   ],
   // One worker, in order: the run owns one GitHub account's repository.
   fullyParallel: false,

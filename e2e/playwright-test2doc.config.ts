@@ -1,6 +1,6 @@
 import { mkdirSync } from "node:fs"
 import { defineConfig } from "@playwright/test"
-import { projects, expectConfig, sharedUse, webServerConfig } from "./playwright.config.ts"
+import { projects, expectConfig, sharedUse, webServerConfig, docScreenshotMaxDiffPixelRatio } from "./playwright.config.ts"
 import "@test2doc/playwright/types"
 
 // The site's guides directory; generated, so it is gitignored there. test2doc
@@ -25,7 +25,7 @@ export default defineConfig({
       },
     },
   },
-  reporter: [["@test2doc/playwright", { outputDir }]],
+  reporter: [["@test2doc/playwright", { outputDir, maxDiffPixelRatio: docScreenshotMaxDiffPixelRatio }]],
   // One worker so pages and screenshots come out in a stable order.
   fullyParallel: false,
   workers: 1,
