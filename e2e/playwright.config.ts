@@ -35,6 +35,13 @@ export const sharedUse = {
   trace: "on-first-retry",
 } as const
 
+/**
+ * Share of a doc screenshot's pixels (0-1) that may change before test2doc replaces
+ * the committed file. Below it the old file is kept, so a re-run doesn't churn
+ * screenshots over anti-aliasing or a few characters. Delete a file to refresh it.
+ */
+export const docScreenshotMaxDiffPixelRatio = 0.01
+
 /** The terminal bridge (terminal/server.ts) the specs drive the CLI through. */
 export const webServerConfig = {
   command: `npm run build:terminal && node terminal/server.ts --port ${process.env.E2E_TERMINAL_PORT} --static terminal/dist`,

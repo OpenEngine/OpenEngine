@@ -1,7 +1,7 @@
 ---
-description: Use OpenEngine on your Mac mini from anywhere, safely and over https, through Cloudflare Tunnel or Tailscale.
+description: "Use OpenEngine on your Mac mini from anywhere, safely and over https, through Cloudflare Tunnel or Tailscale."
 sidebar_position: 2
-slug: /guides/other-computers/reach-from-anywhere
+slug: "/guides/other-computers/reach-from-anywhere"
 ---
 
 # Reach Your OpenEngine From Anywhere
@@ -88,19 +88,19 @@ Back on this computer, tell OpenEngine about the Mac mini: its name, its address
 
 A **backend** is a computer where OpenEngine's background program is running, such as this one or the Mac mini. OpenEngine saves the Mac mini under the name `mac-mini`, with its address and `MAC_MINI_TOKEN` beside it. It never saves the token itself.
 
-![screenshot](./test2doc-dfcbe0e70e0a.png)
+![screenshot](./reach-from-anywhere__terminal--cloudflare-backend-added.png)
 
 See the token at work before you give it to OpenEngine. Type `oe backends list --check` and press Enter.
 
 Beside the Mac mini you'll see *down*, and that it *requires a token*: the Mac mini turned OpenEngine away, as it will anyone who doesn't have the token.
 
-![screenshot](./test2doc-e69bd9b74d1e.png)
+![screenshot](./reach-from-anywhere__terminal--cloudflare-backend-down.png)
 
 Now give this terminal the token. Type `read -rs MAC_MINI_TOKEN && export MAC_MINI_TOKEN` and press Enter, then paste the token and press Enter again.
 
 Nothing shows while you paste, so the token never appears on your screen. The terminal keeps it until you close it; open a new terminal and you'll need to do this again.
 
-![screenshot](./test2doc-68845bca15ba.png)
+![screenshot](./reach-from-anywhere__terminal--cloudflare-token-set.png)
 
 Check that OpenEngine can reach the Mac mini now. Type `oe backends list --check` and press Enter.
 
@@ -108,7 +108,7 @@ You'll see *up* beside the Mac mini, followed by the agents it can use there. An
 
 If you still see *requires a token*, the token you pasted isn't the Mac mini's: copy it again, and run the `read` command again. If you see *down* for another reason, check that the Mac mini is on, that OpenEngine and the tunnel are running on it, and that you typed its address correctly.
 
-![screenshot](./test2doc-70714a186897.png)
+![screenshot](./reach-from-anywhere__terminal--cloudflare-backend-up.png)
 
 **Optional: add more repositories on the Mac mini.** The service token and browser sign-in cannot do this. Keep using the service token for everyday work; make a separate onboarding token only if you need to add repositories.
 
@@ -238,19 +238,19 @@ Back on this computer, tell OpenEngine about the Mac mini: its name, its address
 
 A **backend** is a computer where OpenEngine's background program is running, such as this one or the Mac mini. OpenEngine saves the Mac mini under the name `mac-mini`, with its address and `MAC_MINI_TOKEN` beside it. It never saves the token itself.
 
-![screenshot](./test2doc-3c14b84e051b.png)
+![screenshot](./reach-from-anywhere__terminal--tailscale-backend-added.png)
 
 See the token at work before you give it to OpenEngine. Type `oe backends list --check` and press Enter.
 
 Beside the Mac mini you'll see *down*, and that it *requires a token*: the Mac mini turned OpenEngine away, as it will anyone who doesn't have the token.
 
-![screenshot](./test2doc-5899ffaae1ea.png)
+![screenshot](./reach-from-anywhere__terminal--tailscale-backend-down.png)
 
 Now give this terminal the token. Type `read -rs MAC_MINI_TOKEN && export MAC_MINI_TOKEN` and press Enter, then paste the token and press Enter again.
 
 Nothing shows while you paste, so the token never appears on your screen. The terminal keeps it until you close it; open a new terminal and you'll need to do this again.
 
-![screenshot](./test2doc-68845bca15ba.png)
+![screenshot](./reach-from-anywhere__terminal--tailscale-token-set.png)
 
 Check that OpenEngine can reach the Mac mini now. Type `oe backends list --check` and press Enter.
 
@@ -258,7 +258,7 @@ You'll see *up* beside the Mac mini, followed by the agents it can use there. An
 
 If you still see *requires a token*, the token you pasted isn't the Mac mini's: copy it again, and run the `read` command again. If you see *down* for another reason, check that the Mac mini is on, that OpenEngine and the tunnel are running on it, and that you typed its address correctly.
 
-![screenshot](./test2doc-c0ec827c126a.png)
+![screenshot](./reach-from-anywhere__terminal--tailscale-backend-up.png)
 
 **Optional: add more repositories on the Mac mini.** The service token and browser sign-in cannot do this. Keep using the service token for everyday work; make a separate onboarding token only if you need to add repositories.
 

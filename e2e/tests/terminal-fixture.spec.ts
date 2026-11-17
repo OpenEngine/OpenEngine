@@ -92,7 +92,7 @@ test.describe("terminal fixture", { tag: ["@skip-docs"] }, () => {
 
   test("annotates a row in a test2doc screenshot", async ({ terminal }, testInfo) => {
     await terminal.run("echo annotated")
-    await screenshot(testInfo, await terminal.row(/^annotated$/), { annotation: { text: "This row" } })
+    await screenshot(testInfo, await terminal.row(/^annotated$/), { annotation: { filename: "terminal-fixture__terminal--annotated-row.png", text: "This row" } })
     expect(testInfo.attachments.some((attachment) => attachment.name.startsWith("test2doc-"))).toBe(true)
   })
 })
