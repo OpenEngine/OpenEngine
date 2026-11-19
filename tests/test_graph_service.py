@@ -408,6 +408,48 @@ def test_a_node_names_the_runner_it_chose_before_it_finishes(tmp_path: Path) -> 
     asyncio.run(scenario())
 
 
+def test_a_pending_node_shows_the_runner_its_input_chooses(tmp_path: Path) -> None:
+    # A node that has not started has announced no runner; the run's inputs
+    # already say which one it will use. The graph's default for an input is
+    # the backend's first runner by name -- "qwen" here -- which is not it.
+    source = yaml.safe_dump({
+        "apiVersion": "openengine.cc/v1",
+        "name": "later",
+        "inputs": {"runner": {"default": "stub", "choices": ["qwen", "stub"]}},
+        "implementation": {"work": {"agent": "stub", "prompt": "AUTH ${instruction}"}},
+        "review": {"check": {"agent": "${inputs.runner}", "prompt": "review ${outputs.work}"}},
+    })
+
+    async def scenario() -> None:
+        async with graph_service(tmp_path) as service:
+            await service.add_agent("opencode", name="qwen", model="m", url="http://localhost:11434/v1")
+            await service.add_graph("default", source=source)
+            run, _ = await service.submit_run(
+                project="default", graph="later", instruction="x", inputs={"runner": "stub"},
+            )
+            failed = await settled(service, run["runId"])
+            pending = {node["id"]: node for node in failed["graphNodes"]}["check"]
+            assert pending["status"] == "pending" and pending["runner"] == "stub"
+
+    asyncio.run(scenario())
+
+
+def test_a_runner_input_that_names_no_runner_yet_is_unresolved() -> None:
+    from engine.graph_service.service import Loaded
+
+    spec = parse_graph(yaml.safe_load(yaml.safe_dump({
+        "apiVersion": "openengine.cc/v1",
+        "name": "later",
+        "inputs": {"runner": {"default": "stub", "choices": ["qwen", "stub"]}},
+        "implementation": {"work": {"agent": "stub", "prompt": "x"}},
+        "review": {"check": {"agent": "${inputs.runner}", "prompt": "y"}},
+    })))
+    loaded = Loaded(workflow=None, spec=spec)  # pyright: ignore[reportArgumentType]
+    assert loaded.input_runners({"inputs": {"runner": "qwen"}}) == {"check": "qwen"}
+    assert loaded.input_runners({"inputs": {"runner": "round-robin"}}) == {"check": ""}
+    assert loaded.input_runners({}) == {"check": ""}
+
+
 def test_an_agents_thinking_is_published_but_is_not_its_output(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with graph_service(tmp_path) as service:
