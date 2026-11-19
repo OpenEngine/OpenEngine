@@ -87,7 +87,7 @@ class OAuthCredentialStore:
             return None
         return StoredCredentials(
             data["access_token"],
-            _optional_string(data.get("refresh_token")),
+            _nonempty_or_none(data.get("refresh_token")),
             _optional_number(data.get("expires_at")),
             _optional_number(data.get("refresh_token_expires_at")),
         )
@@ -126,7 +126,7 @@ class OAuthCredentialStore:
             self._cache, self._loaded = None, True
 
 
-def _optional_string(value: object) -> str | None:
+def _nonempty_or_none(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 

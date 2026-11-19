@@ -723,7 +723,7 @@ class GitHubSourceControl:
             for name, app_id in requirements:
                 matches = [
                     StatusCheck(name, _string(check, "status"),
-                                _optional_string(check, "conclusion"),
+                                _string_or_none(check, "conclusion"),
                                 _string(check, "details_url"))
                     for check in checks
                     if check.get("name") == name and (
@@ -740,7 +740,7 @@ class GitHubSourceControl:
                 StatusCheck(
                     name=_string(check, "name"),
                     status=_string(check, "status"),
-                    conclusion=_optional_string(check, "conclusion"),
+                    conclusion=_string_or_none(check, "conclusion"),
                     details_url=_string(check, "details_url"),
                 )
                 for check in checks
@@ -750,7 +750,7 @@ class GitHubSourceControl:
                     pipeline_id=_positive_number(run.get("id"), "workflow run id"),
                     name=_string(run, "name"),
                     status=_string(run, "status"),
-                    conclusion=_optional_string(run, "conclusion"),
+                    conclusion=_string_or_none(run, "conclusion"),
                     url=_string(run, "html_url"),
                 )
                 for run in runs
@@ -1002,7 +1002,7 @@ def _string(value: dict, name: str) -> str:
     return item if isinstance(item, str) else ""
 
 
-def _optional_string(value: dict, name: str) -> str | None:
+def _string_or_none(value: dict, name: str) -> str | None:
     item = value.get(name)
     return item if isinstance(item, str) else None
 
@@ -1020,7 +1020,7 @@ def _discussion(value: dict) -> Discussion:
         author=_nested_string(value, "user", "login"),
         body=_string(value, "body"),
         url=_string(value, "html_url"),
-        path=_optional_string(value, "path"),
+        path=_string_or_none(value, "path"),
         line=line if isinstance(line, int) and not isinstance(line, bool) else None,
     )
 

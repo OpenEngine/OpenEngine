@@ -50,6 +50,10 @@ from engine.graph_runtime.control import (
     UnknownRunError,
 )
 from engine.graph_runtime.events import EventLog, RuntimeEvent
+from engine.graph_runtime.http import error as _error
+from engine.graph_runtime.http import json_body as _json_body
+from engine.graph_runtime.http import optional_string as _optional_string
+from engine.graph_runtime.http import required_string as _required_string
 from engine.graph_runtime.identity import ActiveExecution, ExecutionId
 from engine.graph_runtime.topology import GraphId, GraphTopology, NodeId
 
@@ -160,8 +164,8 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
         body = await _json_body(request)
         try:
             message = _required_string(body, "message")
-            execution = _optional_string(body, "execution")
-            node = _optional_string(body, "node")
+            execution = _optional_string(body, "execution", default="")
+            node = _optional_string(body, "node", default="")
         except ValueError as error:
             return _error(str(error), 400)
         if execution and node:
@@ -185,9 +189,9 @@ def create_app(runtime: GraphRuntime, event_log: EventLog | None = None) -> Star
         run_id = _run_id(request)
         body = await _json_body(request)
         try:
-            node = _optional_string(body, "node")
-            named = _optional_string(body, "checkpoint")
-            message = _optional_string(body, "message") or None
+            node = _optional_string(body, "node", default="")
+            named = _optional_string(body, "checkpoint", default="")
+            message = _optional_string(body, "message", default="") or None
         except ValueError as error:
             return _error(str(error), 400)
         if bool(node) == bool(named):
@@ -511,33 +515,6 @@ def _refusal(error: Exception) -> JSONResponse:
     return _error(str(error), status)
 
 
-async def _json_body(request: Request) -> dict[str, object]:
-    try:
-        body = await request.json()
-    except ValueError:
-        # `ValueError` rather than `JSONDecodeError`: Starlette hands raw bytes
-        # to `json.loads`, which decodes them itself, so a body that is not
-        # UTF-8 raises `UnicodeDecodeError`. Both are `ValueError`, and letting
-        # one of them past here is the difference between the 400 every other
-        # unreadable body gets and a 500.
-        return {}
-    return body if isinstance(body, dict) else {}
-
-
-def _required_string(body: Mapping[str, object], name: str) -> str:
-    value = body.get(name)
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{name} must be a non-empty string")
-    return value.strip()
-
-
-def _optional_string(body: Mapping[str, object], name: str) -> str:
-    """The field, or "" when it is absent. A blank one is a client's mistake."""
-    if body.get(name) is None:
-        return ""
-    return _required_string(body, name)
-
-
 def _optional_object(body: Mapping[str, object], name: str) -> Mapping[str, object]:
     value = body.get(name)
     if value is None:
@@ -549,10 +526,6 @@ def _optional_object(body: Mapping[str, object], name: str) -> Mapping[str, obje
 
 def _run_id(request: Request) -> RunId:
     return RunId(request.path_params["run_id"])
-
-
-def _error(message: str, status_code: int) -> JSONResponse:
-    return JSONResponse({"error": message}, status_code=status_code)
 
 
 __all__ = ["create_app"]
