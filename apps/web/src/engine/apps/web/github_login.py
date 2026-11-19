@@ -28,6 +28,7 @@ from starlette.routing import Route
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from engine.apps.web.request_security import RequestSecurity
+from engine.runtime import valid_service_token
 
 log = logging.getLogger(__name__)
 
@@ -63,11 +64,6 @@ _STREAM_RECHECK = 30
 # the request may still see it, so a stream is rechecked for that repository
 # and not only for access to any of them.
 STREAM_ACCESS = "engine.stream_access"
-
-
-def valid_service_token(token: str) -> bool:
-    """Whether `token` is long enough to accept as a bearer secret."""
-    return len(token) >= 32 and not any(c.isspace() for c in token)
 
 
 def _has_bearer(request: Request, expected: str) -> bool:

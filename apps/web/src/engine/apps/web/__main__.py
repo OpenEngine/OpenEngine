@@ -39,7 +39,7 @@ from engine.apps.web.composition import (
 )
 from engine.apps.web.github_auth import GitHubCredentialStore
 from engine.apps.web.repositories import ensure_repository_checkouts
-from engine.apps.web.github_login import GitHubLoginConfig, valid_service_token
+from engine.apps.web.github_login import GitHubLoginConfig
 from engine.apps.web.github_webhook import GitHubWebhookConfig, github_webhook_config
 from engine.adapters.communications.slack import SlackCredentialStore
 from engine.graph_runtime_langgraph.workflows import RUNS
@@ -54,6 +54,7 @@ from engine.runtime import (
     load_engine_config,
     load_workflow_catalog,
     WorkflowLoadError,
+    valid_service_token,
 )
 from engine.runtime.repositories import RepositoryRegistry
 
@@ -210,7 +211,7 @@ def _settings(loaded: LoadedEngineConfig) -> Settings:
         github_client_id=os.environ.get(
             "GITHUB_CLIENT_ID", loaded.config.github_client_id
         ),
-        github_token=os.environ.get("GITHUB_TOKEN", loaded.config.github_token),
+        github_token=os.environ.get("GITHUB_TOKEN") or loaded.config.github_token,
         github_webhook=github_webhook_config(loaded),
         source_control_preferences=SourceControlPreferences(),
     )

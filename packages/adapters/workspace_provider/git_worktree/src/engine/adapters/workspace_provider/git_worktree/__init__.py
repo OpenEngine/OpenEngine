@@ -20,15 +20,9 @@ from uuid import uuid4
 
 from engine.domain.ids import WorkspaceId
 from engine.ports.workspace_provider import Workspace, WorkspaceState
+from engine.runtime import DEFAULT_ROOT_DIRECTORY
 from engine.runtime.change_requests import remote_project
 from engine.runtime.issue_links import issue_reference
-
-#: Where checkouts go when nothing says otherwise.
-#:
-#: Outside the repository, so the development server's file watcher does not
-#: see them. Written down once here because several apps and the workflows that
-#: provision checkouts all need the same answer.
-DEFAULT_ROOT_DIRECTORY = "/tmp/engine-workspaces"
 
 #: A base naming whatever branch `origin` calls its default, for workflows that
 #: serve repositories whose default branch they cannot know in advance.
