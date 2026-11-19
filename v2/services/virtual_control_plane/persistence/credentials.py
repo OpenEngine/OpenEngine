@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import sqlalchemy as sa
 from sqlalchemy.dialects.sqlite import insert
 
-from openengine.persistence import Database
+from openengine.persistence import TenantDatabase
 
 from virtual_control_plane.persistence.schema import runtime_credentials
 
@@ -25,19 +25,19 @@ class CredentialRow:
 
 
 class CredentialRows:
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: TenantDatabase) -> None:
         self.database = database
 
     async def get(self, runtime_id: str) -> CredentialRow | None:
         query = sa.select(runtime_credentials).where(runtime_credentials.c.runtime_id == runtime_id)
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             row = (await connection.execute(query)).mappings().one_or_none()
         return CredentialRow(**row) if row else None
 
     async def with_status(self, *statuses: str) -> list[CredentialRow]:
         query = (sa.select(runtime_credentials).where(runtime_credentials.c.status.in_(statuses))
                  .order_by(runtime_credentials.c.runtime_id))
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             return [CredentialRow(**row) for row in (await connection.execute(query)).mappings()]
 
     async def claim(self, runtime_id: str, generation: int, username: str) -> CredentialRow:

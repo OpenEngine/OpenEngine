@@ -19,18 +19,18 @@ carries the tenant in `connection.info["tenant_id"]`.
 
 from __future__ import annotations
 
+import asyncio
 import tomllib
 import uuid
-from collections.abc import AsyncIterator, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import Sequence
+from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import sqlalchemy as sa
-from sqlalchemy import Dialect, Engine
-from sqlalchemy.engine import URL
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+from sqlalchemy import Dialect
+from sqlalchemy.ext.asyncio import AsyncConnection
 from sqlalchemy.types import TypeDecorator
 
 from openengine.persistence.config import Backend
@@ -278,47 +278,30 @@ def assert_tenant_scoped(metadata: sa.MetaData, service: str, registry: Path = R
     return violations
 
 
-class TenantDatabase(Database):
-    """A service's database as one tenant sees it: every connection carries the tenant."""
+class TenantDatabase:
+    """Store-facing transactions bound to a credential-derived UUID, in every deployment mode."""
+
+    __slots__ = ("_database", "_tenant")
 
     def __init__(self, database: Database, tenant_id: uuid.UUID) -> None:
-        super().__init__(database.service)
-        self.database = database
-        self.tenant = tenant(tenant_id)
-        self.schema = database.schema
-
-    @property  # pyright: ignore[reportIncompatibleVariableOverride]
-    def backend(self) -> Backend:
-        return self.database.backend
-
-    def url(self, *, asynchronous: bool = True) -> URL:
-        return self.database.url(asynchronous=asynchronous)
+        self._database = database
+        self._tenant = tenant(tenant_id)
 
     @property
-    def engine(self) -> AsyncEngine:
-        return self.database.engine
+    def tenant(self) -> uuid.UUID:
+        return self._tenant
 
-    def migration_engine(self) -> Engine:
-        return self.database.migration_engine()
+    @property
+    def backend(self) -> Backend:
+        return self._database.backend
 
-    @asynccontextmanager
-    async def _scoped(self, connections: Any) -> AsyncIterator[AsyncConnection]:
-        async with connections as connection:
-            # info lives with the pooled DBAPI connection, so it is cleared before the pool takes it back.
-            connection.info[TENANT_COLUMN] = self.tenant
-            try:
-                yield connection
-            finally:
-                # An invalidated connection's DBAPI connection is discarded, info and all, and touching
-                # info now would raise over the error that invalidated it.
-                if not connection.invalidated:
-                    connection.info.pop(TENANT_COLUMN, None)
+    @property
+    def write_lock(self) -> asyncio.Lock:
+        """The shared SQLite writer queue, without access to the underlying database."""
+        return self._database.write_lock
 
-    def connect(self) -> Any:
-        return self._scoped(self.database.connect())
-
-    def transaction(self) -> Any:
-        return self._scoped(self.database.transaction())
+    def transaction(self, *, immediate: bool = False) -> AbstractAsyncContextManager[AsyncConnection]:
+        return self._database.transaction(self.tenant, immediate=immediate)
 
     async def close(self) -> None:
-        await self.database.close()
+        await self._database.close()

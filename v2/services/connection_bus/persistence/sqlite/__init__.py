@@ -32,11 +32,11 @@ class SqliteConnections(DatabaseStore):
         return await self._one(sa.and_(connections.c.provider == provider, connections.c.external_id == external_id))
 
     async def list(self) -> list[Connection]:
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             rows = await connection.execute(connections.select().order_by(connections.c.created_at, connections.c.id))
         return [_connection(row) for row in rows]
 
     async def _one(self, condition: sa.ColumnElement[bool]) -> Connection | None:
-        async with self.database.connect() as connection:
+        async with self.database.transaction() as connection:
             row = (await connection.execute(connections.select().where(condition))).one_or_none()
         return _connection(row) if row else None

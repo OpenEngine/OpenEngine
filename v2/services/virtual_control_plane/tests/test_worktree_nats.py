@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 from openengine.messaging import Client
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import DatabaseConfig, LOCAL_TENANT, TenantDatabase
 
 from virtual_control_plane.persistence import PERSISTENCE
 from virtual_control_plane.persistence.durable import DurableStore
@@ -116,7 +116,7 @@ def test_create_rediscover_after_restart_and_destroy_over_public_nats(binary, tm
                 pid = json.loads((directory / "daemon.json").read_text())["pid"]
 
                 # The daemon registers through the runtime protocol once the workspace is ready.
-                store = DurableStore(PERSISTENCE.database(DatabaseConfig(sqlite_directory=tmp_path / "db")))
+                store = DurableStore(TenantDatabase(PERSISTENCE.database(DatabaseConfig(sqlite_directory=tmp_path / "db")), LOCAL_TENANT))
                 try:
                     async def registered():
                         status = await store.read("runtime_status", runtime_id)

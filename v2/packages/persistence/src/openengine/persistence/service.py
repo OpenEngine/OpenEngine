@@ -35,7 +35,7 @@ class OpenPersistence(Generic[StoreT]):
 
     __slots__ = ("_database", "_factory")
 
-    def __init__(self, database: Database, factory: Callable[[Database], StoreT]) -> None:
+    def __init__(self, database: Database, factory: Callable[[TenantDatabase], StoreT]) -> None:
         self._database = database
         self._factory = factory
 
@@ -51,7 +51,7 @@ class OpenPersistence(Generic[StoreT]):
 class ServicePersistence(Generic[StoreT]):
     name: str
     directory: Path
-    stores: Mapping[Backend, Callable[[Database], StoreT]]
+    stores: Mapping[Backend, Callable[[TenantDatabase], StoreT]]
 
     @property
     def migrations(self) -> Path:

@@ -183,7 +183,7 @@ def test_migrate_reports_a_backend_it_cannot_use(oe) -> None:
     migrate = oe("migrate", env={"OE_DATABASE_BACKEND": "postgres"})
 
     assert migrate.returncode == 1
-    assert "postgres backend does not implement" in migrate.stderr
+    assert "OE_POSTGRES_MIGRATION_URL is required" in migrate.stderr
     assert "Traceback" not in migrate.stderr
 
 

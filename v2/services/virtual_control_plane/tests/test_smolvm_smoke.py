@@ -22,7 +22,7 @@ from pathlib import Path
 
 import pytest
 from openengine.messaging import Request, envelopes
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import DatabaseConfig, LOCAL_TENANT, TenantDatabase
 
 from virtual_control_plane.application.lifecycle import Lifecycle
 from virtual_control_plane.application.ports import Ownership
@@ -77,7 +77,7 @@ def test_real_smolvm_create_restart_and_ensure(tmp_path: Path) -> None:
 
     async def scenario() -> None:
         nonlocal machine
-        store = DurableStore(PERSISTENCE.database(config))
+        store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         lifecycle = Lifecycle(store, {"smolvm": Smolvm(IMAGE, tools=tools, executable=EXECUTABLE)})
         created = await lifecycle.apply(_request("oe.v1.vcp.control.workspaces.apply", {"workspace": document}))
         assert created["status"] == "accepted", created
@@ -99,7 +99,7 @@ def test_real_smolvm_create_restart_and_ensure(tmp_path: Path) -> None:
         await store.close()
 
         # Restart: a fresh store, lifecycle and adapter must reassert ownership, not reprovision.
-        store = DurableStore(PERSISTENCE.database(config))
+        store = DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
         lifecycle = Lifecycle(store, {"smolvm": Smolvm(IMAGE, tools=tools, executable=EXECUTABLE)})
         ensured = await lifecycle.ensure(_request(f"oe.v1.vcp.control.workspaces.{workspace_id}.ensure", {},
                                                   {"workspace_id": workspace_id}))

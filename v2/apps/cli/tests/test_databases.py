@@ -39,8 +39,8 @@ def test_names_an_upgrade_from_an_earlier_revision() -> None:
     assert outcome(Upgrade("ge", "a1", "b2")) is Outcome.UPGRADED
 
 
-def test_reports_the_postgres_stub_instead_of_a_traceback() -> None:
-    with pytest.raises(DatabaseMigrationFailed, match="could not migrate the cxn database: the postgres backend"):
+def test_reports_missing_postgres_owner_credentials_instead_of_a_traceback() -> None:
+    with pytest.raises(DatabaseMigrationFailed, match="could not migrate the cxn database: OE_POSTGRES_MIGRATION_URL is required"):
         migrate_databases(DatabaseConfig(backend=Backend.POSTGRES))
 
 

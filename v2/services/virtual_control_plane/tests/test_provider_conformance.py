@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from openengine.persistence import LOCAL_TENANT, DatabaseConfig
+from openengine.persistence import DatabaseConfig, LOCAL_TENANT, TenantDatabase
 
 from virtual_control_plane.application.workspaces import WorkspaceService
 from virtual_control_plane.persistence import PERSISTENCE
@@ -251,7 +251,7 @@ def _ensure(workspace_id: str) -> Request:
 
 
 def _store(config: DatabaseConfig) -> DurableStore:
-    return DurableStore(PERSISTENCE.database(config))
+    return DurableStore(TenantDatabase(PERSISTENCE.database(config), LOCAL_TENANT))
 
 
 async def _snapshot(store, collection: str, key: str) -> dict:

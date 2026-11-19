@@ -42,3 +42,34 @@ jobs:
       # V2 has its own workspace and test configuration; root pytest omits it.
       - name: Test V2, including real NATS recovery
         run: uv run --project v2 --frozen pytest v2
+
+  postgres:
+    name: Shared persistence (Postgres 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UV_PYTHON: "3.14"
+      UV_MANAGED_PYTHON: "true"
+      OE_TEST_POSTGRES_ADMIN_URL: postgresql://postgres:postgres@127.0.0.1:5432/oe_persistence
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: oe_persistence
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d oe_persistence"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.9.28"
+          enable-cache: true
+      - run: uv sync --frozen
+        working-directory: v2
+      # Service migration compatibility is Part 2 of #1232; these test the shared API.
+      - run: uv run --frozen pytest -o addopts=--import-mode=importlib packages/persistence/tests/test_postgres.py packages/persistence/tests/test_persistence.py packages/persistence/tests/test_tenancy.py -v
+        working-directory: v2

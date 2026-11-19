@@ -131,3 +131,24 @@ def test_the_internal_runtime_broker_is_opt_in_and_lives_in_the_state_directory(
     assert broker.binary == Path("/opt/nats-server")
     assert broker.endpoint.client_url == "nats://192.0.2.1:4300"
     assert broker.endpoint.guest_url == "nats://192.0.2.1:4300"
+
+
+def test_main_binds_the_configured_dedicated_tenant(tmp_path, monkeypatch):
+    from openengine.persistence import new_tenant
+
+    tenant = new_tenant()
+    monkeypatch.setenv(vcp.STATE_DIR_VARIABLE, str(tmp_path / "state"))
+    monkeypatch.setenv("OE_SQLITE_DIRECTORY", str(tmp_path / "db"))
+    monkeypatch.setenv("OE_TENANCY_MODE", "dedicated")
+    monkeypatch.setenv("OE_TENANT_ID", str(tenant))
+
+    async def serve(nats_url, health_port, ready_file, store):
+        try:
+            async with store.database.transaction() as connection:
+                assert connection.info["tenant_id"] == tenant
+            return vcp.EXIT_OK
+        finally:
+            await store.close()
+
+    monkeypatch.setattr(vcp, "_serve_store", serve)
+    assert vcp.main() == vcp.EXIT_OK

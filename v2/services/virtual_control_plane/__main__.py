@@ -55,7 +55,7 @@ from alembic.util import CommandError
 from openengine.messaging import Server, listen_address
 from openengine.messaging.server import is_loopback
 from openengine.messaging.tenancy import Mode
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import DatabaseConfig, TenantDatabase, parse_tenant
 from openengine.telemetry import configure
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -157,11 +157,16 @@ async def _health(healthy, reader: asyncio.StreamReader, writer: asyncio.StreamW
         writer.close()
 
 
-async def serve(nats_url: str, health_port: int, ready_file: Path | None, store: DurableStore) -> int:
+def _deployment() -> Deployment:
     deployment = Deployment.from_environment()
     if deployment.tenancy.mode is Mode.SHARED:
         message = "VCP shared mode requires tenant-scoped storage (#1228)"
         raise ValueError(message)
+    return deployment
+
+
+async def serve(nats_url: str, health_port: int, ready_file: Path | None, store: DurableStore) -> int:
+    deployment = _deployment()
     stopping = asyncio.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         asyncio.get_running_loop().add_signal_handler(signum, stopping.set)
@@ -281,6 +286,7 @@ def main() -> int:
                 log.exception("another vcp process already owns %s", state.directory)
                 return EXIT_FAILED
             log.info("state directory owned", extra={"vcp.state_directory": str(state.directory)})
+            tenancy = _deployment().tenancy
             config = DatabaseConfig.from_environment()
             database = PERSISTENCE.database(config)
             upgrade = PERSISTENCE.upgrade(config)
@@ -296,7 +302,7 @@ def main() -> int:
                 os.environ.get(NATS_URL_VARIABLE, "nats://127.0.0.1:4222"),
                 int(os.environ.get(HEALTH_PORT_VARIABLE, "0")),
                 Path(ready_file) if ready_file else None,
-                DurableStore(database),
+                DurableStore(TenantDatabase(database, parse_tenant(tenancy.tenant_id))),
             )
         )
     except (ValueError, OSError, CommandError, SQLAlchemyError, nats.errors.Error):

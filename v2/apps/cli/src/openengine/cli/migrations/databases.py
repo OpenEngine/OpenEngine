@@ -58,6 +58,6 @@ def migrate_databases(config: DatabaseConfig, services: Sequence[ServicePersiste
     for service in services:
         try:
             upgrades.append(service.upgrade(config))
-        except (BackendNotImplemented, CommandError, SQLAlchemyError) as error:
+        except (BackendNotImplemented, ConfigError, CommandError, SQLAlchemyError) as error:
             raise DatabaseMigrationFailed(service.name, error) from error
     return upgrades

@@ -9,7 +9,7 @@ import pytest
 
 from openengine.messaging import Client, Request, Server, ServiceError, envelopes
 from openengine.messaging.tenancy import Principal
-from openengine.persistence import DatabaseConfig
+from openengine.persistence import DatabaseConfig, LOCAL_TENANT, TenantDatabase
 
 from virtual_control_plane.application.execution import Execution
 from virtual_control_plane.application.lifecycle import Lifecycle
@@ -89,7 +89,7 @@ class SteeringFlow(Flow):
 
     async def reopen_vcp(self, tmp_path):
         await self.store.close()
-        self.store = DurableStore(PERSISTENCE.database(DatabaseConfig(sqlite_directory=tmp_path / "vcp")))
+        self.store = DurableStore(TenantDatabase(PERSISTENCE.database(DatabaseConfig(sqlite_directory=tmp_path / "vcp")), LOCAL_TENANT))
         self.execution = Execution(Lifecycle(self.store, {}), HostContext(), enabled=True)
         self.server = Server(None, "vcp", "nats://127.0.0.1:4222", commands=self.execution.commands(),
                              queries=self.execution.queries())
@@ -413,7 +413,7 @@ def test_history_cursor_retention_is_bounded_and_survives_restart(tmp_path, monk
         await append_message(flow, "msg_one")
         await append_message(flow, "msg_two")
         cursors = [(await flow.history(limit=1))["result"]["next_cursor"] for _ in range(3)]
-        async with flow.store.database.connect() as connection:
+        async with flow.store.database.transaction() as connection:
             assert (await connection.execute(sa.text("SELECT count(*) FROM history_cursors"))).scalar_one() == 3
         assert (await flow.history(cursor=cursors[0]))["result"]["items"]
         timestamp[0] += 24 * 60 * 60 + 1
@@ -477,7 +477,7 @@ def test_history_filter_combinations_use_ordered_index_seeks(tmp_path):
         flow = await SteeringFlow().start(tmp_path)
         await flow.running()
         await append_message(flow, "msg_one")
-        async with flow.store.database.connect() as connection:
+        async with flow.store.database.transaction() as connection:
             for where, index in [
                 ("", "sqlite_autoindex_session_history"),
                 (" AND kind = 'message'", "ix_session_history_kind"),
