@@ -35,7 +35,7 @@ test.describe("committed guides", { tag: ["@skip-docs"] }, () => {
     test(`${spec}: "${title}" has its generated page committed`, () => {
       const page = files(guides)
         .filter((file) => file.endsWith(".mdx"))
-        .find((file) => readFileSync(file, "utf8").match(/^slug: (.+)$/m)?.[1] === slug)
+        .find((file) => readFileSync(file, "utf8").match(/^slug: "?([^"\n]+)"?$/m)?.[1] === slug)
       expect(page, `no page with slug ${slug} under site/docs/guides; run \`npm run doc\` and commit it`).toBeDefined()
       expect(readFileSync(page!, "utf8")).toContain(`# ${title}`)
       // A stale page shows itself in its links: every link the spec writes must be on the page.
