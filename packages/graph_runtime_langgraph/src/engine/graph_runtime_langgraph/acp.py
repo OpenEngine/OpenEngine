@@ -196,6 +196,8 @@ class _Turn:
     answer: "_StoredAnswer | None" = None
     """An answered request from before this process existed."""
     approval_requested: bool = False
+    reported_usage: bool = False
+    """Whether any turn of this invocation published a `usage.updated`."""
     narrating: Callable[[], Awaitable[None]] | None = None
     """`_speak`'s buffer flush, for as long as a turn is in flight.
 
@@ -1166,7 +1168,8 @@ class ACPNode:
                                 await flush_thinking(whole_lines=True)
                     continue
                 await flush_thinking()
-                await self._republish(execution, event)
+                if await self._republish(execution, event):
+                    turn.reported_usage = True
                 if event.type == ACPEventType.MESSAGE_DELTA:
                     block = event.data.get("content")
                     if isinstance(block, Mapping) and block.get("type") == "text":
@@ -1206,6 +1209,14 @@ class ACPNode:
                 return_exceptions=True,
             )
             turn.narrating = None
+            if not turn.reported_usage and not cancelled:
+                # An agent that reports nothing is unknown, not free: naming
+                # the session keeps the node in the rollup, incomplete. Sent
+                # on every way out -- error included -- but not for a turn
+                # steering cancelled, whose successor reports for the node.
+                await execution.emit(
+                    EventKind.USAGE_UPDATED, self._usage_base(turn.session_id)
+                )
         if steering_id and not cancelled:
             # Applied means the agent finished the turn it was given, which a
             # queued or merely-sent message cannot claim.
@@ -1216,11 +1227,13 @@ class ACPNode:
         # carries forward does not change with where the words were published.
         return _TurnResult("".join(said), cancelled=cancelled)
 
-    async def _republish(self, execution: NodeExecution, event: Any) -> None:
+    async def _republish(self, execution: NodeExecution, event: Any) -> bool:
+        """Publish `event`; whether it was a `usage.updated`."""
         if event.type in (ACPEventType.USAGE_UPDATED, ACPEventType.PROMPT_COMPLETED):
             usage = self._usage(event)
             if usage is not None:
                 await execution.emit(EventKind.USAGE_UPDATED, usage)
+                return True
         elif event.type == ACPEventType.TOOL_STARTED:
             await execution.emit(
                 EventKind.TOOL_CALL,
@@ -1239,6 +1252,15 @@ class ACPNode:
                     "result": str(event.data.get("status") or "updated"),
                 },
             )
+        return False
+
+    def _usage_base(self, session_id: str | None) -> dict[str, object]:
+        model = (self.session_config or {}).get("model")
+        return {
+            "agent": self.agent,
+            "model": model if isinstance(model, str) else "",
+            "sessionId": session_id or "",
+        }
 
     def _usage(self, event: Any) -> dict[str, object] | None:
         """This event's usage as a `usage.updated` payload, if it reported any.
@@ -1247,12 +1269,7 @@ class ACPNode:
         running cost, and the prompt response the finished turn's tokens.
         Anything but USD is left out rather than converted.
         """
-        model = (self.session_config or {}).get("model")
-        payload: dict[str, object] = {
-            "agent": self.agent,
-            "model": model if isinstance(model, str) else "",
-            "sessionId": event.session_id or "",
-        }
+        payload = self._usage_base(event.session_id)
         if event.type == ACPEventType.PROMPT_COMPLETED:
             usage = event.data.get("usage")
             if not isinstance(usage, Mapping):
